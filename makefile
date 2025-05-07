@@ -1,0 +1,89 @@
+# Directory variables
+RAW_DIR ?= $(WORK)/data/dna/plant_caduceus_genome_annotation_task/data_share_20250326/training_data
+PIPE_DIR ?= $(SCRATCH)/data/dna/plant_caduceus_genome_annotation_task/pipeline
+MODEL_PATH ?= kuleshov-group/PlantCaduceus_l24_c8192
+
+# Create necessary directories 
+EXTRACT_DIR = $(PIPE_DIR)/extract
+TRANSFORM_DIR = $(PIPE_DIR)/transform
+
+# Define all target to run the complete pipeline
+.PHONY: all clean extract-gff extract-fasta filter stack labels sequences npz help
+
+all: $(TRANSFORM_DIR)/sequences.zarr $(TRANSFORM_DIR)/npz
+
+# Help target
+help:
+	@echo "Available targets:"
+	@echo "  extract-gff   - Extract GFF features from input files as Pandas/Parquet"
+	@echo "  extract-fasta - Extract and tokenize FASTA sequences as Xarray/Zarr"
+	@echo "  filter        - Filter features based on a number of criteria (canonical transcripts, overlapping genes, incomplete annotations, etc.)"
+	@echo "  stack         - Convert features from hierarchical gene/transcript/feature format to a long, stacked format" 
+	@echo "  labels        - Create labels from features"
+	@echo "  sequences     - Create sequence dataset by joining labels and tokens"
+	@echo "  npz           - Extract NPZ formatted labels"
+	@echo "  all           - Run complete pipeline"
+	@echo "  clean         - Remove all generated files"
+
+# Extract gff features
+$(EXTRACT_DIR)/raw_features.parquet: 
+	@mkdir -p $(EXTRACT_DIR)
+	python scripts/extract.py extract_gff_features \
+	  --input $(RAW_DIR)/gff/Athaliana_447_Araport11.gene.gff3 $(RAW_DIR)/gff/Osativa_323_v7.0.gene.gff3 \
+	  --output $@
+
+# Extract fasta sequences
+$(EXTRACT_DIR)/tokens.zarr: 
+	@mkdir -p $(EXTRACT_DIR)
+	python scripts/extract.py extract_fasta_sequences \
+	  --input $(RAW_DIR)/fasta/Athaliana_447.fasta $(RAW_DIR)/fasta/Osativa_323.fasta \
+	  --species-id Athaliana Osativa \
+	  --tokenizer-path $(MODEL_PATH) \
+	  --output $@
+
+# Filter gff features
+$(TRANSFORM_DIR)/features.parquet $(TRANSFORM_DIR)/filters.parquet: $(EXTRACT_DIR)/raw_features.parquet
+	@mkdir -p $(TRANSFORM_DIR)
+	python scripts/transform.py filter_features \
+	  --input $< \
+	  --output-features $(TRANSFORM_DIR)/features.parquet \
+	  --output-filters $(TRANSFORM_DIR)/filters.parquet
+
+# Stack gff features
+$(TRANSFORM_DIR)/intervals.parquet: $(TRANSFORM_DIR)/features.parquet
+	python scripts/transform.py stack_features \
+	  --input $< \
+	  --output $@
+
+# Create labels
+$(TRANSFORM_DIR)/labels.zarr: $(TRANSFORM_DIR)/intervals.parquet $(TRANSFORM_DIR)/filters.parquet
+	python scripts/transform.py create_labels \
+	  --input-features $(TRANSFORM_DIR)/intervals.parquet \
+	  --input-filters $(TRANSFORM_DIR)/filters.parquet \
+	  --output $@
+
+# Create sequence dataset (labels and tokens)
+$(TRANSFORM_DIR)/sequences.zarr: $(TRANSFORM_DIR)/labels.zarr $(EXTRACT_DIR)/tokens.zarr
+	python scripts/transform.py create_sequence_dataset \
+	  --input-labels $(TRANSFORM_DIR)/labels.zarr \
+	  --input-tokens $(EXTRACT_DIR)/tokens.zarr \
+	  --output-path $@
+
+# Extract NPZ labels
+$(TRANSFORM_DIR)/npz: $(TRANSFORM_DIR)/labels.zarr
+	python scripts/transform.py extract_npz_labels \
+	  --input $< \
+	  --output $@ \
+	  --species-ids Athaliana Osativa
+
+# Clean target
+clean:
+	rm -rf $(EXTRACT_DIR) $(TRANSFORM_DIR) 
+
+extract-gff: $(EXTRACT_DIR)/raw_features.parquet
+extract-fasta: $(EXTRACT_DIR)/tokens.zarr
+filter: $(TRANSFORM_DIR)/features.parquet
+stack: $(TRANSFORM_DIR)/intervals.parquet
+labels: $(TRANSFORM_DIR)/labels.zarr
+sequences: $(TRANSFORM_DIR)/sequences.zarr
+npz: $(TRANSFORM_DIR)/npz 

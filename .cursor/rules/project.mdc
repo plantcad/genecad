@@ -1,0 +1,24 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+## Files
+- Use `local` as a directory outside of source control for scratch work like planning documents and ad-hoc scripts
+
+## Planning
+- Create thorough, numbered plans before coding
+- Put these plans in an appropriately `.md` named file under `local/plans` for implementation tasks that are more complicated, or when requested to draft a plan prior to execution
+- Always refer to and revise the plan document when working through an implementation
+- Use checkboxes to indicate status of individual steps
+
+## Coding
+- Use NumPy style docstrings
+- Use `numpy.typing` for numpy array annotations
+- Use type annotations very liberally
+  - Use type hints according to the standard *after* to Python 3.9, i.e. `list`, `dict`, `int | None`, etc. rather than `List`, `Dict`, `Optional[int]`
+- Use early returns to avoid deeply nested if statements
+- Always prefer loggers over print statements unless instructed otherwise
+
+## Naming
+- Do not suffix variable names with `_df` or `_ds` when referencing Pandas, Xarray or other rich data structures; e.g. use "attributes" instead of "attr_df"

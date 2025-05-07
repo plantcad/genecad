@@ -1,0 +1,4 @@
+#!/bin/bash
+export RANK=$PMIX_RANK
+export WORLD_SIZE=$SLURM_NNODES
+exec "$@"

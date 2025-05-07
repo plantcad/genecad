@@ -1,0 +1,15 @@
+---
+description: Rules for developing CLI scripts
+globs: 
+alwaysApply: false
+---
+## CLI
+- Use `argparse` for CLIs unless instructed otherwise
+- By default, initialize logging in the `main` function with `logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')`
+- See @extract.py for an example CLI program
+- CLI organization
+  - Use `local/scripts` for ad-hoc, one-off debugging or analysis CLIs omitted from source control
+  - Use `scripts/misc` for ad-hoc, analysis CLIs to be saved in source control
+  - Use `scripts` for production CLIs that perform pipeline operations
+- CLI execution
+  - When prompted to provide CLI commands for execution, use the format `python ... 2>&1 | tee logs/exec/<operation_name>.log`
