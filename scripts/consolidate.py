@@ -9,6 +9,7 @@ import xarray as xr
 from tqdm import tqdm
 from Bio import SeqIO
 import lightning as L
+from torch.utils import data
 from argparse import Namespace as Args
 from torch.utils.data import DataLoader
 from transformers import AutoTokenizer
@@ -16,8 +17,7 @@ from xarray import Dataset as XarrayDataset
 from datasets import Dataset as HfDataset
 from torch.utils.data import Dataset as TorchDataset
 from src.dataset import MultisampleSequenceDatasetLabeled, set_dimension_chunks
-from src.modeling import worker_load_files
-
+from src.config import WINDOW_SIZE
 logger = logging.getLogger(__name__)
 
 def parse_args() -> Args:
@@ -26,13 +26,20 @@ def parse_args() -> Args:
     parser.add_argument('--output-dir', type=str, required=True, help='Directory for saving output datasets')
     parser.add_argument('--model-path', type=str, required=True, help='Path to the pre-trained model for tokenizer')
     parser.add_argument('--val-proportion', type=float, default=0.1, help='percentage of examples to use as the validation set')
-    parser.add_argument('--window-size', type=int, default=8192, help='Size of the window for processing sequences')
+    parser.add_argument('--window-size', type=int, default=WINDOW_SIZE, help='Size of the window for processing sequences')
     parser.add_argument('--batch-size', type=int, default=512, help='Batch size for creating sharded sequence dataset')
     parser.add_argument('--chunk-size', type=int, default=32, help='Chunk size for saved embeddings dataset (in samples dimension)')
     parser.add_argument('--num-workers', type=int, default=16, help='Number of worker threads for data loading')
     parser.add_argument('--seed', type=int, default=42, help='random seed')
     parser.add_argument('--max-samples', type=int, default=None, help='Maximum number of samples to process (for testing)')
     return parser.parse_args()
+
+def worker_load_files(worker_id):
+    """ Open a fresh file handle for each DataLoader worker """
+    worker_info = data.get_worker_info()
+    dataset = worker_info.dataset
+
+    dataset.open_label_files()
 
 def load_data_from_keyfile(args: Args) -> tuple[MultisampleSequenceDatasetLabeled, MultisampleSequenceDatasetLabeled]:
     logger.info(f"Loading data from keyfile {args.keyfile}")

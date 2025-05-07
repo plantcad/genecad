@@ -1,0 +1,175 @@
+# Directory variables
+RAW_DIR ?= $(WORK)/data/dna/plant_caduceus_genome_annotation_task/data_share_20250326/testing_data
+PIPE_DIR ?= $(SCRATCH)/data/dna/plant_caduceus_genome_annotation_task/pipeline
+MODEL_PATH ?= kuleshov-group/compo-cad2-l24-dna-chtk-c8192-v2-b2-NpnkD-ba240000
+RUN_VERSION ?= v0.1
+MODEL_CHECKPOINT ?= 
+
+# Create necessary directories
+PREDICT_DIR = $(PIPE_DIR)/predict
+
+# Define SPECIES and their chromosome IDs
+SPECIES = zmays carabica jregia pvulgaris
+CHR_ID = chr1
+
+# Define run-specific directory for model outputs
+RUN_DIR = runs/$(RUN_VERSION)
+
+# Common path variable to reduce repetition
+SPECIES_OUT = $(PREDICT_DIR)/$*/$(RUN_DIR)/$(CHR_ID)
+
+# Define input files for each species - simpler format with direct variables
+FASTA_zmays = Zea_mays-B73-REFERENCE-NAM-5.0.fa.gz
+FASTA_carabica = Coffea_arabica_geisha.final_chr1.fasta
+FASTA_jregia = Juglans_regia.Walnut_2.0.dna.toplevel_chr1.fa
+FASTA_pvulgaris = Phaseolus_vulgaris-2.0.2_chr1.fasta
+
+GFF_zmays = Zea_mays-B73-REFERENCE-NAM-5.0_Zm00001eb.1.gff3
+GFF_carabica = Coffea_arabica_geisha.annotation_chr1.gff3
+GFF_jregia = Juglans_regia.Walnut_2.0.60_chr1.gff3
+GFF_pvulgaris = Phaseolus_vulgaris-2.0.2_chr1.gff
+
+# Simple function to capitalize first letter
+capitalize = $(shell echo $1 | sed 's/./\u&/')
+
+# Define all target to run the complete pipeline for all species
+.PHONY: all clean help $(SPECIES) extract-sequences predict process-results
+
+all: $(SPECIES)
+
+# Help target
+help:
+	@echo "Available targets:"
+	@echo "  extract-sequences-SPECIES - Extract sequences for a specific species"
+	@echo "  predict-SPECIES - Run predictions for a specific species"
+	@echo "  process-results-SPECIES - Process prediction results"
+	@echo "  SPECIES - Run complete pipeline for a specific species (zmays, carabica, jregia, pvulgaris)"
+	@echo "  all - Run complete pipeline for all species"
+	@echo "  clean - Remove all generated files"
+
+# Species-specific targets
+$(SPECIES): %: process-results-%
+
+# Define sequence file target with proper dependency checks
+$(PREDICT_DIR)/%/sequences.zarr:
+	python scripts/extract.py extract_fasta_sequences \
+	  --input $(RAW_DIR)/fasta/$(FASTA_$*) \
+	  --species-id $(call capitalize,$*) \
+	  --tokenizer-path $(MODEL_PATH) \
+	  --output $(PREDICT_DIR)/$*/sequences.zarr
+
+# Extract sequences for each species (now using file target)
+extract-sequences-%: $(PREDICT_DIR)/%/sequences.zarr
+
+# Generate predictions for each species
+predict-%: $(PREDICT_DIR)/%/sequences.zarr
+	srun bin/tacc \
+	python scripts/predict.py create_predictions \
+	  --input $(PREDICT_DIR)/$*/sequences.zarr \
+	  --output-dir $(SPECIES_OUT)/predictions \
+	  --model-path $(MODEL_PATH) \
+	  --model-checkpoint $(MODEL_CHECKPOINT) \
+	  --species-id $(call capitalize,$*) \
+	  --chromosome-id $(CHR_ID) \
+	  --batch-size 32
+
+# Process results (detect intervals, export GFF, filter)
+process-results-%: predict-%
+	# ------------------------------------------------------------
+	# Detect intervals and export GFF
+	# ------------------------------------------------------------
+	python scripts/predict.py detect_intervals \
+	  --input-dir $(SPECIES_OUT)/predictions \
+	  --output $(SPECIES_OUT)/intervals.zarr
+	python scripts/predict.py export_gff \
+	  --input $(SPECIES_OUT)/intervals.zarr \
+	  --output $(SPECIES_OUT)/gff/predictions.gff \
+	  --min-transcript-length 3
+	# ------------------------------------------------------------
+	# Process predictions
+	# ------------------------------------------------------------
+	python scripts/gff.py filter_to_strand \
+	  --input $(SPECIES_OUT)/gff/predictions.gff \
+	  --output $(SPECIES_OUT)/gff/predictions__strand_both.gff \
+	  --strand both
+	python scripts/gff.py filter_to_min_length \
+	  --input $(SPECIES_OUT)/gff/predictions__strand_both.gff \
+	  --output $(SPECIES_OUT)/gff/predictions__strand_both__minlen_03.gff \
+	  --min-length 3
+	python scripts/gff.py filter_to_min_length \
+	  --input $(SPECIES_OUT)/gff/predictions__strand_both.gff \
+	  --output $(SPECIES_OUT)/gff/predictions__strand_both__minlen_30.gff \
+	  --min-length 30
+	python scripts/gff.py filter_to_valid_genes \
+	  --input $(SPECIES_OUT)/gff/predictions__strand_both__minlen_03.gff \
+	  --output $(SPECIES_OUT)/gff/predictions__strand_both__minlen_03__valid_only.gff
+	python scripts/gff.py remove_exon_utrs \
+	  --input $(SPECIES_OUT)/gff/predictions__strand_both__minlen_03__valid_only.gff \
+	  --output $(SPECIES_OUT)/gff/predictions__strand_both__minlen_03__valid_only__no_utrs.gff
+	python scripts/gff.py remove_exon_utrs \
+	  --input $(SPECIES_OUT)/gff/predictions__strand_both__minlen_30.gff \
+	  --output $(SPECIES_OUT)/gff/predictions__strand_both__minlen_30__no_utrs.gff
+	# ------------------------------------------------------------
+	# Process labels
+	# ------------------------------------------------------------
+	python scripts/gff.py filter_to_chromosome \
+	  --input $(RAW_DIR)/gff/$(GFF_$*) \
+	  --output $(SPECIES_OUT)/gff/labels.gff \
+	  --chromosome-id $(CHR_ID) \
+	  --species-id $(call capitalize,$*)
+	python scripts/gff.py filter_to_strand \
+	  --input $(SPECIES_OUT)/gff/labels.gff \
+	  --output $(SPECIES_OUT)/gff/labels__strand_both.gff \
+	  --strand both
+	python scripts/gff.py filter_to_representative_transcripts \
+	  --input $(SPECIES_OUT)/gff/labels__strand_both.gff \
+	  --output $(SPECIES_OUT)/gff/labels__strand_both__canonical_only.gff \
+	  --mode annotated_or_longest
+	python scripts/gff.py remove_exon_utrs \
+	  --input $(SPECIES_OUT)/gff/labels__strand_both__canonical_only.gff \
+	  --output $(SPECIES_OUT)/gff/labels__strand_both__canonical_only__no_utrs.gff
+	# ------------------------------------------------------------
+	# Run comparisons
+	# ------------------------------------------------------------
+	python scripts/gff.py compare \
+	  --reference $(SPECIES_OUT)/gff/labels__strand_both__canonical_only.gff \
+	  --input $(SPECIES_OUT)/gff/predictions__strand_both__minlen_03__valid_only.gff \
+	  --output $(SPECIES_OUT)/results/valid_only__with_utrs \
+	  --gffcompare-path $(WORK)/repos/misc/gffcompare/gffcompare
+	python scripts/gff.py compare \
+	  --reference $(SPECIES_OUT)/gff/labels__strand_both__canonical_only__no_utrs.gff \
+	  --input $(SPECIES_OUT)/gff/predictions__strand_both__minlen_03__valid_only__no_utrs.gff \
+	  --output $(SPECIES_OUT)/results/valid_only__no_utrs \
+	  --gffcompare-path $(WORK)/repos/misc/gffcompare/gffcompare
+	python scripts/gff.py compare \
+	  --reference $(SPECIES_OUT)/gff/labels__strand_both__canonical_only.gff \
+	  --input $(SPECIES_OUT)/gff/predictions__strand_both__minlen_30.gff \
+	  --output $(SPECIES_OUT)/results/minlen_only__with_utrs \
+	  --gffcompare-path $(WORK)/repos/misc/gffcompare/gffcompare
+	python scripts/gff.py compare \
+	  --reference $(SPECIES_OUT)/gff/labels__strand_both__canonical_only__no_utrs.gff \
+	  --input $(SPECIES_OUT)/gff/predictions__strand_both__minlen_30__no_utrs.gff \
+	  --output $(SPECIES_OUT)/results/minlen_only__no_utrs \
+	  --gffcompare-path $(WORK)/repos/misc/gffcompare/gffcompare
+	# ------------------------------------------------------------
+	# Consolidate results
+	# ------------------------------------------------------------
+	python scripts/gff.py collect_results \
+	  --input $(SPECIES_OUT)/results \
+	  --output $(SPECIES_OUT)/results/gffcompare.stats.consolidated.csv
+	# ------------------------------------------------------------
+	# Merge labels and predictions
+	# ------------------------------------------------------------
+	python scripts/gff.py set_source --source labels \
+	  --input $(SPECIES_OUT)/gff/labels__strand_both__canonical_only.gff \
+	  --output /tmp/labels.gff
+	python scripts/gff.py set_source --source predictions \
+	  --input $(SPECIES_OUT)/gff/predictions__strand_both__minlen_30.gff \
+	  --output /tmp/predictions.gff
+	python scripts/gff.py merge \
+	  --input /tmp/labels.gff /tmp/predictions.gff \
+	  --output $(SPECIES_OUT)/gff/labeled_predictions__strand_both.gff
+
+# Clean target
+clean:
+	rm -rf $(addprefix $(PREDICT_DIR)/,$(addsuffix /$(RUN_DIR),$(SPECIES)))

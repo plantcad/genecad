@@ -5,6 +5,7 @@ import tqdm
 from typing import Literal, Any
 from numpy import typing as npt
 from pydantic import BaseModel, Field, field_validator, ValidationInfo
+from src.config import WINDOW_SIZE
 from src.sequence import convert_entity_labels_to_intervals, create_sequence_windows
 import torch
 import numpy as np
@@ -12,7 +13,7 @@ import xarray as xr
 from argparse import Namespace as Args
 from transformers import AutoModel, AutoConfig, AutoTokenizer
 from src.dataset import open_datatree, set_dimension_chunks
-from src.modeling import SequenceSpanClassifier, SequenceSpanClassifierConfig
+from src.modeling import GeneClassifier, GeneClassifierConfig
 import pandas as pd
 from src.dist import process_group
 import glob
@@ -23,22 +24,12 @@ def batched(input_list: list[Any], batch_size: int) -> list[list[Any]]:
     """Batches a list into sublists of a specified size."""
     return [input_list[i:i + batch_size] for i in range(0, len(input_list), batch_size)]
     
-def load_classifier(args: Args) -> SequenceSpanClassifier:
-    logger.info(f"Loading SequenceSpanClassifier from {args.model_checkpoint}")
-    # Initialize with default config first
-    config = load_classifier_config(args)
-    classifier = SequenceSpanClassifier(config)
-    
-    # Load checkpoint state dict
-    checkpoint = torch.load(args.model_checkpoint, map_location=args.device, weights_only=True)
-    classifier.load_state_dict(checkpoint['state_dict'], strict=False)
-    classifier = classifier.eval().to(args.device)
-    return classifier
+def load_classifier(args: Args) -> GeneClassifier:
+    logger.info(f"Loading model from {args.model_checkpoint}")
+    model = GeneClassifier.load_from_checkpoint(args.model_checkpoint, map_location=args.device)
+    model = model.eval()
+    return model
 
-def load_classifier_config(args: Args) -> SequenceSpanClassifierConfig:
-    # TODO: load config from checkpoint
-    config = SequenceSpanClassifierConfig(max_sequence_length=args.window_size)
-    return config
 
 def load_base_model(args: Args) -> AutoModel:
     logger.info(f"Loading base embedding model from {args.model_path}")
@@ -57,17 +48,19 @@ def load_tokenizer(args: Args) -> AutoTokenizer:
     tokenizer = AutoTokenizer.from_pretrained(args.model_path, trust_remote_code=True)
     return tokenizer
 
-def load_models(args: Args) -> tuple[AutoModel, SequenceSpanClassifier, AutoTokenizer]:
+def load_models(args: Args) -> tuple[AutoModel | None, GeneClassifier, AutoTokenizer]:
     """
-    Load the base embedding model, the SequenceSpanClassifier, and the tokenizer.
+    Load the base embedding model, the GeneClassifier, and the tokenizer.
         
     Returns
     -------
     tuple
         (base_model, classifier_model, tokenizer) - models and tokenizer loaded and ready for inference
     """
-    base_model = load_base_model(args)
     classifier = load_classifier(args)
+    base_model = None
+    if classifier.config.use_precomputed_base_encodings:
+        base_model = load_base_model(args)
     tokenizer = load_tokenizer(args)
     return base_model, classifier, tokenizer
 
@@ -109,8 +102,8 @@ def load_data(args: Args) -> xr.Dataset:
 def _create_predictions(
     args: Args, 
     ds: xr.Dataset, 
-    base_model: AutoModel, 
-    classifier: SequenceSpanClassifier, 
+    base_model: AutoModel | None, 
+    classifier: GeneClassifier, 
     tokenizer: AutoTokenizer,
 ) -> xr.DataTree:
     """
@@ -122,9 +115,9 @@ def _create_predictions(
         Command-line arguments
     ds : xarray.Dataset
         Dataset containing the sequence data
-    base_model : AutoModel
-        The base embedding model
-    classifier : SequenceSpanClassifier
+    base_model : AutoModel | None
+        The base embedding model, or None if not needed
+    classifier : GeneClassifier
         The classifier model
     tokenizer : AutoTokenizer
         The tokenizer for the base model
@@ -198,15 +191,17 @@ def _create_predictions(
             input_ids = torch.tensor(input_ids, device=args.device)
             assert input_ids.shape == (current_batch_size, args.window_size)
 
-            # Generate embeddings
-            embeddings = base_model(input_ids=input_ids).last_hidden_state
-            assert embeddings.ndim == 3
-            assert embeddings.shape[:2] == (current_batch_size, args.window_size)
+            # Generate embeddings, if necessary
+            inputs_embeds = None
+            if classifier.config.use_precomputed_base_encodings:
+                inputs_embeds = base_model(input_ids=input_ids).last_hidden_state
+                assert inputs_embeds.ndim == 3
+                assert inputs_embeds.shape[:2] == (current_batch_size, args.window_size)
 
             # Get predictions from classifier
             token_logits = classifier(
                 input_ids=input_ids,
-                inputs_embeds=embeddings
+                inputs_embeds=inputs_embeds
             )
             assert token_logits.shape == (current_batch_size, args.window_size, num_token_classes)
 
@@ -344,7 +339,9 @@ def _detect_intervals(
         Dataset containing inferred region intervals
     """
     logger.info("Inferring regions from predicted labels")
-    config = load_classifier_config(args)
+    # TODO: Fetch the label properties necessary from attributions stored in the predictions
+    # datasets rather than from the configuration files, or from the original model checkpoint.
+    config = GeneClassifierConfig()
     region_intervals = []
     strands = predictions.strand.values.tolist()
     assert set(strands) == {"positive", "negative"}
@@ -629,6 +626,7 @@ def generate_gff(genes: list[pd.DataFrame], chrom_id: str, output_path: str) -> 
     # Convert records to strings and write file
     gff_lines = ["##gff-version 3"] + [rec.to_line() for rec in gff_records]
     logger.info(f"Writing {len(gff_lines)} lines to {output_path}")
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
     with open(output_path, "w") as f:
         f.write("\n".join(gff_lines) + "\n")
 
@@ -675,7 +673,7 @@ def main():
     inference_parser = subparsers.add_parser("create_predictions", help="Generate token and feature logits with predicted classes")
     inference_parser.add_argument("--input", required=True, help="Path to input zarr dataset (from transform.py)")
     inference_parser.add_argument("--output-dir", required=True, help="Directory to save rank-specific output zarr datasets")
-    inference_parser.add_argument("--model-checkpoint", required=True, help="Path to SequenceSpanClassifier checkpoint")
+    inference_parser.add_argument("--model-checkpoint", required=True, help="Path to classifier checkpoint")
     inference_parser.add_argument("--model-path", required=True, help="Path to base embedding model")
     
     # Selection arguments
@@ -683,8 +681,8 @@ def main():
     inference_parser.add_argument("--chromosome-id", required=True, help="Chromosome ID to process (e.g., 'Chr1')")
     
     # Processing parameters
-    inference_parser.add_argument("--window-size", type=int, default=8192, help="Window size for sequence processing")
-    inference_parser.add_argument("--stride", type=int, default=4096, help="Stride size for overlapping windows (default 4096)")
+    inference_parser.add_argument("--window-size", type=int, default=WINDOW_SIZE, help="Window size for sequence processing")
+    inference_parser.add_argument("--stride", type=int, default=WINDOW_SIZE//2, help="Stride size for overlapping windows")
     inference_parser.add_argument("--batch-size", type=int, default=64, help="Batch size for inference")
     inference_parser.add_argument("--device", type=str, default="cuda", help="Device to use for inference (cuda/cpu)")
     
@@ -692,7 +690,7 @@ def main():
     detect_parser = subparsers.add_parser("detect_intervals", help="Detect intervals from generated logits")
     detect_parser.add_argument("--input-dir", required=True, help="Path to input zarr dataset from generate_logits")
     detect_parser.add_argument("--output", required=True, help="Path to output zarr dataset for intervals")
-    detect_parser.add_argument("--window-size", type=int, default=8192, help="Window size for sequence processing")
+    detect_parser.add_argument("--window-size", type=int, default=WINDOW_SIZE, help="Window size for sequence processing")
     
     # Export GFF command
     gff_parser = subparsers.add_parser("export_gff", help="Export predictions to GFF format")

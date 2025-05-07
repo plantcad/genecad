@@ -1,6 +1,5 @@
 import os
 import time
-from src.dataset import set_dimension_chunks
 import torch
 import logging
 import argparse
@@ -9,9 +8,10 @@ import numpy as np
 import glob
 from tqdm import tqdm
 from argparse import Namespace as Args
-from transformers import AutoModel, AutoConfig
+from transformers import AutoModel
 from xarray import Dataset as XarrayDataset
 from src.modeling import process_group
+from src.hub import load_base_model
 
 logger = logging.getLogger(__name__)
 
@@ -24,14 +24,6 @@ DEFAULT_HIDDEN_STATE_CHUNK_SIZE = 1024
 # -------------------------------------------------------------------------------------------------
 # Generate embeddings
 # -------------------------------------------------------------------------------------------------
-
-def load_base_model(args: Args) -> AutoModel:
-    logger.info(f"Loading base model from {args.model_path}")
-    config = AutoConfig.from_pretrained(args.model_path, trust_remote_code=True)
-    base_model = AutoModel.from_pretrained(
-            args.model_path, config=config, trust_remote_code=True, dtype=torch.bfloat16
-    )
-    return base_model
 
 def set_batch_chunks(batch: xr.Dataset, sample_chunk_size: int, hidden_state_chunk_size: int=DEFAULT_HIDDEN_STATE_CHUNK_SIZE) -> xr.Dataset:
     for var, da in batch.variables.items():
@@ -113,7 +105,8 @@ def generate_all_embeddings(args: Args) -> None:
     valid_dataset = xr.open_zarr(os.path.join(args.input_dir, "valid.zarr"))
     
     # Load base model
-    base_model = load_base_model(args)
+    logger.info(f"Loading base model from {args.model_path}")
+    base_model = load_base_model(args.model_path)
     
     # Generate and add embeddings
     logger.info("Adding embeddings to train dataset...")
