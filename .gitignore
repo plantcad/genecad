@@ -1,0 +1,7 @@
+__pycache__/
+wandb/
+local/
+.cursorrules
+.vscode/
+logs/train*
+.ruff_cache
