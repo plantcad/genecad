@@ -20,5 +20,11 @@ alwaysApply: true
 - Use early returns to avoid deeply nested if statements
 - Always prefer loggers over print statements unless instructed otherwise
 
+## Testing
+- Use `pytest` for unit tests
+- Prefer `pytest.mark.parametrize` over boilerplate in test cases
+- Always start with small, simple tests and expand upon request
+- Use absolute imports for project modules, e.g. `from src.module import ...`
+
 ## Naming
 - Do not suffix variable names with `_df` or `_ds` when referencing Pandas, Xarray or other rich data structures; e.g. use "attributes" instead of "attr_df"

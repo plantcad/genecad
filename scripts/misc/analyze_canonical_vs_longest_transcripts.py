@@ -1,5 +1,5 @@
 import pandas as pd
-from src.gff_reader import read_gff3
+from src.gff_pandas import read_gff3
 
 path = "/scratch/10459/eczech/data/dna/plant_caduceus_genome_annotation_task/pipeline/predict/zmays/chr1/gff/predictions__strand_positive__minlen_03__valid_only.gff"
 df = read_gff3(path)

@@ -5,7 +5,7 @@ import re
 import os
 import subprocess
 from pathlib import Path
-from src.gff_reader import read_gff3, write_gff3
+from src.gff_pandas import read_gff3, write_gff3
 from src.gff_compare import run_gffcompare, parse_gffcompare_stats
 
 # Set up logging
@@ -25,10 +25,10 @@ def load_gff(path: str) -> pd.DataFrame:
         Path to input GFF file
     """
     logger.info(f"Loading GFF file {path}")
-    df = read_gff3(path, parse_attributes=True)
+    df = read_gff3(path)
     logger.info(f"Loading complete: {df.shape[0]} records found")
 
-    # Create mapping of old column names to new snake_case names
+    # Create mapping of old column names to new lcase names
     col_mapping = {}
     for col in df.columns:
         new_name = re.sub(r'\s+', '_', col).lower()
