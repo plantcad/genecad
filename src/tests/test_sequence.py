@@ -1,10 +1,12 @@
 import pytest
 import numpy as np
 import pandas as pd
+import itertools
 from src.sequence import (
     convert_to_biluo_labels, convert_to_entity_labels, find_group_intervals, find_intervals,
     convert_biluo_index_to_class_name, convert_biluo_index_to_entity_name, find_overlapping_intervals,
-    convert_entity_intervals_to_labels, convert_biluo_entity_names, create_prediction_windows, create_sequence_windows
+    convert_entity_intervals_to_labels, convert_biluo_entity_names, create_prediction_windows, create_sequence_windows,
+    viterbi_decode, brute_force_decode
 )
 
 # fmt: off
@@ -713,3 +715,114 @@ def test_create_sequence_windows():
         windows = create_sequence_windows(inputs, window_size, stride)
         outputs = np.concatenate([chunk[slice(*local_window)] for chunk, local_window, _ in windows])
         np.testing.assert_array_equal(outputs, inputs)
+
+
+def test_viterbi_decode():
+    """Test viterbi_decode with various examples comparing to known optimal paths."""
+    
+    # Test case 1: Simple alternating pattern
+    # --------------------------------------
+    observations = np.array([
+        [0.9, 0.1],  # Strongly favors state 0
+        [0.2, 0.8],  # Favors state 1
+        [0.7, 0.3],  # Favors state 0
+        [0.3, 0.7],  # Favors state 1
+        [0.8, 0.2],  # Strongly favors state 0
+    ])
+    
+    transitions = np.array([
+        [0.7, 0.3],  # From state 0
+        [0.3, 0.7],  # From state 1
+    ])
+    
+    start_probs = np.array([0.5, 0.5])
+    
+    # Get the ground truth from brute force
+    brute_path = brute_force_decode(observations, transitions, start_probs)
+    
+    # With these transitions, optimal path is all state 0
+    known_optimal_path = np.array([0, 0, 0, 0, 0], dtype=np.int64)
+    np.testing.assert_array_equal(
+        brute_path, known_optimal_path, 
+        "Brute force decoder didn't match expected path"
+    )
+    
+    # Verify viterbi matches the brute force result
+    viterbi_path = viterbi_decode(observations, transitions, start_probs)
+    np.testing.assert_array_equal(
+        viterbi_path, brute_path,
+        "Viterbi decoder didn't match brute force decoder"
+    )
+    
+    # Test case 2: Three state system
+    # -----------------------------
+    observations_3state = np.array([
+        [0.7, 0.2, 0.1],  # Favors state 0
+        [0.1, 0.6, 0.3],  # Favors state 1
+        [0.2, 0.1, 0.7],  # Favors state 2
+    ])
+    
+    transitions_3state = np.array([
+        [0.5, 0.3, 0.2],  # From state 0
+        [0.2, 0.6, 0.2],  # From state 1
+        [0.1, 0.4, 0.5],  # From state 2
+    ])
+    
+    start_probs_3state = np.array([0.4, 0.3, 0.3])
+    
+    # Get the ground truth from brute force
+    brute_path_3state = brute_force_decode(observations_3state, transitions_3state, start_probs_3state)
+    
+    # The optimal path should follow the highest emission probabilities
+    known_optimal_path_3state = np.array([0, 1, 2], dtype=np.int64)
+    np.testing.assert_array_equal(
+        brute_path_3state, known_optimal_path_3state,
+        "Brute force decoder didn't match expected path for 3-state system"
+    )
+    
+    # Verify viterbi matches the brute force result
+    viterbi_path_3state = viterbi_decode(observations_3state, transitions_3state, start_probs_3state)
+    np.testing.assert_array_equal(
+        viterbi_path_3state, brute_path_3state,
+        "Viterbi decoder didn't match brute force decoder for 3-state system"
+    )
+    
+    # Test case 3: Transitions overcome strong emissions
+    # ------------------------------------------------
+    observations_smoothed = np.array([
+        [0.9, 0.1],  # Strongly favors state 0
+        [0.9, 0.1],  # Strongly favors state 0
+        [0.1, 0.9],  # Strongly favors state 1 (outlier!)
+        [0.9, 0.1],  # Strongly favors state 0
+        [0.9, 0.1],  # Strongly favors state 0
+    ])
+    
+    # Very high probability to stay in the same state (strong smoothing)
+    transitions_smoothed = np.array([
+        [0.95, 0.05],  # Strong preference to stay in state 0
+        [0.05, 0.95],  # Strong preference to stay in state 1
+    ])
+    
+    start_probs_smoothed = np.array([0.5, 0.5])
+    
+    # Get the ground truth from brute force
+    brute_path_smoothed = brute_force_decode(observations_smoothed, transitions_smoothed, start_probs_smoothed)
+    
+    # Due to strong transition constraints, the optimal path should smooth out the outlier
+    known_optimal_path_smoothed = np.array([0, 0, 0, 0, 0], dtype=np.int64)
+    np.testing.assert_array_equal(
+        brute_path_smoothed, known_optimal_path_smoothed,
+        "Brute force decoder didn't match expected smoothed path"
+    )
+    
+    # Verify viterbi matches the brute force result
+    viterbi_path_smoothed = viterbi_decode(observations_smoothed, transitions_smoothed, start_probs_smoothed)
+    np.testing.assert_array_equal(
+        viterbi_path_smoothed, brute_path_smoothed,
+        "Viterbi decoder didn't match brute force decoder for smoothed path"
+    )
+    
+    # Verify this path doesn't just follow strongest emissions
+    strongest_emission_path = np.argmax(observations_smoothed, axis=1)
+    assert not np.array_equal(viterbi_path_smoothed, strongest_emission_path), \
+        "Viterbi should not simply pick the highest emission probability at each step"

@@ -67,7 +67,7 @@ class ThroughputMonitor(Callback):
 
 
 # ------------------------------------------------------------------------------------------------
-# Base Classifier
+# Gene Classifier
 # ------------------------------------------------------------------------------------------------
 
 
@@ -257,8 +257,11 @@ class GeneClassifier(L.LightningModule):
             if not config.use_precomputed_base_encodings:
                 self.base_encoder = load_base_model(config.base_encoder_path, revision=config.base_encoder_revision)
                 if config.base_encoder_frozen:
+                    self.base_encoder = self.base_encoder.eval()
                     for p in self.base_encoder.parameters():
                         p.requires_grad = False
+                else:
+                    self.base_encoder = self.base_encoder.train()
 
 
         self.token_embedding = None
@@ -570,3 +573,42 @@ class GeneClassifier(L.LightningModule):
             index=index,
         )
     
+# -------------------------------------------------------------------------
+# CRF
+# -------------------------------------------------------------------------
+
+TOKEN_TRANSITION_LABELS = ["intergenic", "intron", "five_prime_utr", "cds", "three_prime_utr"]
+TOKEN_TRANSITION_PROBS = [
+    # intergenic              intron                  five_prime_utr          cds                     three_prime_utr
+    [9.9986728674356296e-01, 0.0000000000000000e+00, 1.3271325643708179e-04, 0.0000000000000000e+00, 0.0000000000000000e+00],  # intergenic
+    [0.0000000000000000e+00, 9.9670998028242297e-01, 1.4192693353026146e-04, 3.0749541662207606e-03, 7.3138617826025532e-05],  # intron
+    [0.0000000000000000e+00, 9.1231590182167715e-04, 9.9443444103113121e-01, 4.6532430670470975e-03, 0.0000000000000000e+00],  # five_prime_utr
+    [0.0000000000000000e+00, 3.3664534452795144e-03, 0.0000000000000000e+00, 9.9583064809038380e-01, 8.0289846433672328e-04],  # cds
+    [2.7761939578153979e-03, 2.8331069530538342e-04, 8.3618725786499447e-07, 0.0000000000000000e+00, 9.9693965915962135e-01],  # three_prime_utr
+]
+
+def token_transition_probs() -> pd.DataFrame:
+    return pd.DataFrame(
+        data=TOKEN_TRANSITION_PROBS,
+        index=TOKEN_TRANSITION_LABELS,
+        columns=TOKEN_TRANSITION_LABELS,
+    )
+
+def create_crf(config: GeneClassifierConfig, initialize: bool = True, freeze: bool = True):
+    if (actual := config.token_entity_names_with_background()) != (expected := TOKEN_TRANSITION_LABELS):
+        raise ValueError(f"Token entity names must match those used to create transition probabilities; expected labels: {expected}, got: {actual}")
+    from torchcrf import CRF
+    labels = config.token_entity_names_with_background()
+    crf = CRF(num_tags=len(labels), batch_first=True)
+    if initialize:
+        transition_probs = np.array(TOKEN_TRANSITION_PROBS, dtype=np.float32)
+        log_transition_probs = np.log(transition_probs + np.finfo(transition_probs.dtype).eps)
+        with torch.no_grad():
+            crf.transitions.copy_(torch.tensor(log_transition_probs, dtype=torch.float))
+            crf.start_transitions.zero_()
+            crf.end_transitions.zero_()
+        if freeze:
+            crf.transitions.requires_grad = False
+            crf.start_transitions.requires_grad = False
+            crf.end_transitions.requires_grad = False
+    return crf

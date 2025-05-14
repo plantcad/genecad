@@ -6,14 +6,15 @@ from typing import Literal, Any
 from numpy import typing as npt
 from pydantic import BaseModel, Field, field_validator, ValidationInfo
 from src.config import WINDOW_SIZE
-from src.sequence import convert_entity_labels_to_intervals, create_sequence_windows
+from src.sequence import convert_entity_labels_to_intervals, create_sequence_windows, viterbi_decode
 import torch
+import torch.nn.functional as F
 import numpy as np
 import xarray as xr
 from argparse import Namespace as Args
 from transformers import AutoModel, AutoConfig, AutoTokenizer
 from src.dataset import open_datatree, set_dimension_chunks
-from src.modeling import GeneClassifier, GeneClassifierConfig
+from src.modeling import TOKEN_TRANSITION_PROBS, GeneClassifier, GeneClassifierConfig, create_crf, token_transition_probs
 import pandas as pd
 from src.dist import process_group
 import glob
@@ -315,6 +316,7 @@ def create_predictions(args: Args):
     logger.info("Done")
 
 
+
 # -------------------------------------------------------------------------------------------------
 # Detect intervals
 # -------------------------------------------------------------------------------------------------
@@ -345,12 +347,66 @@ def _detect_intervals(
     region_intervals = []
     strands = predictions.strand.values.tolist()
     assert set(strands) == {"positive", "negative"}
+    
+    def _decode_intervals(logits: npt.ArrayLike) -> pd.DataFrame:
+        transition_probs = token_transition_probs()
+        if transition_probs.columns.tolist() != config.token_entity_names_with_background():
+            raise ValueError(f"Transition probability classes must match token entity names; expected: {config.token_entity_names_with_background()}, got: {transition_probs.columns.tolist()}")
+        emissions = F.softmax(torch.from_numpy(logits), dim=-1).numpy()
+        assert emissions.min() >= 0 and emissions.max() <= 1
+        # Takes ~90 seconds for 308452471 tokens on Grace CPU
+        labels = viterbi_decode(emission_probs=emissions, transition_matrix=transition_probs.values)
+        assert labels.ndim == 1
+        assert len(labels) == len(logits)
+        return labels
+        
     for strand in strands:
+        # Direct label inference
         labels = predictions.sel(strand=strand).feature_predictions.values 
-        region_intervals.append(
-            convert_entity_labels_to_intervals(labels=labels, class_groups=config.interval_entity_classes)
-            .assign(strand=strand)
+        logger.info(f"Running direct decoding for {strand!r} strand")
+        intervals = convert_entity_labels_to_intervals(labels=labels, class_groups=config.interval_entity_classes)
+        region_intervals.append(intervals.assign(strand=strand, decoding="direct"))
+        # CRF label decoding
+        logits = predictions.sel(strand=strand).feature_logits.values
+        logger.info(f"Running viterbi decoding for {strand!r} strand")
+        if strand == "positive":
+            decoded_labels = _decode_intervals(logits=logits)
+        else:
+            # Copy the flipped array to avoid torch error: 
+            # ValueError: At least one stride in the given numpy array is negative, and tensors with negative strides are not currently supported. (You can probably work around this by making a copy of your array  with array.copy().)
+            decoded_labels = flip(_decode_intervals(logits=flip(logits).copy()))
+        intervals = convert_entity_labels_to_intervals(
+            labels=decoded_labels, 
+            class_groups=config.interval_entity_classes
         )
+        region_intervals.append(intervals.assign(strand=strand, decoding="viterbi"))
+        #### DELETE
+        logger.info(f"Saving viterbi comparison for {strand!r} strand")
+        # Get parent dir of args.output and save to "viterbi_comparison_{strand}.zarr"
+        temp_dir = os.path.join(os.path.dirname(args.output), "viterbi_comparison")
+        os.makedirs(temp_dir, exist_ok=True)
+        temp_path = os.path.join(temp_dir, f"{strand}.zarr")
+        if os.path.exists(temp_path):
+            import shutil
+            shutil.rmtree(temp_path)
+        temp_ds = xr.Dataset(
+            data_vars={
+                "direct_labels": (["sequence"], labels), 
+                "viterbi_labels": (["sequence"], decoded_labels),
+            },
+            coords={"sequence": predictions.sequence.values},
+            attrs={"strand": strand},
+        )
+        logger.info(f"Viterbi comparison dataset:\n{temp_ds}")
+        temp_ds.to_zarr(
+            temp_path,
+            zarr_format=2,
+            consolidated=True,
+        )
+        logger.info(f"Saved viterbi comparison to {temp_path}")
+        #### /DELETE
+        
+        
     region_intervals = pd.concat(region_intervals, ignore_index=True, axis=0)
     region_name_map = {
         i: config.interval_entity_name(i)
@@ -402,10 +458,11 @@ def detect_intervals(args: Args):
             raw_predictions = open_datatree(
                 rank_path, 
                 consolidated=True,
-                drop_variables=["token_predictions", "token_logits", "feature_logits"],
+                # TODO: Add "feature_logits" back in if decoding fails to help
+                drop_variables=["token_predictions", "token_logits"],
             )
             rank_strand_data.append(raw_predictions[f"/{strand}"].ds)
-        logger.info(f"Concatenating {len(rank_strand_data)} rank datasets for strand '{strand}' along the sequence dimension.")
+        logger.info(f"Concatenating {len(rank_strand_data)} rank datasets for {strand!r} strand along the sequence dimension.")
         dataset = xr.concat(rank_strand_data, dim="sequence")
         dataset = dataset.sortby("sequence")
         assert np.array_equal(
@@ -653,6 +710,14 @@ def export_gff(args: Args):
     logger.info(f"Converting interval predictions to DataFrame")
     intervals_table = intervals_dataset.to_dataframe().reset_index()
     
+    # Add decoding column if not present (for backward compatibility)
+    if "decoding" not in intervals_table.columns:
+        intervals_table["decoding"] = "direct"
+    
+    # Filter by decoding method
+    intervals_table = intervals_table[intervals_table["decoding"] == args.decoding_method]
+    logger.info(f"Filtered intervals to {len(intervals_table)} rows using decoding method: {args.decoding_method}")
+    
     # Group intervals by transcript
     genes = group_intervals_by_transcript(intervals_table, args.min_transcript_length)
     
@@ -697,6 +762,7 @@ def main():
     gff_parser.add_argument("--input", required=True, help="Path to input zarr dataset from run_inference")
     gff_parser.add_argument("--output", required=True, help="Path to output GFF file")
     gff_parser.add_argument("--min-transcript-length", type=int, default=0, help="Minimum transcript length (default: 0, no filtering)")
+    gff_parser.add_argument("--decoding-method", type=str, default="direct", help="Decoding method to use (default: direct)")
     
     args = parser.parse_args()
     

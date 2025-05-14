@@ -18,17 +18,33 @@ logger = logging.getLogger(__name__)
 # Utility functions
 # -------------------------------------------------------------------------------------------------
 
-def load_gff(path: str) -> pd.DataFrame:
+def load_gff(path: str, attributes_to_drop: list[str] | None = None) -> pd.DataFrame:
     """Load GFF file into a pandas DataFrame.
     
     Parameters
     ----------
     path : str
         Path to input GFF file
+    attributes_to_drop : list[str] | None, optional
+        List of attributes to drop from the GFF file, typically to prevent
+        conflicts in normalized names
     """
     logger.info(f"Loading GFF file {path}")
     df = read_gff3(path)
     logger.info(f"Loading complete: {df.shape[0]} records found")
+
+    if attributes_to_drop:
+        # Drop parsed attributes and remove them from the original attributes as a delimited string
+        # TODO: Move away from GFF for intermediate representations to avoid these terrible standards
+        df = df.drop(columns=attributes_to_drop)
+        df["attributes"] = [
+            ";".join([
+                kv
+                for kv in attrs.split(";")
+                if kv.split("=")[0] not in attributes_to_drop
+            ])
+            for attrs in df["attributes"].fillna("")
+        ]
 
     # Create mapping of old column names to new lcase names
     col_mapping = {}
@@ -163,14 +179,10 @@ def filter_to_chromosome(input_path: str, output_path: str, chromosome_id: str, 
     logger.info(f"Filtering {input_path} to chromosome {chromosome_id}" + 
                 (f" with species mapping for {species_id}" if species_id else ""))
     
-    # Read GFF file
-    features = load_gff(input_path)
-    
-    original_count = features.shape[0]
-    
     # Find the seq_ids to filter for based on species config if provided
     seq_ids_to_filter = [chromosome_id]  # Default if no species_id provided
     normalized_id = chromosome_id  # Default if no species_id provided
+    attributes_to_drop = None
     
     if species_id:
         if species_id not in SPECIES_CONFIGS:
@@ -186,11 +198,17 @@ def filter_to_chromosome(input_path: str, output_path: str, chromosome_id: str, 
         if not source_ids:
             raise ValueError(f"No source chromosome IDs found for normalized ID '{chromosome_id}' in species '{species_id}'")
         
+        attributes_to_drop = species_config.gff_properties.get("drop_attributes")
         seq_ids_to_filter = source_ids
         normalized_id = chromosome_id
         
         logger.info(f"Using source chromosome IDs: {seq_ids_to_filter}")
-        logger.info(f"Will normalize to: {normalized_id}")
+        logger.info(f"Chromosome ID will be normalized from {chromosome_id} to {normalized_id}")
+        logger.info(f"The following GFF attributes will be dropped: {attributes_to_drop}")
+    
+    # Read GFF file
+    features = load_gff(input_path, attributes_to_drop=attributes_to_drop)
+    original_count = features.shape[0]
     
     # Filter to specified chromosome(s)
     features = features[features["seq_id"].isin(seq_ids_to_filter)]

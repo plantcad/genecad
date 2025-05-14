@@ -9,7 +9,7 @@ MODEL_CHECKPOINT ?=
 PREDICT_DIR = $(PIPE_DIR)/predict
 
 # Define SPECIES and their chromosome IDs
-SPECIES = zmays carabica jregia pvulgaris
+SPECIES = zmays carabica jregia pvulgaris ntabacum nsylvestris
 CHR_ID = chr1
 
 # Define run-specific directory for model outputs
@@ -23,11 +23,15 @@ FASTA_zmays = Zea_mays-B73-REFERENCE-NAM-5.0.fa.gz
 FASTA_carabica = Coffea_arabica_geisha.final_chr1.fasta
 FASTA_jregia = Juglans_regia.Walnut_2.0.dna.toplevel_chr1.fa
 FASTA_pvulgaris = Phaseolus_vulgaris-2.0.2_chr1.fasta
+FASTA_ntabacum = Nicotiana_tabacum_genome_chr1_clean.fa.gz
+FASTA_nsylvestris = Nicotiana_sylvestris_genome_chr1_clean.fa.gz
 
 GFF_zmays = Zea_mays-B73-REFERENCE-NAM-5.0_Zm00001eb.1.gff3
 GFF_carabica = Coffea_arabica_geisha.annotation_chr1.gff3
 GFF_jregia = Juglans_regia.Walnut_2.0.60_chr1.gff3
 GFF_pvulgaris = Phaseolus_vulgaris-2.0.2_chr1.gff
+GFF_ntabacum = Nicotiana_tabacum_annotation.gff3
+GFF_nsylvestris = Nicotiana_sylvestris_annotation.gff3
 
 # Simple function to capitalize first letter
 capitalize = $(shell echo $1 | sed 's/./\u&/')
@@ -43,7 +47,7 @@ help:
 	@echo "  extract-sequences-SPECIES - Extract sequences for a specific species"
 	@echo "  predict-SPECIES - Run predictions for a specific species"
 	@echo "  process-results-SPECIES - Process prediction results"
-	@echo "  SPECIES - Run complete pipeline for a specific species (zmays, carabica, jregia, pvulgaris)"
+	@echo "  SPECIES - Run complete pipeline for a specific species (zmays, carabica, jregia, pvulgaris, ntabacum, nsylvestris)"
 	@echo "  all - Run complete pipeline for all species"
 	@echo "  clean - Remove all generated files"
 
@@ -84,6 +88,7 @@ process-results-%: predict-%
 	python scripts/predict.py export_gff \
 	  --input $(SPECIES_OUT)/intervals.zarr \
 	  --output $(SPECIES_OUT)/gff/predictions.gff \
+	  --decoding-method viterbi \
 	  --min-transcript-length 3
 	# ------------------------------------------------------------
 	# Process predictions
@@ -96,19 +101,15 @@ process-results-%: predict-%
 	  --input $(SPECIES_OUT)/gff/predictions__strand_both.gff \
 	  --output $(SPECIES_OUT)/gff/predictions__strand_both__minlen_03.gff \
 	  --min-length 3
-	python scripts/gff.py filter_to_min_length \
-	  --input $(SPECIES_OUT)/gff/predictions__strand_both.gff \
-	  --output $(SPECIES_OUT)/gff/predictions__strand_both__minlen_30.gff \
-	  --min-length 30
 	python scripts/gff.py filter_to_valid_genes \
 	  --input $(SPECIES_OUT)/gff/predictions__strand_both__minlen_03.gff \
 	  --output $(SPECIES_OUT)/gff/predictions__strand_both__minlen_03__valid_only.gff
 	python scripts/gff.py remove_exon_utrs \
+	  --input $(SPECIES_OUT)/gff/predictions__strand_both__minlen_03.gff \
+	  --output $(SPECIES_OUT)/gff/predictions__strand_both__minlen_03__no_utrs.gff
+	python scripts/gff.py remove_exon_utrs \
 	  --input $(SPECIES_OUT)/gff/predictions__strand_both__minlen_03__valid_only.gff \
 	  --output $(SPECIES_OUT)/gff/predictions__strand_both__minlen_03__valid_only__no_utrs.gff
-	python scripts/gff.py remove_exon_utrs \
-	  --input $(SPECIES_OUT)/gff/predictions__strand_both__minlen_30.gff \
-	  --output $(SPECIES_OUT)/gff/predictions__strand_both__minlen_30__no_utrs.gff
 	# ------------------------------------------------------------
 	# Process labels
 	# ------------------------------------------------------------
@@ -117,38 +118,30 @@ process-results-%: predict-%
 	  --output $(SPECIES_OUT)/gff/labels.gff \
 	  --chromosome-id $(CHR_ID) \
 	  --species-id $(call capitalize,$*)
-	python scripts/gff.py filter_to_strand \
-	  --input $(SPECIES_OUT)/gff/labels.gff \
-	  --output $(SPECIES_OUT)/gff/labels__strand_both.gff \
-	  --strand both
-	python scripts/gff.py filter_to_representative_transcripts \
-	  --input $(SPECIES_OUT)/gff/labels__strand_both.gff \
-	  --output $(SPECIES_OUT)/gff/labels__strand_both__canonical_only.gff \
-	  --mode annotated_or_longest
 	python scripts/gff.py remove_exon_utrs \
-	  --input $(SPECIES_OUT)/gff/labels__strand_both__canonical_only.gff \
-	  --output $(SPECIES_OUT)/gff/labels__strand_both__canonical_only__no_utrs.gff
+	  --input $(SPECIES_OUT)/gff/labels.gff \
+	  --output $(SPECIES_OUT)/gff/labels__no_utrs.gff
 	# ------------------------------------------------------------
 	# Run comparisons
 	# ------------------------------------------------------------
 	python scripts/gff.py compare \
-	  --reference $(SPECIES_OUT)/gff/labels__strand_both__canonical_only.gff \
+	  --reference $(SPECIES_OUT)/gff/labels.gff \
 	  --input $(SPECIES_OUT)/gff/predictions__strand_both__minlen_03__valid_only.gff \
 	  --output $(SPECIES_OUT)/results/valid_only__with_utrs \
 	  --gffcompare-path $(WORK)/repos/misc/gffcompare/gffcompare
 	python scripts/gff.py compare \
-	  --reference $(SPECIES_OUT)/gff/labels__strand_both__canonical_only__no_utrs.gff \
+	  --reference $(SPECIES_OUT)/gff/labels__no_utrs.gff \
 	  --input $(SPECIES_OUT)/gff/predictions__strand_both__minlen_03__valid_only__no_utrs.gff \
 	  --output $(SPECIES_OUT)/results/valid_only__no_utrs \
 	  --gffcompare-path $(WORK)/repos/misc/gffcompare/gffcompare
 	python scripts/gff.py compare \
-	  --reference $(SPECIES_OUT)/gff/labels__strand_both__canonical_only.gff \
-	  --input $(SPECIES_OUT)/gff/predictions__strand_both__minlen_30.gff \
+	  --reference $(SPECIES_OUT)/gff/labels.gff \
+	  --input $(SPECIES_OUT)/gff/predictions__strand_both__minlen_03.gff \
 	  --output $(SPECIES_OUT)/results/minlen_only__with_utrs \
 	  --gffcompare-path $(WORK)/repos/misc/gffcompare/gffcompare
 	python scripts/gff.py compare \
-	  --reference $(SPECIES_OUT)/gff/labels__strand_both__canonical_only__no_utrs.gff \
-	  --input $(SPECIES_OUT)/gff/predictions__strand_both__minlen_30__no_utrs.gff \
+	  --reference $(SPECIES_OUT)/gff/labels__no_utrs.gff \
+	  --input $(SPECIES_OUT)/gff/predictions__strand_both__minlen_03__no_utrs.gff \
 	  --output $(SPECIES_OUT)/results/minlen_only__no_utrs \
 	  --gffcompare-path $(WORK)/repos/misc/gffcompare/gffcompare
 	# ------------------------------------------------------------
@@ -161,10 +154,10 @@ process-results-%: predict-%
 	# Merge labels and predictions
 	# ------------------------------------------------------------
 	python scripts/gff.py set_source --source labels \
-	  --input $(SPECIES_OUT)/gff/labels__strand_both__canonical_only.gff \
+	  --input $(SPECIES_OUT)/gff/labels.gff \
 	  --output /tmp/labels.gff
 	python scripts/gff.py set_source --source predictions \
-	  --input $(SPECIES_OUT)/gff/predictions__strand_both__minlen_30.gff \
+	  --input $(SPECIES_OUT)/gff/predictions__strand_both__minlen_03.gff \
 	  --output /tmp/predictions.gff
 	python scripts/gff.py merge \
 	  --input /tmp/labels.gff /tmp/predictions.gff \

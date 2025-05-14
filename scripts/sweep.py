@@ -64,24 +64,28 @@ def get_sweep_args(args: list[str]) -> tuple[Namespace, int, list[str]]:
     
     return sweep_args, config_idx, remaining_args
 
-def main() -> None:
-    # Parse sweep-specific and training arguments
-    sweep_args, config_idx, train_args = get_sweep_args(sys.argv[1:])
-    
-    # Get all configurations and select the requested one
-    configs = get_configurations()
-    logger.info(f"Running configuration {config_idx} of {len(configs)}")
-    logger.info(f"Configurations:\n{configs}")
-    config = configs[config_idx]
-    
-    # Create run name and output directory
-    run_name = "__".join([
+def get_run_name(sweep_args, config_idx, config):
+    """Generate a run name from configuration parameters"""
+    return "__".join([
         sweep_args.run_name,
         f"cfg_{config_idx:03d}",
         f"arch_{config['architecture']}",
         f"frzn_{config['base_encoder_frozen']}",
         f"lr_{config['learning_rate']:.0e}"
     ])
+
+def cmd_run(args):
+    """Run a single configuration from the sweep"""
+    # Parse sweep-specific and training arguments
+    sweep_args, config_idx, train_args = get_sweep_args(args)
+    
+    # Get all configurations and select the requested one
+    configs = get_configurations()
+    logger.info(f"Running configuration {config_idx} of {len(configs)}")
+    config = configs[config_idx]
+    
+    # Create run name and output directory
+    run_name = get_run_name(sweep_args, config_idx, config)
     output_dir = os.path.join(sweep_args.output_dir, run_name)
     os.makedirs(output_dir, exist_ok=True)
     
@@ -97,6 +101,55 @@ def main() -> None:
     logger.info(f"Starting run {config_idx} with config: {config}")
     train(Namespace(**args_dict))
     logger.info(f"Completed run {config_idx}")
+
+def cmd_show_configs(args):
+    """Display all configurations and their run names"""
+    configs = get_configurations()
+    
+    # Use the provided run_name as prefix
+    sweep_args = Namespace(run_name=args.run_name)
+    
+    print(f"Total configurations: {len(configs)}")
+    print("=" * 80)
+    
+    for idx, config in enumerate(configs):
+        run_name = get_run_name(sweep_args, idx, config)
+        print(f"Config {idx:3d} | {run_name}")
+        for key, value in config.items():
+            print(f"  {key:20s}: {value}")
+        print("-" * 80)
+
+def setup_parser() -> ArgumentParser:
+    parser = ArgumentParser(description="Hyperparameter sweep CLI")
+    subparsers = parser.add_subparsers(dest="command", help="Command to execute")
+    
+    # Run command
+    run_parser = subparsers.add_parser("run", help="Run a single configuration")
+    run_parser.add_argument('--configuration-index', type=int,
+                           help='Index of the configuration to run (0 to num_configs-1). '
+                                'Defaults to SLURM_ARRAY_TASK_ID if not provided.')
+    run_parser.add_argument('--output-dir', type=str, default='sweep_results',
+                           help='Base output directory for all sweep results')
+    run_parser.add_argument('--run-name', type=str, default='sweep_01',
+                           help='Prefix for the run name (default: sweep_01)')
+    
+    # Show configs command with run-name argument
+    show_parser = subparsers.add_parser("show_configs", help="Display all configurations")
+    show_parser.add_argument('--run-name', type=str, default='sweep_01',
+                            help='Prefix for the run name (default: sweep_01)')
+    
+    return parser
+
+def main() -> None:
+    parser = setup_parser()
+    args, unknown = parser.parse_known_args()
+    
+    if args.command == "run":
+        cmd_run(sys.argv[2:])  # Skip 'sweep.py run'
+    elif args.command == "show_configs":
+        cmd_show_configs(args)
+    else:
+        parser.print_help()
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')

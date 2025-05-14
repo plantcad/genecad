@@ -4,6 +4,7 @@ import numpy.typing as npt
 from numba import njit
 from typing import Callable, Iterator, Literal
 import logging
+import itertools
 
 N_BILUO_TAGS = 4
 
@@ -131,33 +132,11 @@ def _validate_labels(labels: np.ndarray) -> np.ndarray:
     if np.any(labels < -1):
         raise ValueError(f"labels must be in the set {{-1, 0, 1, 2, 3, ...}}, got {set(labels)=}")
     return labels
-    
-def convert_to_entity_labels(labels: np.ndarray) -> np.ndarray:
-    """Convert BILUO class labels to entity labels
-
-    This is the inverse of `convert_to_biluo_labels`.
-    
-    Parameters
-    ----------
-        labels: 1D array of integer class indices from `convert_to_biluo_labels`
-
-    Returns
-    -------
-        entity_labels: 1D array of integers representing entity labels
-    """
-    _validate_labels(labels)
-    entity_labels = np.where(
-        np.isin(labels, [-1, 0]),
-        labels,
-        ((labels - 1) // N_BILUO_TAGS) + 1
-    )
-    return entity_labels
 
 
 # -------------------------------------------------------------------------------------------------
 # BILUO utilities
 # -------------------------------------------------------------------------------------------------
-
 
 def convert_biluo_index_to_class_name(label: int, entity_names: list[str], sentinel_names: tuple[str, str] | None = None) -> str:
     sentinel_names = _default_sentinels(sentinel_names)
@@ -275,6 +254,26 @@ def _convert_to_biluo(labels):
     
     return biluo_indices
 
+def convert_to_entity_labels(labels: np.ndarray) -> np.ndarray:
+    """Convert BILUO class labels to entity labels
+
+    This is the inverse of `convert_to_biluo_labels`.
+    
+    Parameters
+    ----------
+        labels: 1D array of integer class indices from `convert_to_biluo_labels`
+
+    Returns
+    -------
+        entity_labels: 1D array of integers representing entity labels
+    """
+    _validate_labels(labels)
+    entity_labels = np.where(
+        np.isin(labels, [-1, 0]),
+        labels,
+        ((labels - 1) // N_BILUO_TAGS) + 1
+    )
+    return entity_labels
 
 def convert_entity_labels_to_intervals(
     labels: np.ndarray, 
@@ -662,3 +661,201 @@ def create_prediction_windows(
     
     # Stack into a (n, 4) array
     return np.column_stack((starts, stops, v_starts, v_stops))
+
+
+# -------------------------------------------------------------------------------------------------
+# Decoding utilities
+# -------------------------------------------------------------------------------------------------
+
+def _validate_decode_inputs(
+    emission_probs: np.ndarray,
+    transition_matrix: np.ndarray,
+    initial_probs: np.ndarray | None
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Validate inputs for decoding algorithms and compute initial probabilities if needed.
+    
+    Parameters
+    ----------
+    emission_probs : np.ndarray
+        Matrix of shape (T, N) where T is sequence length and N is number of states.
+    transition_matrix : np.ndarray
+        Matrix of shape (N, N) where element (i, j) represents P(state j | state i).
+    initial_probs : np.ndarray | None
+        Vector of length N representing initial state probabilities.
+        
+    Returns
+    -------
+    tuple[np.ndarray, np.ndarray, np.ndarray]
+        Validated and potentially modified (emission_probs, transition_matrix, initial_probs)
+    """
+    # Ensure arrays are float type
+    emission_probs = np.asarray(emission_probs, dtype=float)
+    transition_matrix = np.asarray(transition_matrix, dtype=float)
+    
+    _, N = emission_probs.shape
+    
+    # Validate inputs
+    if transition_matrix.shape != (N, N):
+        raise ValueError(f"Transition matrix shape {transition_matrix.shape} doesn't match emission probabilities states {N}")
+    
+    if not np.allclose(transition_matrix.sum(axis=1), 1.0):
+        raise ValueError("Transition matrix rows must sum to 1")
+    
+    if initial_probs is None:
+        # Use stationary distribution of the transition matrix
+        # (eigenvector with eigenvalue 1)
+        eigenvals, eigenvecs = np.linalg.eig(transition_matrix.T)
+        # Find closest eigenvalue to 1
+        idx = np.argmin(np.abs(eigenvals - 1.0))
+        # Extract the corresponding eigenvector and normalize
+        initial_probs = np.real(eigenvecs[:, idx])
+        initial_probs = initial_probs / initial_probs.sum()
+    else:
+        initial_probs = np.asarray(initial_probs, dtype=float)
+        if initial_probs.shape != (N,):
+            raise ValueError(f"Initial probabilities shape {initial_probs.shape} doesn't match number of states {N}")
+        elif not np.isclose(initial_probs.sum(), 1.0):
+            raise ValueError("Initial probabilities must sum to 1")
+            
+    return emission_probs, transition_matrix, initial_probs
+
+@njit
+def _viterbi_decode(
+    log_emission: np.ndarray,
+    log_transition: np.ndarray,
+    log_initial: np.ndarray
+) -> np.ndarray:
+    """Numba-accelerated implementation of the Viterbi algorithm.
+    
+    Parameters
+    ----------
+    log_emission : np.ndarray
+        Log emission probabilities of shape (T, N)
+    log_transition : np.ndarray
+        Log transition probabilities of shape (N, N)
+    log_initial : np.ndarray
+        Log initial state probabilities of shape (N,)
+        
+    Returns
+    -------
+    np.ndarray
+        Vector of length T with most likely state indices at each position
+    """
+    T, N = log_emission.shape
+    
+    # Initialize Viterbi tables
+    viterbi_prob = np.zeros((T, N))
+    backpointer = np.zeros((T, N), dtype=np.int64)
+    
+    # Base case
+    viterbi_prob[0] = log_initial + log_emission[0]
+    
+    # Recursive case
+    for t in range(1, T):
+        for j in range(N):
+            # Calculate probabilities for each possible previous state
+            probs = viterbi_prob[t-1] + log_transition[:, j]
+            # Find most likely previous state
+            backpointer[t, j] = np.argmax(probs)
+            # Store probability of most likely path to this state
+            viterbi_prob[t, j] = probs[backpointer[t, j]] + log_emission[t, j]
+    
+    # Backtrack to find optimal path
+    path = np.zeros(T, dtype=np.int64)
+    path[T-1] = np.argmax(viterbi_prob[T-1])
+    
+    for t in range(T-2, -1, -1):
+        path[t] = backpointer[t+1, path[t+1]]
+    
+    return path
+
+def viterbi_decode(
+    emission_probs: npt.ArrayLike, 
+    transition_matrix: npt.ArrayLike,
+    initial_probs: npt.ArrayLike | None = None
+) -> npt.NDArray[np.int64]:
+    """Find most likely sequence of states using the Viterbi algorithm.
+    
+    Parameters
+    ----------
+    emission_probs : npt.ArrayLike
+        Matrix of shape (T, N) where T is sequence length and N is number of states.
+        Each element (t, n) represents P(observation at t | state n).
+    transition_matrix : npt.ArrayLike
+        Matrix of shape (N, N) where element (i, j) represents P(state j | state i).
+        Rows must sum to 1.
+    initial_probs : npt.ArrayLike, optional
+        Vector of length N representing initial state probabilities.
+        If None, the stationary distribution of the transition matrix is used.
+    
+    Returns
+    -------
+    npt.NDArray[np.int64]
+        Vector of length T with most likely state indices at each position
+    """
+    # Validate and prepare inputs
+    emission_probs, transition_matrix, initial_probs = _validate_decode_inputs(
+        emission_probs, transition_matrix, initial_probs
+    )
+    
+    # Work in log space to avoid numerical underflow
+    log_emission = np.log(emission_probs + np.finfo(float).eps)
+    log_transition = np.log(transition_matrix + np.finfo(float).eps)
+    log_initial = np.log(initial_probs + np.finfo(float).eps)
+    
+    # Run Viterbi algorithm including backtracking
+    return _viterbi_decode(log_emission, log_transition, log_initial)
+
+def brute_force_decode(
+    emission_probs: npt.ArrayLike, 
+    transition_matrix: npt.ArrayLike,
+    initial_probs: npt.ArrayLike | None = None
+) -> npt.NDArray[np.int64]:
+    """Find most likely sequence of states using brute force computation.
+    
+    This function examines all possible state sequences to find the most likely path.
+    Only suitable for small examples and unit testing due to exponential complexity.
+    
+    Parameters
+    ----------
+    emission_probs : npt.ArrayLike
+        Matrix of shape (T, N) where T is sequence length and N is number of states.
+        Each element (t, n) represents P(observation at t | state n).
+    transition_matrix : npt.ArrayLike
+        Matrix of shape (N, N) where element (i, j) represents P(state j | state i).
+        Rows must sum to 1.
+    initial_probs : npt.ArrayLike, optional
+        Vector of length N representing initial state probabilities.
+        If None, the stationary distribution of the transition matrix is used.
+    
+    Returns
+    -------
+    npt.NDArray[np.int64]
+        Vector of length T with most likely state indices at each position
+    """
+    # Validate and prepare inputs
+    emission_probs, transition_matrix, initial_probs = _validate_decode_inputs(
+        emission_probs, transition_matrix, initial_probs
+    )
+    
+    T, N = emission_probs.shape
+    
+    # Calculate probability of each possible path with brute force
+    paths = list(itertools.product(range(N), repeat=T))
+    
+    path_probs = []
+    for path in paths:
+        path_array = np.array(path)
+        
+        # Calculate probability of this path
+        prob = initial_probs[path_array[0]] * emission_probs[0, path_array[0]]
+        
+        for t in range(1, T):
+            prob *= transition_matrix[path_array[t-1], path_array[t]] * emission_probs[t, path_array[t]]
+        
+        path_probs.append((path_array, prob))
+    
+    # Find the path with highest probability
+    best_path, _ = max(path_probs, key=lambda x: x[1])
+    
+    return np.array(best_path, dtype=np.int64)
