@@ -6,7 +6,7 @@ from typing import Literal, Any
 from numpy import typing as npt
 from pydantic import BaseModel, Field, field_validator, ValidationInfo
 from src.config import WINDOW_SIZE
-from src.sequence import convert_entity_labels_to_intervals, create_sequence_windows, viterbi_decode
+from src.sequence import convert_entity_labels_to_intervals, create_sequence_windows, replace_interval_classes, viterbi_decode
 import torch
 import torch.nn.functional as F
 import numpy as np
@@ -14,10 +14,10 @@ import xarray as xr
 from argparse import Namespace as Args
 from transformers import AutoModel, AutoConfig, AutoTokenizer
 from src.dataset import open_datatree, set_dimension_chunks
-from src.modeling import TOKEN_TRANSITION_PROBS, GeneClassifier, GeneClassifierConfig, create_crf, token_transition_probs
+from src.prediction import merge_prediction_datasets
+from src.modeling import GeneClassifier, GeneClassifierConfig, token_transition_probs
 import pandas as pd
 from src.dist import process_group
-import glob
 
 logger = logging.getLogger(__name__)
 
@@ -354,8 +354,38 @@ def _detect_intervals(
             raise ValueError(f"Transition probability classes must match token entity names; expected: {config.token_entity_names_with_background()}, got: {transition_probs.columns.tolist()}")
         emissions = F.softmax(torch.from_numpy(logits), dim=-1).numpy()
         assert emissions.min() >= 0 and emissions.max() <= 1
-        # Takes ~90 seconds for 308452471 tokens on Grace CPU
-        labels = viterbi_decode(emission_probs=emissions, transition_matrix=transition_probs.values)
+        assert transition_probs.index.tolist() == transition_probs.columns.tolist()
+        classes = transition_probs.columns.tolist()
+
+        # Decoding takes ~90 seconds for 308452471 tokens on Grace CPU
+        alpha = args.viterbi_alpha
+        logger.info(f"Running viterbi decoding ({alpha=})")
+        labels = viterbi_decode(
+            emission_probs=emissions, 
+            transition_matrix=transition_probs.values,
+            alpha=alpha
+        )
+        
+        # Only run replace_interval_classes if max_length is provided;
+        # This is a fragile, experimental heuristic that is not intended
+        # to be used for long.  It is useful for probing at the impact of 
+        # errors in predictions like those mentioned in:
+        # https://github.com/Open-Athena/oa-cornell-dna/issues/20#issuecomment-2889327465
+        if args.viterbi_remap_max_length is not None:
+            max_length = args.viterbi_remap_max_length
+            logger.info(f"Remapping 'intergenic' classes to 'intron' in transcript regions ({max_length=})")
+            labels = replace_interval_classes(
+                labels=labels,
+                start_class=classes.index("five_prime_utr"), # 2
+                end_class=classes.index("three_prime_utr"), # 4
+                middle_class=classes.index("cds"), # 3
+                target_class=classes.index("intergenic"), # 0
+                destination_class=classes.index("intron"), # 1
+                max_length=max_length
+            )
+        else:
+            logger.info("Skipping intergenic to intron remapping (viterbi-remap-max-length not provided)")
+            
         assert labels.ndim == 1
         assert len(labels) == len(logits)
         return labels
@@ -380,32 +410,16 @@ def _detect_intervals(
             class_groups=config.interval_entity_classes
         )
         region_intervals.append(intervals.assign(strand=strand, decoding="viterbi"))
-        #### DELETE
-        logger.info(f"Saving viterbi comparison for {strand!r} strand")
-        # Get parent dir of args.output and save to "viterbi_comparison_{strand}.zarr"
-        temp_dir = os.path.join(os.path.dirname(args.output), "viterbi_comparison")
-        os.makedirs(temp_dir, exist_ok=True)
-        temp_path = os.path.join(temp_dir, f"{strand}.zarr")
-        if os.path.exists(temp_path):
-            import shutil
-            shutil.rmtree(temp_path)
-        temp_ds = xr.Dataset(
-            data_vars={
-                "direct_labels": (["sequence"], labels), 
-                "viterbi_labels": (["sequence"], decoded_labels),
-            },
-            coords={"sequence": predictions.sequence.values},
-            attrs={"strand": strand},
-        )
-        logger.info(f"Viterbi comparison dataset:\n{temp_ds}")
-        temp_ds.to_zarr(
-            temp_path,
-            zarr_format=2,
-            consolidated=True,
-        )
-        logger.info(f"Saved viterbi comparison to {temp_path}")
-        #### /DELETE
         
+        # Save comparison data if requested
+        if args.save_viterbi_comparison:
+            _save_viterbi_comparison(
+                strand=strand,
+                labels=labels,
+                decoded_labels=decoded_labels,
+                output_path=args.output,
+                sequence_values=predictions.sequence.values
+            )
         
     region_intervals = pd.concat(region_intervals, ignore_index=True, axis=0)
     region_name_map = {
@@ -419,7 +433,7 @@ def _detect_intervals(
         .rename_axis("interval", axis="index")
     )
     logger.info(f"Region intervals detected:\n{region_intervals}")
-    logger.info(f"Region interval info:\n")
+    logger.info("Region interval info:\n")
     region_intervals.info()
     region_intervals = (
         region_intervals
@@ -428,6 +442,7 @@ def _detect_intervals(
     )
     return region_intervals
 
+
 def detect_intervals(args: Args):
     """
     Detect intervals from per-token classifier logits.
@@ -435,47 +450,13 @@ def detect_intervals(args: Args):
     Parameters
     ----------
     args : argparse.Namespace
-        Command-line arguments, where `args.input` is the directory
+        Command-line arguments, where `args.input_dir` is the directory
         containing `predictions.*.zarr` files.
     """
     logger.info(f"Detecting intervals from rank files in {args.input_dir} and saving to {args.output}")
 
-    # Find all prediction files generated by different ranks
-    rank_prediction_paths = sorted(
-        glob.glob(os.path.join(args.input_dir, "predictions.*.zarr")),
-        key=lambda x: int(x.split(".")[-2]),
-    )
-    if not rank_prediction_paths:
-        raise FileNotFoundError(f"No prediction files found matching 'predictions.*.zarr' in {args.input_dir}")
-    logger.info(f"Found {len(rank_prediction_paths)} rank prediction files: {rank_prediction_paths}")
-
-    strand_datasets = []
-    for strand in ["positive", "negative"]:
-        logger.info(f"Processing strand: {strand}")
-        rank_strand_data = []
-        for rank_path in rank_prediction_paths:
-            logger.debug(f"Loading strand '{strand}' from {rank_path}")
-            raw_predictions = open_datatree(
-                rank_path, 
-                consolidated=True,
-                # TODO: Add "feature_logits" back in if decoding fails to help
-                drop_variables=["token_predictions", "token_logits"],
-            )
-            rank_strand_data.append(raw_predictions[f"/{strand}"].ds)
-        logger.info(f"Concatenating {len(rank_strand_data)} rank datasets for {strand!r} strand along the sequence dimension.")
-        dataset = xr.concat(rank_strand_data, dim="sequence")
-        dataset = dataset.sortby("sequence")
-        assert np.array_equal(
-            np.sort(dataset.sequence.values), 
-            np.arange(dataset.sizes["sequence"])
-        )
-        strand_datasets.append(dataset.expand_dims(strand=[strand]))
-    logger.info(f"Concatenating {len(strand_datasets)} datasets along the strand dimension.")
-    sequence_predictions = xr.concat(
-        strand_datasets, dim="strand", 
-        join="exact", combine_attrs="drop_conflicts"
-    )
-    logger.info(f"Concatenated sequence predictions dataset:\n{sequence_predictions}")
+    # Merge predictions from all ranks
+    sequence_predictions = merge_prediction_datasets(args.input_dir)
 
     logger.info("Detecting intervals")
     interval_predictions = _detect_intervals(
@@ -488,7 +469,7 @@ def detect_intervals(args: Args):
         **sequence_predictions.attrs
     )
 
-    logger.info(f"Merging sequence and interval predictions")
+    logger.info("Merging sequence and interval predictions")
     result = xr.DataTree.from_dict({
         "/sequences": sequence_predictions,
         "/intervals": interval_predictions,
@@ -501,6 +482,48 @@ def detect_intervals(args: Args):
     
     logger.info("Done")
 
+def _save_viterbi_comparison(strand: str, labels: npt.ArrayLike, decoded_labels: npt.ArrayLike, 
+                            output_path: str, sequence_values: npt.ArrayLike) -> None:
+    """
+    Save comparison data between direct decoding and viterbi decoding.
+    
+    Parameters
+    ----------
+    strand : str
+        The strand being processed ("positive" or "negative")
+    labels : npt.ArrayLike
+        The directly decoded labels
+    decoded_labels : npt.ArrayLike
+        The viterbi decoded labels
+    output_path : str
+        The base output path for the comparison data
+    sequence_values : npt.ArrayLike
+        The sequence coordinate values
+    """
+    logger.info(f"Saving viterbi comparison data for {strand!r} strand")
+    # Get parent dir of output_path and save to "viterbi_comparison"
+    temp_dir = os.path.join(os.path.dirname(output_path), "viterbi_comparison")
+    os.makedirs(temp_dir, exist_ok=True)
+    temp_path = os.path.join(temp_dir, f"{strand}.zarr")
+    if os.path.exists(temp_path):
+        import shutil
+        shutil.rmtree(temp_path)
+    temp_ds = xr.Dataset(
+        data_vars={
+            "direct_labels": (["sequence"], labels), 
+            "viterbi_labels": (["sequence"], decoded_labels),
+        },
+        coords={"sequence": sequence_values},
+        attrs={"strand": strand},
+    )
+    logger.info(f"Viterbi comparison dataset:\n{temp_ds}")
+    temp_ds.to_zarr(
+        temp_path,
+        zarr_format=2,
+        consolidated=True,
+    )
+    logger.info(f"Saved viterbi comparison data to {temp_path}")
+    
 # -------------------------------------------------------------------------------------------------
 # GFF Exports
 # -------------------------------------------------------------------------------------------------
@@ -707,7 +730,7 @@ def export_gff(args: Args):
     chrom_id = intervals_dataset.attrs["chromosome_id"]
     logger.info(f"Loaded intervals for chromosome: {chrom_id}")
 
-    logger.info(f"Converting interval predictions to DataFrame")
+    logger.info("Converting interval predictions to DataFrame")
     intervals_table = intervals_dataset.to_dataframe().reset_index()
     
     # Add decoding column if not present (for backward compatibility)
@@ -756,6 +779,9 @@ def main():
     detect_parser.add_argument("--input-dir", required=True, help="Path to input zarr dataset from generate_logits")
     detect_parser.add_argument("--output", required=True, help="Path to output zarr dataset for intervals")
     detect_parser.add_argument("--window-size", type=int, default=WINDOW_SIZE, help="Window size for sequence processing")
+    detect_parser.add_argument("--save-viterbi-comparison", action="store_true", default=False, help="Save comparison data between direct and viterbi decoding")
+    detect_parser.add_argument("--viterbi-alpha", type=float, default=None, help="Alpha parameter for viterbi decoding (default: None)")
+    detect_parser.add_argument("--viterbi-remap-max-length", type=int, default=None, help="Max length for intergenic-to-intron remapping (default: None, skips remapping)")
     
     # Export GFF command
     gff_parser = subparsers.add_parser("export_gff", help="Export predictions to GFF format")

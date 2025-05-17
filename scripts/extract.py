@@ -9,10 +9,10 @@ import numpy as np
 from Bio import SeqIO
 from Bio.SeqFeature import SeqFeature
 from src.gff_parser import parse as parse_gff
-from src.naming import normalize_species_identifier
+from src.gff_pandas import read_gff3
 from src.dataset import DEFAULT_SEQUENCE_CHUNK_SIZE, open_datatree, set_dimension_chunks
 from src.schema import FeatureType, SequenceFeature, PositionInfo
-from src.config import SPECIES_CONFIGS
+from src.config import SPECIES_CONFIGS, SpeciesConfig, get_species_configs
 
 
 # Set up logging
@@ -58,13 +58,15 @@ def is_canonical_transcript(feature: SeqFeature) -> bool:
 # Extract GFF features
 # -------------------------------------------------------------------------------------------------
 
-def extract_gff_features(input_paths: list[str], output_path: str) -> None:
+def extract_gff_features(input_dir: str, species_ids: list[str], output_path: str) -> None:
     """Extract data from GFF file(s) into a structured DataFrame.
     
     Parameters
     ----------
-    input_paths : list[str]
-        Path(s) to input GFF file(s)
+    input_dir : str
+        Directory containing input GFF files
+    species_ids : list[str]
+        List of species IDs to process
     output_path : str
         Path to output parquet file
     """
@@ -73,11 +75,15 @@ def extract_gff_features(input_paths: list[str], output_path: str) -> None:
     if output_dir and not os.path.exists(output_dir):
         os.makedirs(output_dir)
     
+    # Get configs for all specified species
+    species_configs = get_species_configs(species_ids)
+    
     # Extract data from all input files and concatenate
     dfs = []
-    for input_path in input_paths:
-        logger.info(f"Processing file: {input_path}")
-        df = _extract_gff_features(input_path)
+    for config in species_configs:
+        input_path = os.path.join(input_dir, config.gff.filename)
+        logger.info(f"Processing file for {config.name} ({config.id}): {input_path}")
+        df = _extract_gff_features(input_path, config)
         dfs.append(df)
         logger.info(f"Extracted {df.shape[0]} rows from {input_path}")
     
@@ -86,7 +92,8 @@ def extract_gff_features(input_paths: list[str], output_path: str) -> None:
         df = pd.concat(dfs, ignore_index=True, axis=0)
         del dfs
         logger.info(f"Saving combined DataFrame with {df.shape[0]} rows to {output_path}; info:")
-        df.info()
+        with pd.option_context('display.max_info_columns', None, 'display.max_info_rows', None):
+            df.info()
         df.to_parquet(output_path, index=False)
         del df
         logger.info("Validating extracted features")
@@ -95,27 +102,42 @@ def extract_gff_features(input_paths: list[str], output_path: str) -> None:
     else:
         logger.warning("No data was extracted from the input files")
 
-def _extract_gff_features(path: str) -> pd.DataFrame:
+def _extract_gff_features(path: str, species_config: SpeciesConfig) -> pd.DataFrame:
     """Extract data from a single GFF file into a structured DataFrame."""
     logger.info(f"Parsing GFF file: {path}")
     
+    # Determine file opening method based on extension
+    open_func = gzip.open if path.endswith(".gz") else open
+    mode = "rt" if path.endswith(".gz") else "r"
+    
     # Parse GFF file
-    with open(path) as in_handle:
+    with open_func(path, mode) as in_handle:
         records = list(parse_gff(in_handle))
     
-    logger.info(f"Found {len(records)} chromosome records")
+    logger.info(f"[species={species_config.id}] Found {len(records)} chromosome records")
     features_data: list[SequenceFeature] = []
     filename = os.path.basename(path)
+    
+    # Get chromosome mapping from the species config
+    chrom_map = species_config.chromosome_map
+    logger.info(f"[species={species_config.id}] Valid chromosomes: {list(chrom_map.keys())}")
 
     # Process each chromosome
     for chrom in records:
-        chrom_id = chrom.id
+        raw_id = chrom.id
+        
+        # Skip chromosomes not in the species config
+        if raw_id not in chrom_map:
+            logger.debug(f"[species={species_config.id}] Skipping unmapped chromosome record: {raw_id}")
+            continue
+            
+        chrom_id = chrom_map[raw_id]
         chrom_name = chrom.name
         chrom_length = len(chrom.seq)
-        species_name = " ".join(chrom.annotations["species"][0])
-        species_id = normalize_species_identifier(species_name)
+        species_id = species_config.id
+        species_name = species_config.name
         
-        logger.info(f"Processing {species_name} chromosome: {chrom_id} with {len(chrom.features)} features")
+        logger.info(f"[species={species_config.id}] Processing chromosome: {chrom_id} (from {raw_id}) with {len(chrom.features)} features")
         
         # Process each gene
         for gene in chrom.features:
@@ -177,7 +199,7 @@ def _extract_gff_features(path: str) -> pd.DataFrame:
                     )
                     features_data.append(feature_data)
     
-    logger.info(f"Total features extracted: {len(features_data)}")
+    logger.info(f"[species={species_config.id}] Total features extracted: {len(features_data)}")
     
     # Convert list of Pydantic models to DataFrame
     df = pd.DataFrame([feature.model_dump() for feature in features_data])
@@ -235,6 +257,7 @@ def validate_gff_features(df: pd.DataFrame) -> pd.DataFrame:
     logger.info("Checking for ids with multiple strand, start, or stop values")
     for prefix in ["gene", "transcript", "feature"]:
         for col in ["strand", "start", "stop"]:
+            logger.info(f"    Checking {prefix}s with differing {col!r} values")
             inconsistencies = (
                 df.groupby(['species_id', 'chromosome_id', f'{prefix}_id'])[f'{prefix}_{col}'].unique()
                 .pipe(lambda x: x[x.apply(len) > 1])
@@ -296,48 +319,17 @@ def validate_gff_features(df: pd.DataFrame) -> pd.DataFrame:
 # - Generated by: `from Bio.Data import IUPACData; IUPACData.ambiguous_dna_values`
 FASTA_OOV_TOKENS = "MRWSYKVHDBXN"
 
-def parse_chromosome_map(map_str: str) -> dict[str, str]:
-    """Parse and validate a chromosome mapping string.
-    
-    Parameters
-    ----------
-    map_str : str
-        String in format 'Key1=Value1,Key2=Value2,...'
-        
-    Returns
-    -------
-    dict[str, str]
-        Mapping from raw chromosome names to standardized names
-    """
-    # Parse the mapping string
-    try:
-        pairs = [pair.strip().split('=') for pair in map_str.split(',')]
-        chrom_map = {k.strip(): v.strip() for k, v in pairs}
-    except Exception as e:
-        raise ValueError(f"Invalid chromosome map format. Expected 'Key1=Value1,Key2=Value2,...' but got: {map_str}") from e
-    
-    # Check for empty mapping
-    if not chrom_map:
-        raise ValueError("Chromosome map cannot be empty")
-    
-    return chrom_map
-
-def extract_fasta_sequences(input_paths: list[str], species_ids: list[str], output_path: str, chromosome_map: str | None = None, chunk_size: int = DEFAULT_SEQUENCE_CHUNK_SIZE, tokenizer_path: str | None = None) -> None:
+def extract_fasta_sequences(input_dir: str, species_ids: list[str], output_path: str, chunk_size: int = DEFAULT_SEQUENCE_CHUNK_SIZE, tokenizer_path: str | None = None) -> None:
     """Extract sequences from FASTA file(s) into a structured format.
     
     Parameters
     ----------
-    input_paths : list[str]
-        Path(s) to input FASTA file(s)
+    input_dir : str
+        Directory containing input FASTA files
     species_ids : list[str]
-        List of species IDs corresponding to input files; must have same
-        order and length as input_paths
+        List of species IDs to process
     output_path : str
         Path to output file
-    chromosome_map : str, optional
-        Case-sensitive mapping from raw chromosome names to standardized names in format
-        'Key1=Value1,Key2=Value2,...'. If provided, this mapping will be used for all species.
-        If not provided, species-specific mappings from config will be used.
     chunk_size : int, optional
         Size of chunks to write to Zarr
     tokenizer_path : str, optional
@@ -348,26 +340,10 @@ def extract_fasta_sequences(input_paths: list[str], species_ids: list[str], outp
     if output_dir and not os.path.exists(output_dir):
         os.makedirs(output_dir)
     
-    # Check that number of species IDs matches number of input paths
-    if len(species_ids) != len(input_paths):
-        raise ValueError(f"Number of species IDs ({len(species_ids)}) must match number of input paths ({len(input_paths)})")
+    # Get configs for all specified species
+    species_configs = get_species_configs(species_ids)
     
-    # Get chromosome mappings - either shared or species-specific
-    species_chrom_maps = {}
-    if chromosome_map is not None:
-        # Use the same mapping for all species
-        shared_map = parse_chromosome_map(chromosome_map)
-        species_chrom_maps = {species_id: shared_map for species_id in species_ids}
-        logger.info(f"Using shared chromosome mapping for all species: {shared_map}")
-    else:
-        # Get species-specific mappings from config
-        for species_id in species_ids:
-            if species_id not in SPECIES_CONFIGS:
-                raise ValueError(f"No configuration found for species {species_id}. Available species: {list(SPECIES_CONFIGS.keys())}")
-            species_chrom_maps[species_id] = SPECIES_CONFIGS[species_id].chromosome_map
-            logger.info(f"Using chromosome mapping for {species_id}: {species_chrom_maps[species_id]}")
-    
-    logger.info(f"Extracting sequences from {len(input_paths)} FASTA file(s) (species: {species_ids})")
+    logger.info(f"Extracting sequences for {len(species_configs)} species: {species_ids}")
     
     # Load tokenizer if path provided
     tokenizer = None
@@ -382,100 +358,103 @@ def extract_fasta_sequences(input_paths: list[str], species_ids: list[str], outp
         token_map = {k.encode("utf-8"): v for k, v in token_map.items()}
         tokenizer = np.vectorize(lambda x: token_map.get(x, -1))
     
-    # Dictionary to collect sequences by species/chromosome
-    sequence_records = {}
-    
-    # Process each FASTA file with its corresponding species_id
-    for fasta_file, species_id in zip(input_paths, species_ids):
-        # Get the chromosome map for this species
-        chrom_map = species_chrom_maps[species_id]
+    # Process each species config
+    for config in species_configs:
+        species_id = config.id
+        fasta_file = os.path.join(input_dir, config.fasta.filename)
+        chrom_map = config.chromosome_map
+        
+        logger.info(f"[species={species_id}] Processing FASTA file: {fasta_file}")
         
         # Determine file opening method based on extension
         open_func = gzip.open if fasta_file.endswith(".gz") else open
         mode = "rt" if fasta_file.endswith(".gz") else "r"
         
+        # Dictionary to collect sequences by species/chromosome
+        sequence_records = {}
+
         # Parse FASTA file
         with open_func(fasta_file, mode) as file:
             for record in SeqIO.parse(file, "fasta"):
                 raw_id = record.id
                 if raw_id not in chrom_map:
-                    logger.info(f"  Skipping unmapped chromosome record: {species_id}/{raw_id}")
+                    logger.debug(f"[species={species_id}] Skipping unmapped chromosome record: {raw_id}")
                     continue
                 chrom_id = chrom_map[raw_id]
                 sequence_records[(species_id, chrom_id)] = record
-                logger.info(f"  Added {species_id}/{chrom_id} (from {raw_id}), length: {len(record.seq)}")
+                logger.info(f"[species={species_id}] Added {chrom_id} (from {raw_id}), length: {len(record.seq)}")
     
-    logger.info(f"Found {len(sequence_records)} total chromosomes")
-    
-    # Process each chromosome and save to Zarr
-    for (species_id, chrom_id), record in sequence_records.items():
-        logger.info(f"  Processing {species_id}/{chrom_id}")
-
-        # Convert sequences to arrays
-        seq_str = str(record.seq)
-        seq_array = np.array(list(seq_str), dtype='S1')
-        seq_mask = np.char.isupper(seq_array)
-        rev_comp = str(record.seq.complement())
-        rev_array = np.array(list(rev_comp), dtype='S1')
-        rev_mask = np.char.isupper(rev_array)
-        chrom_length = len(seq_str)
-
-        seq_arrays = np.vstack([seq_array, rev_array])
-        assert seq_arrays.shape == (2, chrom_length)
-        seq_masks = np.vstack([seq_mask, rev_mask])
-        assert seq_masks.shape == (2, chrom_length)
-
-        # Create dataset with base sequences
-        logger.info("  Creating dataset...")
-        ds = xr.Dataset(
-            data_vars={
-                "sequence_tokens": (["strand", "sequence"], seq_arrays),
-                "sequence_masks": (["strand", "sequence"], seq_masks)
-            },
-            coords={"strand": ["positive", "negative"], "sequence": np.arange(chrom_length)},
-            attrs={"species_id": species_id, "chromosome_id": chrom_id}
-        )
+        logger.info(f"[species={species_id}] Found {len(sequence_records)} total chromosomes")
         
-        # Add tokenized sequences if tokenizer provided
-        if tokenizer:
-            # Tokenize sequences for both strands
-            input_ids = []
+        # Process each chromosome and save to Zarr
+        for (species_id, chrom_id), record in sequence_records.items():
+            logger.info(f"[species={species_id}] Processing chromosome: {chrom_id}")
+
+            # Convert sequences to arrays
+            seq_str = str(record.seq)
+            seq_array = np.array(list(seq_str), dtype='S1')
+            seq_mask = np.char.isupper(seq_array)
+            rev_comp = str(record.seq.complement())
+            rev_array = np.array(list(rev_comp), dtype='S1')
+            rev_mask = np.char.isupper(rev_array)
+            chrom_length = len(seq_str)
+
+            seq_arrays = np.vstack([seq_array, rev_array])
+            assert seq_arrays.shape == (2, chrom_length)
+            seq_masks = np.vstack([seq_mask, rev_mask])
+            assert seq_masks.shape == (2, chrom_length)
+
+            # Create dataset with base sequences
+            logger.info(f"[species={species_id}] Creating dataset...")
+            ds = xr.Dataset(
+                data_vars={
+                    "sequence_tokens": (["strand", "sequence"], seq_arrays),
+                    "sequence_masks": (["strand", "sequence"], seq_masks)
+                },
+                coords={"strand": ["positive", "negative"], "sequence": np.arange(chrom_length)},
+                attrs={"species_id": species_id, "chromosome_id": chrom_id}
+            )
             
-            for i, seq in enumerate([seq_array, rev_array]):
-                strand = ['forward', 'reverse'][i]
-                logger.info(f"  Tokenizing {strand} strand: {''.join(np.char.decode(seq[:64]))} ...")                
-                token_ids = tokenizer(seq)
-                logger.info(f"  Token ID frequencies: {pd.Series(token_ids).value_counts().to_dict()}")
-                # Fail on presence of any tokens not explicitly defined in the tokenizer 
-                # or added as a special case by FASTA_OOV_TOKENS
-                if np.any(token_ids < 0):
-                    bad_tokens = (
-                        pd.Series(np.char.decode(token_ids[token_ids < 0]))
-                        .value_counts()
-                    )
-                    raise ValueError(
-                        f"Found {len(bad_tokens)} unmapped tokens in "
-                        f"{strand} strand for {species_id}/{chrom_id}; "
-                        f"Frequencies:\n{bad_tokens.head(15)}"
-                    )
-                assert token_ids.shape == (chrom_length,)
-                input_ids.append(token_ids)
+            # Add tokenized sequences if tokenizer provided
+            if tokenizer:
+                # Tokenize sequences for both strands
+                input_ids = []
+                
+                for i, seq in enumerate([seq_array, rev_array]):
+                    strand = ['forward', 'reverse'][i]
+                    logger.info(f"[species={species_id}] Tokenizing {strand} strand: {''.join(np.char.decode(seq[:64]))} ...")                
+                    token_ids = tokenizer(seq)
+                    logger.info(f"[species={species_id}] Token ID frequencies: {pd.Series(token_ids).value_counts().to_dict()}")
+                    # Fail on presence of any tokens not explicitly defined in the tokenizer 
+                    # or added as a special case by FASTA_OOV_TOKENS
+                    if np.any(token_ids < 0):
+                        bad_tokens = (
+                            pd.Series(np.char.decode(token_ids[token_ids < 0]))
+                            .value_counts()
+                        )
+                        raise ValueError(
+                            f"Found {len(bad_tokens)} unmapped tokens in "
+                            f"{strand} strand for {species_id}/{chrom_id}; "
+                            f"Frequencies:\n{bad_tokens.head(15)}"
+                        )
+                    assert token_ids.shape == (chrom_length,)
+                    input_ids.append(token_ids)
+                
+                # Add tokenized data to dataset
+                input_ids = np.vstack(input_ids)
+                assert input_ids.shape == (2, chrom_length)
+                ds["sequence_input_ids"] = (["strand", "sequence"], input_ids)
             
-            # Add tokenized data to dataset
-            input_ids = np.vstack(input_ids)
-            assert input_ids.shape == (2, chrom_length)
-            ds["sequence_input_ids"] = (["strand", "sequence"], input_ids)
-        
-        # Set chunking and save
-        ds = set_dimension_chunks(ds, "sequence", chunk_size)
-        logger.info(f"  Saving {species_id}/{chrom_id} dataset to {output_path}")
-        ds.to_zarr(
-            output_path, 
-            group=f"{species_id}/{chrom_id}", 
-            zarr_format=2, 
-            consolidated=True, 
-            mode="w"
-        )
+            # Set chunking and save
+            ds = set_dimension_chunks(ds, "sequence", chunk_size)
+            logger.info(f"[species={species_id}] Saving {chrom_id} dataset to {output_path}")
+            ds.to_zarr(
+                output_path, 
+                group=f"{species_id}/{chrom_id}", 
+                zarr_format=2, 
+                consolidated=True, 
+                mode="w"
+            )
     
     logger.info(
         f"Saved {len(sequence_records)} chromosome sequences to {output_path}"
@@ -513,6 +492,159 @@ def create_token_map(tokenizer: Any, specials: list[str] | None = None) -> dict[
     return token_map
 
 # -------------------------------------------------------------------------------------------------
+# Config validation
+# -------------------------------------------------------------------------------------------------
+
+def validate_configs(data_dir: str) -> None:
+    """Validate that the sequence IDs in GFF and FASTA files match and have the same ordering as config.
+    
+    Parameters
+    ----------
+    data_dir : str
+        Base directory containing training_data/ and testing_data/ subdirectories
+    """
+    logger.info("Validating species configurations")
+    
+    # Get all species configs
+    species_configs = list(SPECIES_CONFIGS.values())
+    logger.info(f"Found {len(species_configs)} species configurations")
+    
+    for config in species_configs:
+        species_id = config.id
+        logger.info(f"[species={species_id}] Validating configuration")
+        
+        # Determine which data directory to use based on split config
+        if config.split.use_in_training or config.split.use_in_validation:
+            species_data_dir = os.path.join(data_dir, "training_data")
+            logger.info(f"[species={species_id}] Using training data directory: {species_data_dir}")
+        elif config.split.use_in_evaluation:
+            species_data_dir = os.path.join(data_dir, "testing_data")
+            logger.info(f"[species={species_id}] Using testing data directory: {species_data_dir}")
+        else:
+            logger.warning(f"[species={species_id}] Species not used in any split, skipping")
+            continue
+        
+        # Get expected chromosome map
+        chrom_map = config.chromosome_map
+        expected_seq_ids = list(chrom_map.keys())
+        logger.info(f"[species={species_id}] Expected sequence IDs: {expected_seq_ids}")
+        
+        # Get GFF file path and extract sequence IDs
+        gff_path = os.path.join(species_data_dir, "gff", config.gff.filename)
+        if not os.path.exists(gff_path):
+            raise ValueError(f"[species={species_id}] GFF file not found: {gff_path}")
+            
+        logger.info(f"[species={species_id}] Checking GFF file: {gff_path}")
+        gff_seq_ids = _extract_gff_seq_ids(gff_path)
+        
+        # Get FASTA file path and extract sequence IDs
+        fasta_path = os.path.join(species_data_dir, "fasta", config.fasta.filename)
+        if not os.path.exists(fasta_path):
+            raise ValueError(f"[species={species_id}] FASTA file not found: {fasta_path}")
+            
+        logger.info(f"[species={species_id}] Checking FASTA file: {fasta_path}")
+        fasta_seq_ids = _extract_fasta_seq_ids(fasta_path)
+        
+        # Filter to only sequence IDs that are in the config
+        mapped_gff_seq_ids = [seq_id for seq_id in gff_seq_ids if seq_id in expected_seq_ids]
+        if len(mapped_gff_seq_ids) == 0:
+            raise ValueError(f"[species={species_id}] No mapped sequence IDs found in GFF file")
+        logger.info(f"[species={species_id}] Found {len(mapped_gff_seq_ids)} mapped sequence IDs in GFF file")
+        
+        mapped_fasta_seq_ids = [seq_id for seq_id in fasta_seq_ids if seq_id in expected_seq_ids]
+        if len(mapped_fasta_seq_ids) == 0:
+            raise ValueError(f"[species={species_id}] No mapped sequence IDs found in FASTA file")
+        logger.info(f"[species={species_id}] Found {len(mapped_fasta_seq_ids)} mapped sequence IDs in FASTA file")
+        
+        # Log warnings for any mapped IDs that aren't in both files
+        gff_only_ids = set(mapped_gff_seq_ids) - set(mapped_fasta_seq_ids)
+        fasta_only_ids = set(mapped_fasta_seq_ids) - set(mapped_gff_seq_ids)
+        
+        if gff_only_ids:
+            logger.warning(f"[species={species_id}] {len(gff_only_ids)} sequence IDs in GFF only: {gff_only_ids}")
+        
+        if fasta_only_ids:
+            logger.warning(f"[species={species_id}] {len(fasta_only_ids)} sequence IDs in FASTA only: {fasta_only_ids}")
+            
+        # Check that lexical sort of chrom_map keys matches numerical sort of values;
+        # This is not strictly necessary, but the warning here is helpful to identify
+        # new genomes that might become problematic (particularly for MultisampleSequenceDatasetLabeled)
+        logger.info(f"[species={species_id}] Checking chromosome id ordering")
+
+        # Filter to only keys with numeric components in their chromosome IDs
+        numeric_keys = []
+        for key in chrom_map:
+            num = config.get_chromosome_number(key)
+            if num is not None:
+                numeric_keys.append(key)
+        
+        # Raise an error if no numeric chromosome IDs are found
+        if len(numeric_keys) == 0:
+            raise ValueError(f"[species={species_id}] No numeric chromosome IDs found in config")
+        
+        # Sort keys lexically vs numerically (by chromosome number in the value)
+        def extract_chrom_num(key):
+            num = config.get_chromosome_number(key)
+            assert num is not None, f"Expected numeric chromosome ID for {key}, got None"
+            return num
+            
+        lexical_sort = sorted(numeric_keys)
+        numerical_sort = sorted(numeric_keys, key=extract_chrom_num)
+        
+        if lexical_sort != numerical_sort:
+            logger.warning(
+                f"[species={species_id}] lexical sort of keys does not match numerical sort of values. "
+                f"Lexical sort: {lexical_sort}\n"
+                f"Numerical sort: {numerical_sort}"
+            )
+
+    logger.info("Configuration validation complete")
+
+def _extract_gff_seq_ids(path: str) -> list[str]:
+    """Extract sequence IDs from a GFF file.
+    
+    Parameters
+    ----------
+    path : str
+        Path to GFF file
+        
+    Returns
+    -------
+    list[str]
+        List of sequence IDs
+    """
+    # Read GFF file using pandas
+    df = read_gff3(path)
+    
+    # Extract and return unique sequence IDs
+    return df["seq_id"].unique().tolist()
+
+def _extract_fasta_seq_ids(path: str) -> list[str]:
+    """Extract sequence IDs from a FASTA file.
+    
+    Parameters
+    ----------
+    path : str
+        Path to FASTA file
+        
+    Returns
+    -------
+    list[str]
+        List of sequence IDs
+    """
+    # Determine file opening method based on extension
+    open_func = gzip.open if path.endswith(".gz") else open
+    mode = "rt" if path.endswith(".gz") else "r"
+    
+    # Parse FASTA file and extract sequence IDs
+    seq_ids = []
+    with open_func(path, mode) as in_handle:
+        for record in SeqIO.parse(in_handle, "fasta"):
+            seq_ids.append(record.id)
+    
+    return seq_ids
+
+# -------------------------------------------------------------------------------------------------
 # Main
 # -------------------------------------------------------------------------------------------------
 
@@ -523,26 +655,32 @@ def main():
     
     # Extract GFF features command
     gff_parser = subparsers.add_parser("extract_gff_features", help="Extract data from GFF file(s) into a structured DataFrame")
-    gff_parser.add_argument("--input", required=True, nargs='+', help="Path(s) to input GFF file(s)")
+    gff_parser.add_argument("--input-dir", required=True, help="Directory containing input GFF files")
+    gff_parser.add_argument("--species-id", required=True, nargs='+', help="Species IDs to process")
     gff_parser.add_argument("--output", required=True, help="Path to output parquet file")
     
     # Extract FASTA sequences command
     fasta_parser = subparsers.add_parser("extract_fasta_sequences", help="Extract sequences from FASTA file(s)")
-    fasta_parser.add_argument("--input", required=True, nargs='+', help="Path(s) to input FASTA file(s)")
-    fasta_parser.add_argument("--species-id", required=True, nargs='+', help="Species IDs corresponding to input files")
+    fasta_parser.add_argument("--input-dir", required=True, help="Directory containing input FASTA files")
+    fasta_parser.add_argument("--species-id", required=True, nargs='+', help="Species IDs to process")
     fasta_parser.add_argument("--output", required=True, help="Path to output file")
-    fasta_parser.add_argument("--chromosome-map", help="Mapping from raw to standardized chromosome names (e.g. 'Chrom1=chr1,Chrom2=chr2')")
     fasta_parser.add_argument("--tokenizer-path", help="Path to the tokenizer model for tokenizing sequences")
+    
+    # Validate configs command
+    validate_parser = subparsers.add_parser("validate_configs", help="Validate sequence IDs in GFF and FASTA files match configs")
+    validate_parser.add_argument("--data-dir", required=True, help="Directory containing training_data/ and testing_data/ subdirectories")
     
     args = parser.parse_args()
     
     if args.command == "extract_gff_features":
-        extract_gff_features(args.input, args.output)
+        extract_gff_features(args.input_dir, args.species_id, args.output)
     elif args.command == "extract_fasta_sequences":
         extract_fasta_sequences(
-            args.input, args.species_id, args.output,
-            args.chromosome_map, tokenizer_path=args.tokenizer_path
+            args.input_dir, args.species_id, args.output,
+            tokenizer_path=args.tokenizer_path
         )
+    elif args.command == "validate_configs":
+        validate_configs(args.data_dir)
     else:
         parser.print_help()
 

@@ -1,7 +1,6 @@
 import pytest
 import numpy as np
 import pandas as pd
-import itertools
 from src.sequence import (
     convert_to_biluo_labels, convert_to_entity_labels, find_group_intervals, find_intervals,
     convert_biluo_index_to_class_name, convert_biluo_index_to_entity_name, find_overlapping_intervals,

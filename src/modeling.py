@@ -187,6 +187,18 @@ class GeneClassifierConfig:
     def token_entity_names_with_background(self) -> list[str]:
         return [self.sentinel_names[1]] + self.token_entity_names
     
+    def token_entity_name_map(self) -> dict[int, str]:
+        return {
+            **{
+                i-1: self.sentinel_names[i]
+                for i in range(len(self.sentinel_names))
+            },
+            **{
+                i+1: self.token_entity_names[i]
+                for i in range(len(self.token_entity_names))
+            }
+        }
+    
     def token_label_name(self, label: int) -> str:
         return convert_biluo_index_to_class_name(
             label=label, 

@@ -6,13 +6,13 @@
 # --fasta $DATA_DIR/testing_data/fasta/Zea_mays-B73-REFERENCE-NAM-5.0.fa.gz \
 # --chrom chr1
 
-import argparse
 import os
+import argparse
 import logging
 import re
 from collections import Counter
 from dataclasses import dataclass
-from typing import Dict, List, Tuple
+from typing import Dict
 from Bio import SeqIO
 import pandas as pd
 import numpy as np

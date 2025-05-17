@@ -145,6 +145,7 @@ def train(args: Args) -> None:
     if args.checkpoint and args.checkpoint_type == "model":
         logger.info(f"Loading model from checkpoint: {args.checkpoint}")
         model = GeneClassifier.load_from_checkpoint(args.checkpoint, learning_rate=args.learning_rate, learning_rate_decay=args.learning_rate_decay)
+        config = model.config
     else:
         logger.info(f"Creating new model (architecture={args.architecture}, head_encoder_layers={args.head_encoder_layers})")
         config = GeneClassifierConfig(

@@ -1,4 +1,3 @@
-import pytest
 from src.evaluation import evaluate_intervals
 
 def test_exact_matches():

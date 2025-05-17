@@ -231,7 +231,7 @@ def visualize_token_predictions(
     ax2.set_ylabel('Logit Value')
     
     # Third subplot: mask visualization
-    im3 = ax3.imshow(example_mask.reshape(1, -1), aspect='auto', cmap='binary', vmin=0, vmax=1, interpolation="none")
+    ax3.imshow(example_mask.reshape(1, -1), aspect='auto', cmap='binary', vmin=0, vmax=1, interpolation="none")
     ax3.set_title('Valid Mask')
     ax3.set_yticks([])
     ax3.set_xlabel('Position')
@@ -308,19 +308,19 @@ def visualize_entity_predictions(
     
     # Second subplot: predicted entity labels
     cmap = plt.cm.get_cmap('tab10', num_entities)
-    im1 = ax1.imshow(to_heatmap(example_pred), aspect='auto', cmap=cmap, vmin=0, vmax=module.num_core_entities, interpolation="none")
+    ax1.imshow(to_heatmap(example_pred), aspect='auto', cmap=cmap, vmin=0, vmax=module.num_core_entities, interpolation="none")
     ax1.set_title('Predicted Entity Labels')
     ax1.set_yticks(np.arange(num_entities))
     ax1.set_yticklabels(entity_names)
     
     # Third subplot: true entity labels
-    im2 = ax2.imshow(to_heatmap(example_true), aspect='auto', cmap=cmap, vmin=0, vmax=module.num_core_entities, interpolation="none")
+    ax2.imshow(to_heatmap(example_true), aspect='auto', cmap=cmap, vmin=0, vmax=module.num_core_entities, interpolation="none")
     ax2.set_title('True Entity Labels')
     ax2.set_yticks(np.arange(num_entities))
     ax2.set_yticklabels(entity_names)
     
     # Fourth subplot: mask
-    im3 = ax3.imshow(example_mask.reshape(1, -1), aspect='auto', cmap='binary', vmin=0, vmax=1, interpolation="none")
+    ax3.imshow(example_mask.reshape(1, -1), aspect='auto', cmap='binary', vmin=0, vmax=1, interpolation="none")
     ax3.set_title('Valid Mask')
     ax3.set_yticks([])
     ax3.set_xlabel('Position')

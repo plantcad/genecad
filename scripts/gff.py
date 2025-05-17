@@ -3,9 +3,7 @@ import logging
 import pandas as pd
 import re
 import os
-import subprocess
 import glob
-from pathlib import Path
 from src.gff_pandas import read_gff3, write_gff3
 from src.gff_compare import run_gffcompare, parse_gffcompare_stats
 from src.config import SPECIES_CONFIGS
@@ -198,7 +196,7 @@ def filter_to_chromosome(input_path: str, output_path: str, chromosome_id: str, 
         if not source_ids:
             raise ValueError(f"No source chromosome IDs found for normalized ID '{chromosome_id}' in species '{species_id}'")
         
-        attributes_to_drop = species_config.gff_properties.get("drop_attributes")
+        attributes_to_drop = species_config.gff.attributes_to_drop
         seq_ids_to_filter = source_ids
         normalized_id = chromosome_id
         
@@ -548,7 +546,7 @@ def remove_exon_utrs(input_path: str, output_path: str) -> None:
     # Count features by type after removal
     remaining_type_counts = filtered_features["type"].value_counts()
     
-    logger.info(f"After removal, feature types remaining:")
+    logger.info("After removal, feature types remaining:")
     for feature_type, count in remaining_type_counts.items():
         percentage = (count / len(filtered_features)) * 100
         logger.info(f"  - {count} {feature_type} features ({percentage:.1f}%)")
@@ -848,7 +846,7 @@ def collect_results(input_dir: str, output_path: str = None) -> None:
     # Save to file
     logger.info(f"Saving consolidated results to {output_path}")
     consolidated_df.to_csv(output_path, sep='\t', index=False)
-    logger.info(f"Results saved successfully")
+    logger.info("Results saved successfully")
 
 def main() -> None:
     """Parse command line arguments and execute the appropriate function."""

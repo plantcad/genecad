@@ -2,7 +2,7 @@ import pandas as pd
 import numpy as np
 import xarray as xr
 from numba import njit
-from src.modeling import TOKEN_CLASS_NAMES, GeneClassifierConfig
+from src.modeling import GeneClassifierConfig
 from src.sequence import convert_to_entity_labels
 
 @njit

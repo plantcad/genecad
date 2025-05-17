@@ -1,8 +1,6 @@
 import pandas as pd
 import re
-import plotnine as pn
 import matplotlib.pyplot as plt
-from matplotlib.colors import LinearSegmentedColormap
 import numpy as np
 
 # Parse the multiline string into a DataFrame

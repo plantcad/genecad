@@ -11,7 +11,6 @@ import xarray as xr
 import zarr
 import glob
 from typing import Any, Callable
-import numpy.typing as npt
 import logging
 logger = logging.getLogger(__name__)
 
@@ -185,62 +184,6 @@ class XarrayDataset(Dataset):
         self.current_dataset_idx, self.current_chunk_id = dataset_idx, local_dataset_idx // self.chunk_size
 
 
-
-class SequenceDatasetLabeled(Dataset):
-    """ DataSet class for a single genome, with labels """
-
-    def __init__(self, sequences, labels, windows, tokenizer, max_length):
-        self.sequences = sequences  # list of fasta sequences
-        self.labels = labels  # list of labels for the fasta sequences
-        self.windows = windows  # numpy array of training windows, with three columns: chrom index, position, strand
-        self.tokenizer = tokenizer  # model tokenizer
-        self.max_length = max_length  # standard length of context windows
-
-    def __len__(self):
-        return self.windows.shape[0]
-
-    def __getitem__(self, idx):
-        window_chrom = self.windows[idx, 0]
-        window_pos = self.windows[idx, 1]
-        sequence = self.sequences[window_chrom].seq[window_pos:window_pos + self.max_length]
-
-        # Get reverse complement if the window strand is 1
-        # for labels, [:, 1] are the labels for the reverse strand
-        if (self.windows[idx, 2] == 1):
-            sequence = sequence.reverse_complement()
-            label = self.labels[window_chrom][window_pos:window_pos + self.max_length, 1][::-1].copy()
-        else:
-            label = self.labels[window_chrom][window_pos:window_pos + self.max_length, 0].copy()
-
-        # Soft-masking from fasta sequence defines un-usable labels
-        # Also remove any position where label == -1 (ambiguous)
-        valid_labels = np.array([(char.isupper() and label[idx2] >= 0) for idx2, char in enumerate(sequence)])
-
-        encoding = self.tokenizer.encode_plus(
-            str(sequence),
-            return_tensors="pt",
-            padding='max_length',
-            truncation=True,
-            max_length=self.max_length,
-            return_attention_mask=True,
-            return_token_type_ids=False
-        )
-        label = torch.tensor(label, dtype=torch.long)
-        mask = encoding['attention_mask'].squeeze(0)
-        # For now, there is no known reason for special tokens 
-        # to be included in sequences so fail on their presence
-        assert (mask == 1).all()
-        
-        return {
-            'input_ids': encoding['input_ids'].squeeze(0),
-            'attention_mask': mask,
-            'labels': label,
-            'chromosome': self.sequences[window_chrom].id,
-            'position': window_pos,
-            'use_indices': valid_labels
-        }
-
-
 class MultisampleSequenceDatasetLabeled(Dataset):
     """ DataSet class with for multiple genomes, with labels """
 
@@ -269,12 +212,16 @@ class MultisampleSequenceDatasetLabeled(Dataset):
         window_pos = self.windows[idx, 2]
         window_strand = self.windows[idx, 3]
 
+        species_id = self.species[window_species]
+
+        if window_chrom >= len(self.contig_indices[window_species]):
+            raise ValueError(f"Contig index {window_chrom} out of range for species {species_id}")
         chrom_name = self.contig_indices[window_species][window_chrom]
 
+        if window_chrom >= len(self.sequences[window_species]):
+            raise ValueError(f"Contig index {window_chrom} out of range for species {species_id}")
         sequence = self.sequences[window_species][window_chrom][window_pos:window_pos + self.max_length].seq
         sequence_len = len(str(sequence))
-
-        species_id = self.species[window_species]
 
         # Get the reverse complement if the strand is 1
         # for labels, [:, 1] are the labels for the reverse strand
@@ -285,12 +232,12 @@ class MultisampleSequenceDatasetLabeled(Dataset):
             label = self.labels[window_species][chrom_name][window_pos:window_pos + self.max_length, 0].copy()
         assert label.ndim == 1
 
-        # If label is less than length of sequence, pad with 0
+        # If label is less than length of sequence, pad with 0.
+        # This happens because the labels are based on GFFs that do not span the entire sequence,
+        # and label vectors based on those annotations are often only as long as the maximum annotation position.
+        # Therefore, it can safely be assumed that any positions requiring padding are intergenic (class = 0)
         if len(label) < sequence_len:
-            # This happens once at TOW:
-            # WARNING:Label is less than max length for Chr2 at 19689472: 7349 < 8192
-            logger.warning(f"Label is less than sequence length for {species_id}/{chrom_name} at {window_pos}: {len(label)} < {sequence_len}")
-            label = np.pad(label, (0, sequence_len - len(label)), mode='constant', constant_values=-1)
+            label = np.pad(label, (0, sequence_len - len(label)), mode='constant', constant_values=0)
             assert label.ndim == 1
 
         if len(sequence) != len(label):
@@ -326,140 +273,5 @@ class MultisampleSequenceDatasetLabeled(Dataset):
         }
 
 
-class SequenceDatasetUnlabeled(Dataset):
-    """ Sequence dataset without truth labels, for inference """
-
-    def __init__(self, sequence, name, tokenizer, window_size):
-        self.sequence = sequence  # one Seq object
-        self.name = name  # name of contig or sequence
-        self.tokenizer = tokenizer  # model tokenizer
-        self.window_size = window_size  # maximum context length
-        self.overlap = window_size // 2  # overlap for windows
-
-    def __len__(self):
-        return max(int(math.ceil(len(self.sequence) / self.overlap)) - 1, 1)
-
-    def __getitem__(self, idx):
-        # windows shift along the input sequence by half their length to mitigate edge effects
-        end = idx * self.overlap + self.window_size
-        if end > len(self.sequence):
-            end = len(self.sequence)
-
-        sequence = str(self.sequence[(idx * self.overlap):end])
-        name = idx
-
-        # Tokenize and pad to window_size
-        encoding = self.tokenizer.encode_plus(
-            sequence.ljust(self.window_size, 'N'),
-            return_tensors="pt",
-            return_attention_mask=True,
-            return_token_type_ids=False
-        )
-
-        return {
-            'sequence': sequence,
-            'input_ids': encoding['input_ids'],
-            'attention_mask': encoding['attention_mask'],
-            'name': name
-        }
 
 
-class CRFDatasetLabeled(Dataset):
-    """
-    Dataset of labeled embeddings for CRF training and validation
-    Allows for multiple genomes input
-    Embeddings do not require a separate tokenization step
-    """
-
-    def __init__(self, predicted_labels, labels, windows, species, contig_indices, max_length):
-        # TODO: embeddings are currently held in memory, so this won't scale past a few genomes
-        self.species = species  # list of species
-        self.labels = labels  # list of list of numpy arrays
-        self.predicted_labels = predicted_labels  # list of arrays for predicted labels
-        self.windows = windows  # array of training windows with columns: species idx, contig idx, position, strand
-        self.contig_indices = contig_indices  # list of lists of contig names
-        self.max_length = max_length  # context window length
-
-    def __len__(self):
-        return self.windows.shape[0]
-
-    def __getitem__(self, idx):
-        window_species = self.windows[idx, 0]
-        window_chrom = self.windows[idx, 1]
-        window_pos = self.windows[idx, 2]
-
-        chrom_name = self.contig_indices[window_species][window_chrom]
-
-        # Embeddings don't need to be reverse-complemented, but they do need to be reversed when strand == 1
-        # for labels, [:, 1] are the labels for the reverse strand
-        if (self.windows[idx, 3] == 1):
-            label = self.labels[window_species][chrom_name][window_pos:window_pos + self.max_length, 1][::-1].copy()
-            predicted_labels = self.predicted_labels[window_species][chrom_name][
-                               window_pos:window_pos + self.max_length, :, 1][::-1].copy()
-        else:
-            predicted_labels = self.predicted_labels[window_species][chrom_name][
-                               window_pos:window_pos + self.max_length, :, 0].copy()
-            label = self.labels[window_species][chrom_name][window_pos:window_pos + self.max_length, 0].copy()
-
-        label = torch.tensor(label, dtype=torch.int)
-        predicted_labels = torch.tensor(predicted_labels)
-
-        return {
-            'input_ids': predicted_labels,
-            'labels': label,
-            'species': self.species[window_species],
-            'chromosome': chrom_name,
-            'position': window_pos,
-        }
-
-
-class CRFDatasetUnlabeled(Dataset):
-    """
-    Embeddings-only dataset for CRF inference without labels
-
-    Again, embeddings do not need to be tokenized
-    """
-
-    def __init__(self, embedding, name, window_size):
-        """
-        embedding shape: [sequence_len, num_labels] or [sequence_len, num_labels, 2]
-        name: a contig name or ID
-        window_size: the window/chunk size used in the original inference
-        """
-        self.embedding = embedding
-        self.name = name
-        self.window_size = window_size
-        self.overlap = window_size // 2
-
-        seq_len = embedding.shape[0]
-        # same logic as original inference: # of chunks
-        self.num_chunks = max(int(math.ceil(seq_len / self.overlap)) - 1, 1)
-
-    def __len__(self):
-        return self.num_chunks
-
-    def __getitem__(self, idx):
-        seq_len = self.embedding.shape[0]
-        chunk_start = idx * self.overlap
-        chunk_end = min(chunk_start + self.window_size, seq_len)
-        chunk_len = chunk_end - chunk_start
-
-        # slice out the portion
-        chunk_data = self.embedding[chunk_start:chunk_end]  # shape => [chunk_len, ...]
-
-        # Zero-pad if chunk_len < window_size
-        if chunk_len < self.window_size:
-            shape_list = list(chunk_data.shape)
-            shape_list[0] = self.window_size  # expand the first dim
-            padded = np.zeros(shape_list, dtype=chunk_data.dtype)
-            padded[:chunk_len] = chunk_data
-            chunk_data = padded
-
-        # convert to torch tensor
-        chunk_data_t = torch.tensor(chunk_data, dtype=torch.float)
-
-        return {
-            'input_ids': chunk_data_t,  # shape => [window_size, num_labels] or [window_size, num_labels, 2]
-            'name': torch.tensor(idx, dtype=torch.long),
-            'chunk_len': torch.tensor(chunk_len, dtype=torch.long)  # how many real bases were used in this chunk
-        }

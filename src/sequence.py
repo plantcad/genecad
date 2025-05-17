@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 import numpy.typing as npt
 from numba import njit
-from typing import Callable, Iterator, Literal
+from typing import Iterator, Literal
 import logging
 import itertools
 
@@ -298,8 +298,8 @@ def convert_entity_labels_to_intervals(
     -------
         intervals: A dataframe with 3 columns:
             - entity: The entity index
-            - start: The start index of the interval
-            - stop: The stop index of the interval
+            - start: The start index of the interval (inclusive)
+            - stop: The stop index of the interval (inclusive)
     """
     intervals = find_group_intervals(labels, class_groups=class_groups, mask=mask)
     result = []
@@ -389,7 +389,7 @@ def find_group_intervals(labels: np.ndarray, class_groups: list[list[int]], mask
     -------
         intervals: A list (of length C) of arrays each with shape (2, M_i) containing the start and
             stop indices of the contiguous intervals for a given output class C_i, and number of
-            intervals M_i.
+            intervals M_i.  Interval indexes are 0-based and inclusive on both sides.
 
     Examples
     --------
@@ -769,10 +769,121 @@ def _viterbi_decode(
     
     return path
 
+
+@njit
+def _replace_interval_classes(
+    labels: np.ndarray, 
+    start_class: int, end_class: int, 
+    middle_class: int,
+    target_class: int, destination_class: int, 
+    max_length: int
+) -> np.ndarray:
+    result = labels.copy()
+    i = 0
+    while i < len(labels):
+        # Look for start of interval (e.g. 5' UTR for transcript)
+        if labels[i] == start_class:
+            start_pos = i
+            # Look for end of interval (e.g. 3' UTR for transcript)
+            j = start_pos + 1
+            while j < len(labels) and ((j - start_pos <= max_length) or (max_length < 0)):
+                if labels[j] == end_class:
+                    # Check if middle_class appears at least once in the interval
+                    middle_class_found = False
+                    for k in range(start_pos + 1, j):
+                        if labels[k] == middle_class:
+                            middle_class_found = True
+                            break
+                    
+                    if middle_class_found:
+                        # Found eligible interval with middle class present;
+                        # replace target class with destination class
+                        k = start_pos
+                        while k <= j:
+                            if labels[k] == target_class:
+                                result[k] = destination_class
+                            k += 1
+                    i = j  # Skip to end of this interval
+                    break
+                j += 1
+        i += 1
+    return result
+
+def replace_interval_classes(
+    labels: np.ndarray, 
+    start_class: int, end_class: int, 
+    middle_class: int,
+    target_class: int, destination_class: int, 
+    max_length: int | None = None
+) -> np.ndarray:
+    """Replace target class with destination class within intervals defined by start and end classes.
+
+    As an example, this function can be used to replace intergenic token labels 
+    between 5' UTRs and 3' UTRs with intron labels.
+    
+    Parameters
+    ----------
+    labels : np.ndarray
+        Array of labels to replace
+    start_class : int
+        Class that marks the start of an interval
+    end_class : int
+        Class that marks the end of an interval
+    middle_class : int
+        Class that must appear at least once between start_class and end_class
+        for replacement to occur
+    target_class : int
+        Class to replace within eligible intervals
+    destination_class : int
+        Class to replace target_class with
+    max_length : int | None, optional
+        Maximum length of an interval to consider, by default None
+
+    Returns
+    -------
+    np.ndarray
+        Array of labels with target class replaced with destination class within intervals
+        defined by start and end classes that contain at least one middle_class
+    """
+    if max_length is None:
+        max_length = -1
+    return _replace_interval_classes(labels, start_class, end_class, middle_class, target_class, destination_class, max_length)
+
+
+def regularize_transition_matrix(
+    transition_matrix: npt.ArrayLike, 
+    alpha: float
+) -> npt.ArrayLike:
+    """Regularize transition matrix to increase the likelihood of all transitions.
+    
+    Parameters
+    ----------
+    transition_matrix : npt.ArrayLike
+        Transition matrix to regularize
+    alpha : float, optional
+        Amount to add to all transitions
+
+    Returns
+    -------
+    npt.ArrayLike
+        Regularized transition matrix of same shape
+    """
+    # Add alpha to all transitions and then renormalize rows
+    if alpha < 0 or alpha > 1:
+        raise ValueError(f"Alpha must be between 0 and 1; got {alpha}")
+    if transition_matrix.ndim != 2:
+        raise ValueError(f"Transition matrix must be a 2D array; got shape {transition_matrix.shape}")
+    transition_matrix = transition_matrix + alpha
+    transition_matrix = transition_matrix / transition_matrix.sum(axis=1, keepdims=True)
+    assert np.allclose(transition_matrix.sum(axis=1), 1)
+    return transition_matrix
+
+
 def viterbi_decode(
     emission_probs: npt.ArrayLike, 
     transition_matrix: npt.ArrayLike,
-    initial_probs: npt.ArrayLike | None = None
+    initial_probs: npt.ArrayLike | None = None,
+    alpha: float | None = None
 ) -> npt.NDArray[np.int64]:
     """Find most likely sequence of states using the Viterbi algorithm.
     
@@ -787,12 +898,17 @@ def viterbi_decode(
     initial_probs : npt.ArrayLike, optional
         Vector of length N representing initial state probabilities.
         If None, the stationary distribution of the transition matrix is used.
+    alpha : float, optional
+        Increase the likelihood of all transitions by this amount; must be between 0 and 1
     
     Returns
     -------
     npt.NDArray[np.int64]
         Vector of length T with most likely state indices at each position
     """
+    if alpha is not None:
+        transition_matrix = regularize_transition_matrix(transition_matrix, alpha)
+
     # Validate and prepare inputs
     emission_probs, transition_matrix, initial_probs = _validate_decode_inputs(
         emission_probs, transition_matrix, initial_probs
