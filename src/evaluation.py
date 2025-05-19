@@ -8,21 +8,28 @@ import itertools
 
 @dataclass
 class Intervals:
-    cds: P.Interval
-    utr: P.Interval
-    intron: P.Interval
-    intron_cds: P.Interval
-    exon: P.Interval
-    
+    """
+    Representation of a transcript model as a set of intervals.
+    """
+    cds: P.Interval  # all CDS features
+    utr: P.Interval  # all UTR features
+    intron: P.Interval  # all introns, inferred from space between CDS and UTR intervals
+    intron_cds: P.Interval  # all introns that are fully contained within CDS
+    exon: P.Interval  # all exons (union of CDS and UTR)
+
 
 @dataclass
 class ConfusionCounts:
-    tp: int = 0
-    fp: int = 0
-    fn: int = 0
+    """
+    Counts of occurrences in a confusion matrix. False negatives omitted..
+    """
+    tp: int = 0  # true positives
+    fp: int = 0  # false positives
+    fn: int = 0  # false negatives
 
     def __add__(self, other):
         return ConfusionCounts(self.tp + other.tp, self.fp + other.fp, self.fn + other.fn)
+
     def precision(self):
         if (self.tp + self.fp) > 0:
             return self.tp / (self.tp + self.fp)
@@ -41,13 +48,17 @@ class ConfusionCounts:
         else:
             return 0.0
 
-    def to_f1_string(self):
+    def to_score_string(self):
         return "precision: " + str(self.precision()) + "\nrecall: " + str(self.recall()) + \
                "\nf1_score: " + str(self.f1()) + "\n"
 
 
 @dataclass
 class Stats:
+    """
+    This class keeps track of gffcompare statistics at several levels.
+    All statistics are represented as ConfusionCounts
+    """
     transcript_cds: ConfusionCounts
     transcript_intron: ConfusionCounts
     transcript: ConfusionCounts
@@ -81,10 +92,14 @@ class Stats:
 
 
 def blank_stats():
+    """
+    Initialize a blank Stats object
+    """
     return Stats(ConfusionCounts(), ConfusionCounts(), ConfusionCounts(), ConfusionCounts(),
                  ConfusionCounts(), ConfusionCounts(), ConfusionCounts(), ConfusionCounts(),
                  ConfusionCounts(), ConfusionCounts(), ConfusionCounts(), ConfusionCounts(),
                  ConfusionCounts(), ConfusionCounts())
+
 
 @njit
 def _find_matches_within_tolerance(
@@ -121,28 +136,77 @@ def _find_matches_within_tolerance(
     return true_positives
 
 
-# check if two ranges overlap
-# assumes ranges are closedopen [)
+@njit
 def overlaps(x: tuple[int, int], y: tuple[int, int]) -> bool:
+    """
+        Check if two ranges overlap
+        Assumes ranges are closedopen format [)
+
+        Args:
+            x: tuple describing first range
+            y: tuple describing second range
+
+        Returns:
+            boolean: true if ranges overlap
+        """
     return x[0] < y[1] and x[1] > y[0]
 
 
-# convert SeqFeature object to interval
 def to_interval(feat: SeqFeature) -> tuple[int, int]:
+    """
+        convert a SeqFeature object to a tuple describing its range
+
+        Args:
+            feat: SeqFeature
+
+        Returns:
+            tuple (start, end)
+        """
     return int(feat.location.start), int(feat.location.end)
 
 
 def get_longest_transcript_index(gene: SeqFeature) -> int:
+    """
+        get the index of the longest transcript in a gene
+
+        Args:
+            gene: SeqFeature of a gene
+
+        Returns:
+            int: index of longest transcript
+        """
     return np.argmax([int(np.sum([feature.location.end - feature.location.start
-                                         for feature in transcript.sub_features
-                                         if (feature.type == "CDS"
-                                             or feature.type == "five_prime_UTR"
-                                             or feature.type == "three_prime_UTR")
-                                         ])) for transcript in gene.sub_features])
+                                  for feature in transcript.sub_features
+                                  if (feature.type == "CDS"
+                                      or feature.type == "five_prime_UTR"
+                                      or feature.type == "three_prime_UTR")
+                                  ])) for transcript in gene.sub_features])
 
 
-def get_next_overlap_set(pred_features: SeqFeature, true_features: SeqFeature, start_pidx: int, start_tidx: int,
+def get_next_overlap_set(pred_features: list[SeqFeature], true_features: list[SeqFeature], start_pidx: int,
+                         start_tidx: int,
                          strand: int = 1):
+    """
+        Get the next set of overlapping genes from a given start point. An overlapping set contains all protein-coding
+        genes that overlap the first gene on the same strand, and all genes that overlap the genes that overlapped the
+        first gene, and so on recursively.
+
+        Args:
+            pred_features: list of predicted SeqFeatures for a contig. Only "gene" types will be considered, others
+            will be ignored (e.g. "ncRNA", "miRNA", "TE")
+            true_features: list of true SeqFeatures for a contig. Only "gene" types will be considered, others
+            will be ignored (e.g. "ncRNA", "miRNA", "TE")
+            start_pidx: index of the leftmost predicted feature to start with
+            start_tidx: index of the leftmost true feature to start with
+            strand: strand to check. Default is 1 (positive strand)
+
+        Returns:
+            pred_overlaps: list of integers. For an index idx, pred_overlaps[idx] overlaps true_overlaps[idx]
+            true_overlaps: list of integers. For an index idx, pred_overlaps[idx] overlaps true_overlaps[idx]
+            next_pidx: starting predicted feature index for the next set of overlapping genes
+            next_tidx: starting true feature index for the next set of overlapping genes
+        """
+
     pidx = start_pidx
     tidx = start_tidx
 
@@ -217,9 +281,9 @@ def get_next_overlap_set(pred_features: SeqFeature, true_features: SeqFeature, s
                 pidx_overlaps.append(pidx)
                 tidx_overlaps.append(tidx)
 
-                update_tstart = False # we have definitely reached at least the first overlap
+                update_tstart = False  # we have definitely reached at least the first overlap
                 tidx += 1
-            else: # there was not an overlap
+            else:  # there was not an overlap
                 # if we have not yet reached tend, then we need to continue checking
                 tidx += 1
                 if update_tstart and p_interval[0] > t_interval[1]:
@@ -239,86 +303,25 @@ def get_next_overlap_set(pred_features: SeqFeature, true_features: SeqFeature, s
         else:
             pidx += 1
 
-    return pidx_overlaps, tidx_overlaps, max(pidx_overlaps[-1]+1, pidx), max(tidx_overlaps[-1]+1, tidx)
+    return pidx_overlaps, tidx_overlaps, max(pidx_overlaps[-1] + 1, pidx), max(tidx_overlaps[-1] + 1, tidx)
 
 
-
-# return format:
-# [list of predicted indices], [list of true indices], next_pidx, next_tidx
-def get_next_overlap_set_old(pred_features: SeqFeature, true_features: SeqFeature, start_pidx: int, start_tidx: int,
-                         strand: int = 1):
-    pidx = start_pidx
-    tidx = start_tidx
-
-    # get the next valid predicted gene
-    while pidx < len(pred_features):
-        if pred_features[pidx].type != "gene" or pred_features[pidx].location.strand != strand:
-            pidx += 1
-        else:
-            break
-
-    # get the next valid true gene
-    while tidx < len(true_features):
-        if true_features[tidx].type != "gene" or true_features[tidx].location.strand != strand:
-            tidx += 1
-        else:
-            break
-
-    # check if end of a contig was reached
-    if pidx >= len(pred_features) and tidx < len(true_features):
-        return [], [tidx], pidx, tidx + 1
-    elif tidx >= len(true_features) and pidx < len(pred_features):
-        return [pidx], [], pidx + 1, tidx
-    elif pidx == len(pred_features) and tidx >= len(true_features):
-        return [], [], pidx, tidx
-
-    # check if the predicted and true genes overlap
-    # if they don't, we make a single group with the first one
-    if not overlaps(to_interval(pred_features[pidx]), to_interval(true_features[tidx])):
-        if pred_features[pidx].location.start < true_features[tidx].location.start:
-            return [pidx], [], pidx + 1, tidx
-        else:
-            return [], [tidx], pidx, tidx + 1
-
-    # Note: if there are genes in one list that span multiple genes in another those genes will appear more than once
-    # so the lengths of these two sets should be equal (except in the case of no overlaps above)
-    pidx_overlaps = []
-    tidx_overlaps = []
-
-    # now we have guaranteed that at least the first set overlap
-    # from here we walk along each list, checking for overlaps as we go
-    while pidx < len(pred_features) and tidx < len(true_features):
-
-        # ensure that strand and type of features to compare is consistent
-        if true_features[tidx].type != "gene" or true_features[tidx].location.strand != strand:
-            tidx += 1
-            continue
-
-        if pred_features[pidx].type != "gene" or pred_features[pidx].location.strand != strand:
-            pidx += 1
-            continue
-
-        p_interval = to_interval(pred_features[pidx])
-        t_interval = to_interval(true_features[tidx])
-
-        if overlaps(p_interval, t_interval):
-            pidx_overlaps.append(pidx)
-            tidx_overlaps.append(tidx)
-
-            # iterate the list that has the smaller end
-            if p_interval[1] < t_interval[1]:
-                pidx += 1
-            else:
-                tidx += 1
-        else:  # string of overlaps is over, exit loop
-            break
-
-    return pidx_overlaps, tidx_overlaps, max(pidx_overlaps[-1]+1, pidx), max(tidx_overlaps[-1]+1, tidx)
-
-
-# get whether a pair of gene intervals match on the cds level, intron level, and full level with tolerance
-# Note: tolerance is only applied to trancript start and end, and only on utr. CDS must be exact
 def do_genes_match(pred_gene: Intervals, true_gene: Intervals, tolerance: int = 0) -> tuple[bool, bool, bool]:
+    """
+        Get whether a pair of transcripts match on the cds level, intron level, and full length, with tolerance allowed
+        only for the transcript start/stop.
+
+        Args:
+            pred_gene: Intervals object for predicted transcript
+            true_gene: Intervals object for true transcript
+            tolerance: allowed tolerance on transcript start/stop to be considered a full match
+
+        Returns:
+            Boolean tuple for three levels of match
+            0 (cds): All CDS intervals match
+            1 (intron): All intron intervals match
+            2 (full): All exons match. First and last exon may match within the given tolerance
+        """
     if pred_gene.cds == true_gene.cds:
         if pred_gene.intron == true_gene.intron:
             # finally, we check if tsStart and tsStop are within allowed tolerance
@@ -329,7 +332,7 @@ def do_genes_match(pred_gene: Intervals, true_gene: Intervals, tolerance: int = 
 
             if (tl - tolerance <= pl <= tl + tolerance) and (tu - tolerance <= pu <= tu + tolerance):
                 return True, True, True
-            else: # transcription ends are off but everything else is good
+            else:  # transcription ends are off but everything else is good
                 return True, True, False
         else:
             # cds's equal, but utr's not
@@ -338,12 +341,32 @@ def do_genes_match(pred_gene: Intervals, true_gene: Intervals, tolerance: int = 
         # cds's not equal, genes not equal on any level
         return False, False, False
 
-# seqfeatures here are genes
-# TODO: precision and recall for exons and transcripts for ALL, not just longest
-def overlap_stats(pred_features: SeqFeature, true_features: SeqFeature, pindices: list[int], tindices: list[int], edge_tolerance: int = 0):
+
+def overlap_stats(pred_features: list[SeqFeature], true_features: list[SeqFeature], pindices: list[int],
+                  tindices: list[int],
+                  edge_tolerance: int = 0) -> Stats:
+    """
+        For a set of predicted and true genes, generate a set of stats at the transcript, exon, intron, and base levels.
+
+        Args:
+            pred_features: list of predicted genes as SeqFeature objects
+            true_featyres: list of true genes as SeqFeature objects
+            pindices: list of indices at which a predicted gene overlaps a true gene. If one predicted gene overlaps
+            multiple true genes, the index should appear multiple times
+            tindices: list of indices at which a true gene overlaps a predicted gene. If one true gene overlaps
+            multiple predicted genes, the index should appear multiple times
+            edge_tolerance: int specifying how far apart transcription start/stop site can be from true to be
+            considered equal
+
+        Returns:
+            Stats object
+        """
+
+    # hold transcripts as interval sets
     pred_intervals = {}
     true_intervals = {}
 
+    # keep track of the longest transcript for some of the stats
     pred_longest_index = {}
     true_longest_index = {}
 
@@ -356,7 +379,7 @@ def overlap_stats(pred_features: SeqFeature, true_features: SeqFeature, pindices
         true_intervals[tidx] = [transcript_to_intervals(transcript) for transcript in true_features[tidx].sub_features]
         true_longest_index[tidx] = get_longest_transcript_index(true_features[tidx])
 
-    if len(pindices) == 0: # only one true feature
+    if len(pindices) == 0:  # only one true feature, no predicted features
         return Stats(
             transcript_cds=ConfusionCounts(fn=1),
             transcript_intron=ConfusionCounts(fn=1),
@@ -369,11 +392,14 @@ def overlap_stats(pred_features: SeqFeature, true_features: SeqFeature, pindices
             exon_longest=ConfusionCounts(fn=len(true_intervals[tidx][true_longest_index[tidx]].exon)),
             intron_cds_longest=ConfusionCounts(fn=len(true_intervals[tidx][true_longest_index[tidx]].intron_cds)),
             intron_longest=ConfusionCounts(fn=len(true_intervals[tidx][true_longest_index[tidx]].intron)),
-            base_cds=ConfusionCounts(fn=sum([x.upper-x.lower for x in true_intervals[tidx][true_longest_index[tidx]].cds])),
-            base_utr=ConfusionCounts(fn=sum([x.upper-x.lower for x in true_intervals[tidx][true_longest_index[tidx]].utr])),
-            base_exon=ConfusionCounts(fn=sum([x.upper-x.lower for x in true_intervals[tidx][true_longest_index[tidx]].exon]))
+            base_cds=ConfusionCounts(
+                fn=sum([x.upper - x.lower for x in true_intervals[tidx][true_longest_index[tidx]].cds])),
+            base_utr=ConfusionCounts(
+                fn=sum([x.upper - x.lower for x in true_intervals[tidx][true_longest_index[tidx]].utr])),
+            base_exon=ConfusionCounts(
+                fn=sum([x.upper - x.lower for x in true_intervals[tidx][true_longest_index[tidx]].exon]))
         )
-    elif len(tindices) == 0:
+    elif len(tindices) == 0:  # only one predicted feature, no true features
         return Stats(
             transcript_cds=ConfusionCounts(fp=1),
             transcript_intron=ConfusionCounts(fp=1),
@@ -386,9 +412,12 @@ def overlap_stats(pred_features: SeqFeature, true_features: SeqFeature, pindices
             exon_longest=ConfusionCounts(fp=len(pred_intervals[pidx][pred_longest_index[pidx]].exon)),
             intron_cds_longest=ConfusionCounts(fp=len(pred_intervals[pidx][pred_longest_index[pidx]].intron_cds)),
             intron_longest=ConfusionCounts(fp=len(pred_intervals[pidx][pred_longest_index[pidx]].intron)),
-            base_cds=ConfusionCounts(fp=sum([x.upper - x.lower for x in pred_intervals[pidx][pred_longest_index[pidx]].cds])),
-            base_utr=ConfusionCounts(fp=sum([x.upper - x.lower for x in pred_intervals[pidx][pred_longest_index[pidx]].utr])),
-            base_exon=ConfusionCounts(fp=sum([x.upper - x.lower for x in pred_intervals[pidx][pred_longest_index[pidx]].exon]))
+            base_cds=ConfusionCounts(
+                fp=sum([x.upper - x.lower for x in pred_intervals[pidx][pred_longest_index[pidx]].cds])),
+            base_utr=ConfusionCounts(
+                fp=sum([x.upper - x.lower for x in pred_intervals[pidx][pred_longest_index[pidx]].utr])),
+            base_exon=ConfusionCounts(
+                fp=sum([x.upper - x.lower for x in pred_intervals[pidx][pred_longest_index[pidx]].exon]))
         )
 
     # base level metrics
@@ -404,12 +433,15 @@ def overlap_stats(pred_features: SeqFeature, true_features: SeqFeature, pindices
     for tidx in true_intervals.keys():
         true_cds_interval = true_cds_interval | true_intervals[tidx][true_longest_index[tidx]].cds
         true_utr_interval = true_utr_interval | true_intervals[tidx][true_longest_index[tidx]].utr
+
+    # exons are the union of cds and utr
     true_exon_interval = true_cds_interval | true_utr_interval
 
     base_cds = evaluate_bases(pred_cds_interval, true_cds_interval)
     base_utr = evaluate_bases(pred_utr_interval, true_utr_interval)
     base_exon = evaluate_bases(pred_exon_interval, true_exon_interval)
 
+    # transcript level metrics
     tcds_count = 0
     tintron_count = 0
     tfull_count = 0
@@ -417,6 +449,8 @@ def overlap_stats(pred_features: SeqFeature, true_features: SeqFeature, pindices
         match_results = [do_genes_match(pred_transcript, true_transcript, edge_tolerance)
                          for pred_transcript, true_transcript
                          in itertools.product(pred_intervals[pidx], true_intervals[tidx])]
+
+        # we consider it a match if *any* predicted transcript matches *any* true transcript
         tcds = any(result[0] for result in match_results)
         tintron = any(result[1] for result in match_results)
         tfull = any(result[2] for result in match_results)
@@ -425,20 +459,26 @@ def overlap_stats(pred_features: SeqFeature, true_features: SeqFeature, pindices
         tintron_count += tintron
         tfull_count += tfull
 
+    # collect the match counts into ConfusionCounts objects
     tcds = ConfusionCounts(tcds_count, len(pred_intervals) - tcds_count, len(true_intervals) - tcds_count)
     tintron = ConfusionCounts(tintron_count, len(pred_intervals) - tintron_count, len(true_intervals) - tintron_count)
     tfull = ConfusionCounts(tfull_count, len(pred_intervals) - tfull_count, len(true_intervals) - tfull_count)
 
+    # exon and intron level metrics
+    # TODO we could move building the intervals sets to a separate function for clarity and code reuse
+    # for all transcripts, use set to avoid double-counting exons/introns shared between transcripts
     pred_exon_cds_intervals = set()
     pred_exon_intervals = set()
     pred_intron_cds_intervals = set()
     pred_intron_intervals = set()
 
+    # if we just use the longest transcript we don't need to worry about that
     pred_exon_cds_intervals_longest = []
     pred_exon_intervals_longest = []
     pred_intron_cds_intervals_longest = []
     pred_intron_intervals_longest = []
-    
+
+    # build up the range sets
     for pname, pinterval in pred_intervals.items():
         for ptidx, ptranscript in enumerate(pinterval):
             if ptidx == pred_longest_index[pname]:
@@ -452,21 +492,25 @@ def overlap_stats(pred_features: SeqFeature, true_features: SeqFeature, pindices
             pred_intron_cds_intervals.update(interval_to_tuples(ptranscript.intron_cds))
             pred_intron_intervals.update(interval_to_tuples(ptranscript.intron))
 
+    # convert back to list for compatibility reasons
     pred_exon_cds_intervals = list(pred_exon_cds_intervals)
     pred_exon_intervals = list(pred_exon_intervals)
     pred_intron_cds_intervals = list(pred_intron_cds_intervals)
     pred_intron_intervals = list(pred_intron_intervals)
 
+    # for all transcripts, use set to avoid double-counting exons/introns shared between transcripts
     true_exon_cds_intervals = set()
     true_exon_intervals = set()
     true_intron_cds_intervals = set()
     true_intron_intervals = set()
 
+    # if we just use the longest transcript we don't need to worry about that
     true_exon_cds_intervals_longest = []
     true_exon_intervals_longest = []
     true_intron_cds_intervals_longest = []
     true_intron_intervals_longest = []
 
+    # build up the range sets
     for tname, tinterval in true_intervals.items():
         for ttidx, ttranscript in enumerate(tinterval):
             if ttidx == true_longest_index[tname]:
@@ -480,11 +524,13 @@ def overlap_stats(pred_features: SeqFeature, true_features: SeqFeature, pindices
             true_intron_cds_intervals.update(interval_to_tuples(ttranscript.intron_cds))
             true_intron_intervals.update(interval_to_tuples(ttranscript.intron))
 
+    # convert back to list for compatibility reasons
     true_exon_cds_intervals = list(true_exon_cds_intervals)
     true_exon_intervals = list(true_exon_intervals)
     true_intron_cds_intervals = list(true_intron_cds_intervals)
     true_intron_intervals = list(true_intron_intervals)
 
+    # evaluate all the intervals
     exon_cds_counts_longest = evaluate_intervals(pred_exon_cds_intervals_longest, true_exon_cds_intervals_longest)
     exon_counts_longest = evaluate_intervals(pred_exon_intervals_longest, true_exon_intervals_longest)
     intron_cds_counts_longest = evaluate_intervals(pred_intron_cds_intervals_longest, true_intron_cds_intervals_longest)
@@ -499,13 +545,29 @@ def overlap_stats(pred_features: SeqFeature, true_features: SeqFeature, pindices
                  intron_counts, exon_cds_counts_longest, exon_counts_longest, intron_cds_counts_longest,
                  intron_counts_longest, base_cds, base_utr, base_exon)
 
-
 def interval_to_tuples(interval: P.Interval):
+    """
+        Convert an integer object into a tuple
+
+        Args:
+            interval: Interval object
+
+        Returns:
+            tuple (start, end)
+        """
     return [(atom.lower, atom.upper) for atom in interval]
 
 
-# convert transcript SeqFeature into a set of intervals
 def transcript_to_intervals(transcript: SeqFeature):
+    """
+    Convert a SeqFeature of a transcript or mRNA into a set of intervals
+
+    Args:
+        transcript: SeqFeature for a transcript or mRNA
+
+    Returns:
+        Intervals object
+    """
     t_interval = P.closedopen(int(transcript.location.start), int(transcript.location.end))
 
     cds_interval = P.empty()
@@ -525,11 +587,20 @@ def transcript_to_intervals(transcript: SeqFeature):
                      intron_cds=intron_cds_interval, exon=exon_interval)
 
 
-# gets base-level confusion matrix over two sets of intervals
 def evaluate_bases(
         pred_intervals: P.Interval,
         true_intervals: P.Interval
 ) -> ConfusionCounts:
+    """
+    Calculate precision, recall and F1 score between predicted and true intervals with individual base as the unit.
+
+    Args:
+        pred_intervals: Interval object for predicted intervals
+        true_intervals: Integer object for true intervals
+
+    Returns:
+        ConfusionCounts object
+    """
     true_positives = int(np.sum([x.upper - x.lower for x in (true_intervals & pred_intervals)]))
     false_negatives = int(np.sum([x.upper - x.lower for x in (true_intervals - pred_intervals)]))
     false_positives = int(np.sum([x.upper - x.lower for x in (pred_intervals - true_intervals)]))
@@ -543,7 +614,7 @@ def evaluate_intervals(
         tolerance: int = 0
 ) -> ConfusionCounts:
     """
-    Calculate precision, recall and F1 score between predicted and true intervals.
+    Calculate true positive, false positive, and false negative counts between predicted and true intervals.
     
     Args:
         pred_intervals: List of (start, stop) tuples for predicted intervals
@@ -552,7 +623,7 @@ def evaluate_intervals(
                   to be considered equal. Default is 0 (exact match required).
     
     Returns:
-        Dictionary containing precision, recall, and f1_score
+        ConfusionCounts object
     """
     if not pred_intervals or not true_intervals:
         return ConfusionCounts(0, len(pred_intervals), len(true_intervals))
@@ -565,10 +636,5 @@ def evaluate_intervals(
     true_positives = _find_matches_within_tolerance(
         pred_starts, pred_stops, true_starts, true_stops, tolerance
     )
-
-    # # Calculate metrics
-    # precision = true_positives / len(pred_intervals)
-    # recall = true_positives / len(true_intervals)
-    # f1_score = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0.0
 
     return ConfusionCounts(true_positives, len(pred_intervals) - true_positives, len(true_intervals) - true_positives)
