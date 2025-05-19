@@ -4,6 +4,8 @@ import src.evaluation as evaluation
 import sys
 from Bio import SeqRecord, Seq
 import warnings
+
+
 def parse_args():
     """
         Parse script arguments
@@ -108,6 +110,15 @@ def calc_stats_for_contig_and_strand(pred_contig: SeqRecord, true_contig: SeqRec
     return master_stats
 
 
+def test_sorted(contig: SeqRecord) -> bool:
+
+    for idx in range(len(contig.features) - 1):
+        if contig.features[idx].location.start > contig.features[idx+1].location.start:
+            return False
+
+    return True
+
+
 def evaluate_gff(pred_handle, true_handle, edge_tolerance, ignore_unmatched=True) -> evaluation.Stats:
     """
     Calculate precision, recall, and F1 scores on various levels for two GFF files.
@@ -129,11 +140,17 @@ def evaluate_gff(pred_handle, true_handle, edge_tolerance, ignore_unmatched=True
         for contig in gff_parser.parse(pred_file):
             pred_contigs[contig.id] = contig
 
+            if not test_sorted(contig):
+                warnings.warn("Contig " + contig.id + " is not sorted by gene start. Please sort file.")
+                sys.exit()
+
     with open(true_handle) as true_file:
         for contig in gff_parser.parse(true_file):
             true_contigs[contig.id] = contig
 
-    # TODO check that GFFs are sorted
+            if not test_sorted(contig):
+                warnings.warn("Contig " + contig.id + " is not sorted by gene start. Please sort file.")
+                sys.exit()
 
     # check that contig names match
     pred_keys = set(pred_contigs.keys())
