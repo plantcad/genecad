@@ -29,48 +29,48 @@ def write_stats(master_stats: evaluation.Stats, out_handle: str):
         out_handle: file name
     """
     with open(out_handle, "w") as out_handle:
-        out_handle.write("summary of comparison\n")
+        out_handle.write("level\tprecision\trecall\tf1\n")
 
-        out_handle.write("\ntranscript_cds:\n")
+        out_handle.write("transcript_cds\t")
         out_handle.write(master_stats.transcript_cds.to_score_string())
 
-        out_handle.write("\ntranscript_intron:\n")
+        out_handle.write("transcript_intron\t")
         out_handle.write(master_stats.transcript_intron.to_score_string())
 
-        out_handle.write("\ntranscript:\n")
+        out_handle.write("transcript\t")
         out_handle.write(master_stats.transcript.to_score_string())
 
-        out_handle.write("\nexon_cds_longest_transcript_only:\n")
+        out_handle.write("exon_cds_longest_transcript_only\t")
         out_handle.write(master_stats.exon_cds_longest.to_score_string())
 
-        out_handle.write("\nexon_longest_transcript_only:\n")
+        out_handle.write("exon_longest_transcript_only\t")
         out_handle.write(master_stats.exon_longest.to_score_string())
 
-        out_handle.write("\nintron_cds_longest_transcript_only:\n")
+        out_handle.write("intron_cds_longest_transcript_only\t")
         out_handle.write(master_stats.intron_cds_longest.to_score_string())
 
-        out_handle.write("\nintron_longest_transcript_only:\n")
+        out_handle.write("intron_longest_transcript_only\t")
         out_handle.write(master_stats.intron_longest.to_score_string())
 
-        out_handle.write("\nexon_cds:\n")
+        out_handle.write("exon_cds\t")
         out_handle.write(master_stats.exon_cds.to_score_string())
 
-        out_handle.write("\nexon:\n")
+        out_handle.write("exon\t")
         out_handle.write(master_stats.exon.to_score_string())
 
-        out_handle.write("\nintron_cds:\n")
+        out_handle.write("intron_cds\t")
         out_handle.write(master_stats.intron_cds.to_score_string())
 
-        out_handle.write("\nintron:\n")
+        out_handle.write("intron\t")
         out_handle.write(master_stats.intron.to_score_string())
 
-        out_handle.write("\nbase_cds:\n")
+        out_handle.write("base_cds\t")
         out_handle.write(master_stats.base_cds.to_score_string())
 
-        out_handle.write("\nbase_utr:\n")
+        out_handle.write("base_utr\t")
         out_handle.write(master_stats.base_utr.to_score_string())
 
-        out_handle.write("\nbase_exon:\n")
+        out_handle.write("base_exon\t")
         out_handle.write(master_stats.base_exon.to_score_string())
 
 

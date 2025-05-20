@@ -49,8 +49,7 @@ class ConfusionCounts:
             return 0.0
 
     def to_score_string(self):
-        return "precision: " + str(self.precision()) + "\nrecall: " + str(self.recall()) + \
-               "\nf1_score: " + str(self.f1()) + "\n"
+        return str(self.precision()) + "\t" + str(self.recall()) + "\t" + str(self.f1()) + "\n"
 
 
 @dataclass
