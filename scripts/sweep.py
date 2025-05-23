@@ -20,6 +20,10 @@ def get_configurations() -> list[dict]:
         if arch in ['sequence-only', 'encoder-only', 'all'] and frzn == 'no':
             continue
 
+        # TODO: redefine in grid if this prevents divergence
+        if arch == 'all' and lr == 1e-4:
+            lr = 8e-5
+
         configs.append({
             'architecture': arch,
             'learning_rate': lr,

@@ -32,6 +32,7 @@ def parse_args() -> Args:
     parser.add_argument('--num-workers', type=int, default=16, help='Number of worker threads for data loading')
     parser.add_argument('--seed', type=int, default=42, help='random seed')
     parser.add_argument('--max-samples', type=int, default=None, help='Maximum number of samples to process (for testing)')
+    parser.add_argument('--shuffle', type=str, default='yes', choices=['yes', 'no'], help='Whether to shuffle the data during loading')
     return parser.parse_args()
 
 def worker_load_files(worker_id):
@@ -85,7 +86,7 @@ def load_data_from_keyfile(args: Args) -> tuple[MultisampleSequenceDatasetLabele
             windows = np.vstack((windows, windows_array))
         logger.info(f"[species_id={species_id}] Loaded {len(windows_array)} windows")
 
-        windows_df = pd.DataFrame(windows_array, columns=["species", "chrom_index", "start", "strand"])
+        windows_df = windows_to_dataframe(windows_array)
 
         # Define the primary chromosome id set and order that all other data must match
         chrom_id_list = species_config.sort_chromosome_ids_by_number([
@@ -175,10 +176,23 @@ def load_data_from_keyfile(args: Args) -> tuple[MultisampleSequenceDatasetLabele
             windows = windows[:args.max_samples]
             logger.info(f"Limiting to {args.max_samples} samples for testing")
     
+    # Convert to DataFrame for filtering
+    windows_df = windows_to_dataframe(windows)
+    
+    # Filter windows based on window size constraints
+    windows_df = filter_windows_by_size(windows_df, species_fastas, args.window_size)
+    
+    # Filter windows based on overlap constraints
+    # windows_df = filter_windows_by_overlap(windows_df, args.window_size)
+    
+    # Convert back to numpy array for train/val split
+    windows = windows_df[["species_index", "chrom_index", "start", "strand"]].values
+    
     # Split into train and validation sets
     num_val = int(windows.shape[0] * args.val_proportion)
-    np.random.shuffle(windows)
-    
+    rs = np.random.RandomState(args.seed)
+    rs.shuffle(windows)
+
     windows_val = windows[0:num_val]
     windows_train = windows[num_val:]
     
@@ -192,7 +206,7 @@ def load_data_from_keyfile(args: Args) -> tuple[MultisampleSequenceDatasetLabele
         species=species_ids,
         contig_indices=species_contigs,
         tokenizer=tokenizer,
-        max_length=args.window_size,
+        window_size=args.window_size,
     )
     
     valid_dataset = MultisampleSequenceDatasetLabeled(
@@ -202,7 +216,7 @@ def load_data_from_keyfile(args: Args) -> tuple[MultisampleSequenceDatasetLabele
         species=species_ids,
         contig_indices=species_contigs,
         tokenizer=tokenizer,
-        max_length=args.window_size,
+        window_size=args.window_size,
     )
     
     return train_dataset, valid_dataset
@@ -218,12 +232,17 @@ def convert_dataset(args: Args, dataset: TorchDataset, split: str) -> XarrayData
         return xr.open_zarr(dataset_path)
     
     # Create a dataloader for batch iteration
+    logger.info(f"Creating dataloader with shuffle={args.shuffle == 'yes'}, num_workers={args.num_workers}")
     dataloader = DataLoader(
         dataset, 
         batch_size=args.batch_size,  # Process one at a time for conversion
         num_workers=args.num_workers, 
-        worker_init_fn=worker_load_files if args.num_workers > 0 else None
+        worker_init_fn=worker_load_files if args.num_workers > 0 else None,
+        shuffle=args.shuffle == 'yes'
     )
+
+    # Set seed before batch loop
+    L.seed_everything(args.seed)
 
     # Convert batches to Xarray
     logger.info(f"Beginning conversion with batch_size={args.batch_size}, {dataset_path=}")
@@ -250,11 +269,164 @@ def convert_dataset(args: Args, dataset: TorchDataset, split: str) -> XarrayData
         )
     return xr.open_zarr(dataset_path)
 
+def log_filtering_summary(windows_df: pd.DataFrame, filtered_df: pd.DataFrame, filter_type: str) -> None:
+    """Log detailed filtering summary by species and chromosome.
+    
+    Args:
+        windows_df: Original DataFrame before filtering
+        filtered_df: DataFrame after filtering
+        filter_type: Description of the filter type for logging
+    """
+    total_windows = len(windows_df)
+    total_removed = total_windows - len(filtered_df)
+    
+    logger.info(f"{filter_type}: {total_removed}/{total_windows} windows removed ({100 * total_removed / total_windows:.1f}%)")
+    
+    if total_removed == 0:
+        return
+    
+    # Count windows by species/chromosome in original and filtered DataFrames
+    original_counts = windows_df.groupby(["species_index", "chrom_index"]).size()
+    filtered_counts = filtered_df.groupby(["species_index", "chrom_index"]).size() if len(filtered_df) > 0 else pd.Series(dtype=int)
+    
+    # Create summary statistics
+    window_stats = pd.DataFrame({
+        "total_windows": original_counts,
+        "kept_windows": filtered_counts
+    }).fillna(0).astype(int)
+    
+    window_stats["removed_windows"] = window_stats["total_windows"] - window_stats["kept_windows"]
+    window_stats["removal_rate"] = (window_stats["removed_windows"] / window_stats["total_windows"] * 100).round(1)
+    
+    logger.info(f"{filter_type} by location:")
+    for (species_idx, chrom_idx), stats in window_stats.iterrows():
+        removed = int(stats["removed_windows"])
+        total = int(stats["total_windows"])
+        rate = stats["removal_rate"]
+        logger.info(f"  Species {species_idx}, Chromosome {chrom_idx}: {removed}/{total} removed ({rate}%)")
+
+def windows_to_dataframe(windows: np.ndarray) -> pd.DataFrame:
+    """Convert windows array to DataFrame with proper column names."""
+    return pd.DataFrame(windows, columns=["species_index", "chrom_index", "start", "strand"])
+
+def filter_windows_by_size(windows_df: pd.DataFrame, species_fastas: list, window_size: int) -> pd.DataFrame:
+    """Filter windows to ensure they fit within sequence bounds.
+    
+    Args:
+        windows_df: DataFrame with columns [species_index, chrom_index, start, strand]
+        species_fastas: List of FASTA records per species
+        window_size: Size of sequence window
+    """
+    # Build sequence length lookup: (species_idx, chrom_idx) -> length
+    seq_lengths = {
+        (species_idx, chrom_idx): len(record.seq)
+        for species_idx, fasta_records in enumerate(species_fastas)
+        for chrom_idx, record in fasta_records.items()
+    }
+    
+    # Add sequence length and calculate window end position
+    windows_df = windows_df.copy()
+    windows_df["sequence_length"] = windows_df.apply(
+        lambda row: seq_lengths[(int(row["species_index"]), int(row["chrom_index"]))], 
+        axis=1
+    )
+    
+    # Validate that all sequence lengths were found
+    if windows_df["sequence_length"].isnull().any():
+        missing_keys = windows_df[windows_df["sequence_length"].isnull()][["species_index", "chrom_index"]].drop_duplicates()
+        raise ValueError(f"Missing sequence lengths for species/chromosome combinations: {missing_keys.values.tolist()}")
+    
+    windows_df["window_end"] = windows_df["start"] + window_size
+    
+    # Filter windows that fit within sequence bounds
+    valid_mask = windows_df["window_end"] <= windows_df["sequence_length"]
+    windows_filtered = windows_df[valid_mask].copy()
+    
+    # Log filtering summary
+    log_filtering_summary(windows_df, windows_filtered, "Window size filtering")
+    
+    return windows_filtered.drop(columns=["sequence_length", "window_end"])
+
+# @njit
+# def _filter_windows_by_overlap(windows: np.ndarray, window_size: int) -> np.ndarray:
+#     """JIT-compiled core logic for overlap filtering within a group."""
+#     if len(windows) <= 1:
+#         return np.ones(len(windows), dtype=np.bool_)
+    
+#     valid_mask = np.ones(len(windows), dtype=np.bool_)
+    
+#     # Sort by start position
+#     sort_order = np.argsort(windows[:, 2])  # Sort by start column
+    
+#     # Find overlapping windows
+#     for i in range(len(sort_order)):
+#         if not valid_mask[sort_order[i]]:
+#             continue
+            
+#         current_start = windows[sort_order[i], 2]
+#         current_end = current_start + window_size
+        
+#         # Check subsequent windows for overlap
+#         for j in range(i + 1, len(sort_order)):
+#             if not valid_mask[sort_order[j]]:
+#                 continue
+                
+#             next_start = windows[sort_order[j], 2]
+#             if next_start < current_end:
+#                 # Overlap detected - remove the later window
+#                 valid_mask[sort_order[j]] = False
+#             else:
+#                 # No more overlaps possible (sorted by start)
+#                 break
+    
+#     return valid_mask
+
+# def filter_windows_by_overlap(windows_df: pd.DataFrame, window_size: int) -> pd.DataFrame:
+#     """Filter windows to remove overlaps within each species/chromosome/strand group.
+    
+#     Args:
+#         windows_df: DataFrame with columns [species_index, chrom_index, start, strand]
+#         window_size: Size of sequence window
+#     """
+#     # Validate strand values are 0 or 1
+#     strands = windows_df["strand"].values
+#     if not np.all(np.isin(strands, [0, 1])):
+#         raise ValueError(f"Strand column must contain only 0 or 1, found: {np.unique(strands)}")
+    
+#     # Process each group (species, chromosome, strand) separately
+#     filtered_groups = []
+#     total_removed = 0
+    
+#     for (species_idx, chrom_idx, strand), group in windows_df.groupby(["species_index", "chrom_index", "strand"]):
+#         if len(group) == 0:
+#             continue
+            
+#         # Convert group to numpy array for JIT function
+#         group_array = group[["species_index", "chrom_index", "start", "strand"]].values
+        
+#         # Use JIT-compiled function for core logic
+#         valid_mask = _filter_windows_by_overlap(group_array, window_size)
+        
+#         # Apply mask to group
+#         filtered_group = group[valid_mask].copy()
+#         filtered_groups.append(filtered_group)
+        
+#         removed_count = len(group) - len(filtered_group)
+#         total_removed += removed_count
+    
+#     # Combine all filtered groups
+#     if filtered_groups:
+#         windows_filtered = pd.concat(filtered_groups, ignore_index=True)
+#     else:
+#         windows_filtered = windows_df.iloc[:0].copy()  # Empty DataFrame with same structure
+    
+#     # Log filtering summary
+#     log_filtering_summary(windows_df, windows_filtered, "Overlap filtering")
+    
+#     return windows_filtered
+
 def main() -> None:
     args = parse_args()
-
-    # Set random seed
-    L.seed_everything(args.seed)
     
     # Load data
     train_dataset, valid_dataset = load_data_from_keyfile(args)

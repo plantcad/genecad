@@ -187,14 +187,14 @@ class XarrayDataset(Dataset):
 class MultisampleSequenceDatasetLabeled(Dataset):
     """ DataSet class with for multiple genomes, with labels """
 
-    def __init__(self, sequences, label_files, windows, species, contig_indices, tokenizer, max_length):
+    def __init__(self, sequences, label_files, windows, species, contig_indices, tokenizer, window_size):
         self.species = species  # list of species names
         self.sequences = sequences  # list of lists of SeqRecords
         self.label_files = label_files  # list of file names for labels
         self.windows = windows  # array defining windows with columns: species index, chrom index, position, strand
         self.contig_indices = contig_indices  # list of lists of contig names
         self.tokenizer = tokenizer  # model tokenizer
-        self.max_length = max_length  # standard length of context windows
+        self.window_size = window_size  # standard length of context windows
         self.labels = None  # We will lazy-load these arrays
  
     # Each worker thread needs its own file handle for processing
@@ -220,28 +220,38 @@ class MultisampleSequenceDatasetLabeled(Dataset):
 
         if window_chrom >= len(self.sequences[window_species]):
             raise ValueError(f"Contig index {window_chrom} out of range for species {species_id}")
-        sequence = self.sequences[window_species][window_chrom][window_pos:window_pos + self.max_length].seq
-        sequence_len = len(str(sequence))
+        max_sequence_len = len(self.sequences[window_species][window_chrom].seq)
+        sequence = self.sequences[window_species][window_chrom][window_pos:window_pos + self.window_size].seq
 
+        # Ensure the window does not extend beyond the end of the sequence
+        if window_pos + self.window_size > max_sequence_len:
+            raise ValueError(
+                "Windows cannot extend beyond end of sequence; invalid window: "
+                f"species={species_id}, chrom={chrom_name}, pos={window_pos}, "
+                f"strand={window_strand}, window_size={self.window_size}, max_sequence_len={max_sequence_len}"
+            )
+        
         # Get the reverse complement if the strand is 1
         # for labels, [:, 1] are the labels for the reverse strand
         if (window_strand == 1):
             sequence = sequence.reverse_complement()
-            label = self.labels[window_species][chrom_name][window_pos:window_pos + self.max_length, 1][::-1].copy()
+            label = self.labels[window_species][chrom_name][window_pos:window_pos + self.window_size, 1][::-1].copy()
         else:
-            label = self.labels[window_species][chrom_name][window_pos:window_pos + self.max_length, 0].copy()
+            label = self.labels[window_species][chrom_name][window_pos:window_pos + self.window_size, 0].copy()
         assert label.ndim == 1
 
         # If label is less than length of sequence, pad with 0.
         # This happens because the labels are based on GFFs that do not span the entire sequence,
         # and label vectors based on those annotations are often only as long as the maximum annotation position.
         # Therefore, it can safely be assumed that any positions requiring padding are intergenic (class = 0)
-        if len(label) < sequence_len:
+        if len(label) < (sequence_len := len(sequence)):
             label = np.pad(label, (0, sequence_len - len(label)), mode='constant', constant_values=0)
             assert label.ndim == 1
 
         if len(sequence) != len(label):
-            raise ValueError(f"Sequence and label lengths do not match for {chrom_name} at {window_pos}: {len(sequence)} != {len(label)}")
+            raise ValueError(f"Sequence and label lengths do not match for {chrom_name} at {window_pos}: {len(sequence)=} != {len(label)=}")
+        if len(sequence) != self.window_size:
+            raise ValueError(f"Sequence length does not match window size for {chrom_name} at {window_pos}: {len(sequence)=} != {self.window_size=}")
 
         # Mask out labels where label == -1 (ambiguous)
         label_mask = label >= 0
@@ -253,7 +263,7 @@ class MultisampleSequenceDatasetLabeled(Dataset):
             return_tensors="pt",
             padding='max_length',
             truncation=True,
-            max_length=self.max_length,
+            max_length=self.window_size,
             return_attention_mask=True,
             return_token_type_ids=False
         )

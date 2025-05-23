@@ -92,7 +92,7 @@ def extract_gff_features(input_dir: str, species_ids: list[str], output_path: st
         df = pd.concat(dfs, ignore_index=True, axis=0)
         del dfs
         logger.info(f"Saving combined DataFrame with {df.shape[0]} rows to {output_path}; info:")
-        with pd.option_context('display.max_info_columns', None, 'display.max_info_rows', None):
+        with pd.option_context('display.max_info_columns', 1_000, 'display.max_info_rows', int(1e8)):
             df.info()
         df.to_parquet(output_path, index=False)
         del df
