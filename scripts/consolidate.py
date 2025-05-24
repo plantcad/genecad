@@ -9,6 +9,7 @@ import xarray as xr
 from tqdm import tqdm
 from Bio import SeqIO
 import lightning as L
+from numba import njit
 from torch.utils import data
 from argparse import Namespace as Args
 from torch.utils.data import DataLoader
@@ -33,6 +34,7 @@ def parse_args() -> Args:
     parser.add_argument('--seed', type=int, default=42, help='random seed')
     parser.add_argument('--max-samples', type=int, default=None, help='Maximum number of samples to process (for testing)')
     parser.add_argument('--shuffle', type=str, default='yes', choices=['yes', 'no'], help='Whether to shuffle the data during loading')
+    parser.add_argument('--remove-overlaps', type=str, default='no', choices=['yes', 'no'], help='Whether to remove overlapping windows')
     return parser.parse_args()
 
 def worker_load_files(worker_id):
@@ -183,7 +185,8 @@ def load_data_from_keyfile(args: Args) -> tuple[MultisampleSequenceDatasetLabele
     windows_df = filter_windows_by_size(windows_df, species_fastas, args.window_size)
     
     # Filter windows based on overlap constraints
-    # windows_df = filter_windows_by_overlap(windows_df, args.window_size)
+    if args.remove_overlaps == 'yes':
+        windows_df = filter_windows_by_overlap(windows_df, args.window_size)
     
     # Convert back to numpy array for train/val split
     windows = windows_df[["species_index", "chrom_index", "start", "strand"]].values
@@ -347,83 +350,83 @@ def filter_windows_by_size(windows_df: pd.DataFrame, species_fastas: list, windo
     
     return windows_filtered.drop(columns=["sequence_length", "window_end"])
 
-# @njit
-# def _filter_windows_by_overlap(windows: np.ndarray, window_size: int) -> np.ndarray:
-#     """JIT-compiled core logic for overlap filtering within a group."""
-#     if len(windows) <= 1:
-#         return np.ones(len(windows), dtype=np.bool_)
+@njit
+def _filter_windows_by_overlap(windows: np.ndarray, window_size: int) -> np.ndarray:
+    """JIT-compiled core logic for overlap filtering within a group."""
+    if len(windows) <= 1:
+        return np.ones(len(windows), dtype=np.bool_)
     
-#     valid_mask = np.ones(len(windows), dtype=np.bool_)
+    valid_mask = np.ones(len(windows), dtype=np.bool_)
     
-#     # Sort by start position
-#     sort_order = np.argsort(windows[:, 2])  # Sort by start column
+    # Sort by start position
+    sort_order = np.argsort(windows[:, 2])  # Sort by start column
     
-#     # Find overlapping windows
-#     for i in range(len(sort_order)):
-#         if not valid_mask[sort_order[i]]:
-#             continue
+    # Find overlapping windows
+    for i in range(len(sort_order)):
+        if not valid_mask[sort_order[i]]:
+            continue
             
-#         current_start = windows[sort_order[i], 2]
-#         current_end = current_start + window_size
+        current_start = windows[sort_order[i], 2]
+        current_end = current_start + window_size
         
-#         # Check subsequent windows for overlap
-#         for j in range(i + 1, len(sort_order)):
-#             if not valid_mask[sort_order[j]]:
-#                 continue
+        # Check subsequent windows for overlap
+        for j in range(i + 1, len(sort_order)):
+            if not valid_mask[sort_order[j]]:
+                continue
                 
-#             next_start = windows[sort_order[j], 2]
-#             if next_start < current_end:
-#                 # Overlap detected - remove the later window
-#                 valid_mask[sort_order[j]] = False
-#             else:
-#                 # No more overlaps possible (sorted by start)
-#                 break
+            next_start = windows[sort_order[j], 2]
+            if next_start < current_end:
+                # Overlap detected - remove the later window
+                valid_mask[sort_order[j]] = False
+            else:
+                # No more overlaps possible (sorted by start)
+                break
     
-#     return valid_mask
+    return valid_mask
 
-# def filter_windows_by_overlap(windows_df: pd.DataFrame, window_size: int) -> pd.DataFrame:
-#     """Filter windows to remove overlaps within each species/chromosome/strand group.
+def filter_windows_by_overlap(windows_df: pd.DataFrame, window_size: int) -> pd.DataFrame:
+    """Filter windows to remove overlaps within each species/chromosome/strand group.
     
-#     Args:
-#         windows_df: DataFrame with columns [species_index, chrom_index, start, strand]
-#         window_size: Size of sequence window
-#     """
-#     # Validate strand values are 0 or 1
-#     strands = windows_df["strand"].values
-#     if not np.all(np.isin(strands, [0, 1])):
-#         raise ValueError(f"Strand column must contain only 0 or 1, found: {np.unique(strands)}")
+    Args:
+        windows_df: DataFrame with columns [species_index, chrom_index, start, strand]
+        window_size: Size of sequence window
+    """
+    # Validate strand values are 0 or 1
+    strands = windows_df["strand"].values
+    if not np.all(np.isin(strands, [0, 1])):
+        raise ValueError(f"Strand column must contain only 0 or 1, found: {np.unique(strands)}")
     
-#     # Process each group (species, chromosome, strand) separately
-#     filtered_groups = []
-#     total_removed = 0
+    # Process each group (species, chromosome, strand) separately
+    filtered_groups = []
+    total_removed = 0
     
-#     for (species_idx, chrom_idx, strand), group in windows_df.groupby(["species_index", "chrom_index", "strand"]):
-#         if len(group) == 0:
-#             continue
+    for (species_idx, chrom_idx, strand), group in windows_df.groupby(["species_index", "chrom_index", "strand"]):
+        if len(group) == 0:
+            continue
             
-#         # Convert group to numpy array for JIT function
-#         group_array = group[["species_index", "chrom_index", "start", "strand"]].values
+        # Convert group to numpy array for JIT function
+        group_array = group[["species_index", "chrom_index", "start", "strand"]].values
         
-#         # Use JIT-compiled function for core logic
-#         valid_mask = _filter_windows_by_overlap(group_array, window_size)
+        # Use JIT-compiled function for core logic
+        valid_mask = _filter_windows_by_overlap(group_array, window_size)
         
-#         # Apply mask to group
-#         filtered_group = group[valid_mask].copy()
-#         filtered_groups.append(filtered_group)
+        # Apply mask to group
+        filtered_group = group[valid_mask].copy()
+        filtered_groups.append(filtered_group)
         
-#         removed_count = len(group) - len(filtered_group)
-#         total_removed += removed_count
+        removed_count = len(group) - len(filtered_group)
+        total_removed += removed_count
     
-#     # Combine all filtered groups
-#     if filtered_groups:
-#         windows_filtered = pd.concat(filtered_groups, ignore_index=True)
-#     else:
-#         windows_filtered = windows_df.iloc[:0].copy()  # Empty DataFrame with same structure
+    # Combine all filtered groups
+    if filtered_groups:
+        windows_filtered = pd.concat(filtered_groups, ignore_index=True)
+    else:
+        windows_filtered = windows_df.iloc[:0].copy()  # Empty DataFrame with same structure
     
-#     # Log filtering summary
-#     log_filtering_summary(windows_df, windows_filtered, "Overlap filtering")
+    # Log filtering summary
+    log_filtering_summary(windows_df, windows_filtered, "Overlap filtering")
     
-#     return windows_filtered
+    return windows_filtered
 
 def main() -> None:
     args = parse_args()

@@ -409,16 +409,7 @@ class GeneClassifier(L.LightningModule):
             if self.base_encoder is None:
                 base_embedding = inputs_embeds
             else:
-                # base_embedding = self.base_encoder(input_ids=input_ids).last_hidden_state
-                # <experiment> TODO: remove
-                # Run PCv2 on 3 8192bp windows and stitch results together over 16384bp span
-                assert input_ids.shape[1] == 16384
-                base_embedding = torch.cat([
-                    self.base_encoder(input_ids=input_ids[:, 0:8192]).last_hidden_state[:, 0:6144],
-                    self.base_encoder(input_ids=input_ids[:, 4096:12288]).last_hidden_state[:, 2048:6144],
-                    self.base_encoder(input_ids=input_ids[:, 8192:16384]).last_hidden_state[:, 2048:8192],
-                ], dim=1)
-                # </experiment>
+                base_embedding = self.base_encoder(input_ids=input_ids).last_hidden_state
             assert base_embedding.shape == (B, S, self.config.base_encoder_dim)
 
         # Project base embedding
