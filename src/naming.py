@@ -1,4 +1,7 @@
 
+from src.config import SpeciesConfig
+
+
 def normalize_species_identifier(species_name: str) -> str:
     """Convert full species name to a normalized identifier format.
     
@@ -23,3 +26,12 @@ def normalize_species_identifier(species_name: str) -> str:
         return ""
     parts = [p.strip() for p in species_name.split() if p.strip()]
     return parts[0] if len(parts) == 1 else f"{parts[0][0].upper()}{parts[1].lower()}"
+
+
+def get_species_data_dir(config: SpeciesConfig) -> str:
+    if config.split.use_in_training:
+        return "training_data"
+    elif config.split.use_in_evaluation:
+        return "testing_data"
+    else:
+        raise ValueError(f"Invalid split configuration for species {config.id}")

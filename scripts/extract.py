@@ -3,6 +3,7 @@ import gzip
 import argparse
 import logging
 from typing import Any
+from src.naming import get_species_data_dir
 import xarray as xr
 import pandas as pd
 import numpy as np
@@ -513,16 +514,8 @@ def validate_configs(data_dir: str) -> None:
         species_id = config.id
         logger.info(f"[species={species_id}] Validating configuration")
         
-        # Determine which data directory to use based on split config
-        if config.split.use_in_training or config.split.use_in_validation:
-            species_data_dir = os.path.join(data_dir, "training_data")
-            logger.info(f"[species={species_id}] Using training data directory: {species_data_dir}")
-        elif config.split.use_in_evaluation:
-            species_data_dir = os.path.join(data_dir, "testing_data")
-            logger.info(f"[species={species_id}] Using testing data directory: {species_data_dir}")
-        else:
-            logger.warning(f"[species={species_id}] Species not used in any split, skipping")
-            continue
+        species_data_dir = get_species_data_dir(config)
+        logger.info(f"[species={species_id}] Using  data directory: {species_data_dir}")
         
         # Get expected chromosome map
         chrom_map = config.chromosome_map

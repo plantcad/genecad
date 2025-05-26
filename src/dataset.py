@@ -6,7 +6,6 @@ Most subclasses require fasta sequence and a tokenizer as input, though some tak
 import torch
 from torch.utils.data import Dataset
 import numpy as np
-import math
 import xarray as xr
 import zarr
 import glob

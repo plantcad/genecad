@@ -456,7 +456,10 @@ def detect_intervals(args: Args):
     logger.info(f"Detecting intervals from rank files in {args.input_dir} and saving to {args.output}")
 
     # Merge predictions from all ranks
-    sequence_predictions = merge_prediction_datasets(args.input_dir)
+    sequence_predictions = merge_prediction_datasets(
+        args.input_dir,
+        drop_variables=["token_predictions", "token_logits"],
+    )
 
     logger.info("Detecting intervals")
     interval_predictions = _detect_intervals(

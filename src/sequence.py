@@ -559,7 +559,7 @@ def create_sequence_windows(
     
     Parameters
     ----------
-        sequence: The sequence to create windows for
+        sequence: The sequence to create windows for of shape (N, ...)
         window_size: The size of the windows to create
         stride: The stride of the windows
         pad_value: The value to pad the sequence with
@@ -567,17 +567,19 @@ def create_sequence_windows(
     Returns
     -------
         windows: An iterator of tuples containing:
-            - chunk: The sequence chunk
+            - chunk: Sequence chunk of shape (window_size, ...) from first dimension slice of `sequence`;
+                this length is guaranteed for all chunks through the use of padding where necessary
             - local_window: The local window boundaries describing what part of `chunk` is valid; e.g.
                 all `chunk[slice(*local_window)]` subarrays are collectively exhaustive and mutually exclusive
                 across the original sequence
             - global_window: The global window boundaries describing what part of `chunk` is valid
                 within the context of the entire sequence; e.g. `sequence[slice(*global_window)]` is
-                equivalent to `chunk[slice(*local_window)]`.
+                equivalent to `chunk[slice(*local_window)]`
     """
     bounds = (0, len(sequence))
     pad = (window_size - len(sequence) % window_size) % window_size
-    padded_sequence = np.pad(sequence, (0, pad), mode='constant', constant_values=pad_value)
+    pad_width = [(0, pad)] + [(0, 0) for _ in range(sequence.ndim - 1)] # pad the first dimension only
+    padded_sequence = np.pad(sequence, pad_width=pad_width, mode='constant', constant_values=pad_value)
     windows = create_prediction_windows(len(padded_sequence), window_size, stride)
     global_bounds, local_bounds = windows.T[:2], windows.T[2:]
     local_bounds = np.clip(local_bounds, *bounds)
