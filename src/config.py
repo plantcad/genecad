@@ -141,6 +141,7 @@ def get_species_configs(species_ids: Sequence[str] | None = None) -> list[Specie
 def get_species_config(species_id: str) -> SpeciesConfig:
     return SPECIES_CONFIGS[species_id]
 
+
 # -------------------------------------------------------------------------------------------------
 # Evaluation species configurations
 # -------------------------------------------------------------------------------------------------

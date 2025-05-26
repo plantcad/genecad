@@ -1,3 +1,4 @@
+import math
 import time
 import pandas as pd
 from typing import Literal, Optional
@@ -623,3 +624,410 @@ def create_crf(config: GeneClassifierConfig, initialize: bool = True, freeze: bo
             crf.start_transitions.requires_grad = False
             crf.end_transitions.requires_grad = False
     return crf
+
+
+# -------------------------------------------------------------------------
+# UNET
+# -------------------------------------------------------------------------
+# From: https://huggingface.co/InstaDeepAI/segment_nt_multi_species/blob/main/modeling_segment_nt.py
+
+class DownSample1D(nn.Module):
+    """
+    1D-UNET downsampling block with dilated convolutions for large receptive fields.
+    """
+
+    def __init__(
+        self,
+        input_channels: int,
+        output_channels: int,
+        num_layers: int = 2,
+        base_dilation: int = 1,
+    ):
+        """
+        Args:
+            input_channels: number of input channels
+            output_channels: number of output channels
+            num_layers: number of convolution layers
+            base_dilation: base dilation rate (will be multiplied by 2^layer_idx)
+        """
+        
+        super().__init__()
+        
+        # Create layers with exponentially increasing dilation
+        conv_layers = []
+        for i in range(num_layers):
+            dilation = base_dilation * (2 ** i)
+            in_channels = input_channels if i == 0 else output_channels
+            
+            conv_layers.append(nn.Conv1d(
+                in_channels=in_channels,
+                out_channels=output_channels,
+                kernel_size=3,
+                stride=1,
+                dilation=dilation,
+                padding=dilation,  # padding = dilation for same output size
+            ))
+        
+        self.conv_layers = nn.ModuleList(conv_layers)
+        self.avg_pool = nn.AvgPool1d(kernel_size=2, stride=2, padding=0)
+        self.activation_fn = nn.SiLU()
+
+    def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        for conv_layer in self.conv_layers:
+            x = self.activation_fn(conv_layer(x))
+
+        hidden = x
+        x = self.avg_pool(hidden)
+        return x, hidden
+
+
+
+class UpSample1D(nn.Module):
+    """
+    1D-UNET upsampling block with dilated convolutions for large receptive fields.
+    """
+
+    def __init__(
+        self,
+        input_channels: int,
+        output_channels: int,
+        num_layers: int = 2,
+        base_dilation: int = 1,
+    ):
+        """
+        Args:
+            input_channels: number of input channels
+            output_channels: number of output channels
+            num_layers: number of convolution layers
+            base_dilation: base dilation rate (will be multiplied by 2^layer_idx)
+        """
+        super().__init__()
+
+        # Create layers with exponentially increasing dilation
+        conv_layers = []
+        for i in range(num_layers):
+            dilation = base_dilation * (2 ** i)
+            in_channels = input_channels if i == 0 else output_channels
+            
+            conv_layers.append(nn.Conv1d(
+                in_channels=in_channels,
+                out_channels=output_channels,
+                kernel_size=3,
+                stride=1,
+                dilation=dilation,
+                padding=dilation,  # padding = dilation for same output size
+            ))
+
+        self.conv_layers = nn.ModuleList(conv_layers)
+        self._activation_fn = nn.SiLU()
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        for conv_layer in self.conv_layers:
+            x = self._activation_fn(conv_layer(x))      
+
+        # Upsample by 2x using nearest neighbor interpolation
+        x = nn.functional.interpolate(x, size=2 * x.shape[2], mode="nearest")
+        return x
+
+
+
+class FinalConv1D(nn.Module):
+    """
+    Final output block with dilated convolutions.
+    """
+
+    def __init__(
+        self,
+        input_channels: int,
+        output_channels: int,
+        num_layers: int = 2,
+        base_dilation: int = 1,
+    ):
+        """
+        Args:
+            input_channels: number of input channels
+            output_channels: number of output channels
+            num_layers: number of convolution layers
+            base_dilation: base dilation rate (will be multiplied by 2^layer_idx)
+        """
+        super().__init__()
+
+        # Create layers with exponentially increasing dilation
+        conv_layers = []
+        for i in range(num_layers):
+            dilation = base_dilation * (2 ** i)
+            
+            # Fix channel logic: all intermediate layers use input_channels, only final layer outputs output_channels
+            if i == 0:
+                in_channels = input_channels
+            else:
+                in_channels = input_channels  # All intermediate layers use input_channels
+                
+            if i == num_layers - 1:
+                out_channels = output_channels  # Only final layer outputs to output_channels
+            else:
+                out_channels = input_channels  # All intermediate layers output input_channels
+            
+            conv_layers.append(nn.Conv1d(
+                in_channels=in_channels,
+                out_channels=out_channels,
+                kernel_size=3,
+                stride=1,
+                dilation=dilation,
+                padding=dilation,  # padding = dilation for same output size
+            ))
+
+        self.conv_layers = nn.ModuleList(conv_layers)
+        self._activation_fn = nn.SiLU()
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        for i, conv_layer in enumerate(self.conv_layers):
+            x = conv_layer(x)
+            if i < len(self.conv_layers) - 1:
+                x = self._activation_fn(x)
+        return x
+
+
+class UNET1DSegmentationHead(nn.Module):
+    """
+    1D-UNET with dilated convolutions for large receptive fields (64k+ bp).
+    
+    This version uses exponentially increasing dilation rates to achieve
+    very large receptive fields without significantly increasing parameters.
+    """
+
+    def __init__(
+        self,
+        embed_dim: int,
+        num_classes: int,
+        output_channels_list: tuple[int, ...] = (64, 128, 256, 512, 1024),
+        num_conv_layers_per_block: int = 2,
+        base_dilation: int = 1,
+        identity_init: bool = True,
+    ):
+        """
+        Args:
+            embed_dim: input embedding dimension
+            num_classes: number of classes to segment
+            output_channels_list: list of the number of output channels at each level
+            num_conv_layers_per_block: number of convolution layers per block
+            base_dilation: base dilation rate for the first level
+            identity_init: if True, initialize to act as identity function (output zeros)
+        """
+        super().__init__()
+        self._num_pooling_layers = len(output_channels_list)
+        self._base_dilation = base_dilation
+        self._num_conv_layers_per_block = num_conv_layers_per_block
+        self._identity_init = identity_init
+
+        downsample_input_channels_list = (embed_dim, ) + output_channels_list[:-1]
+        output_channels_list_reversed = tuple(reversed(output_channels_list))
+        upsample_input_channels_list = (output_channels_list[-1],) + output_channels_list_reversed
+        upsample_output_channels_list = output_channels_list_reversed
+
+        # Create downsampling blocks with increasing dilation rates
+        self._downsample_blocks = nn.ModuleList([
+            DownSample1D(
+                input_channels=input_channels,
+                output_channels=output_channels,
+                num_layers=num_conv_layers_per_block,
+                base_dilation=base_dilation * (2 ** (2 * i)),  # Exponential increase per level
+            )
+            for i, (input_channels, output_channels) in enumerate(
+                zip(downsample_input_channels_list, output_channels_list)
+            )
+        ])
+
+        # Create upsampling blocks with decreasing dilation rates
+        self._upsample_blocks = nn.ModuleList([
+            UpSample1D(
+                input_channels=input_channels,
+                output_channels=output_channels,
+                num_layers=num_conv_layers_per_block,
+                base_dilation=base_dilation * (2 ** (2 * (len(output_channels_list) - 1 - i))),
+            )
+            for i, (input_channels, output_channels) in enumerate(
+                zip(upsample_input_channels_list, upsample_output_channels_list)
+            )
+        ])
+
+        # Final block with moderate dilation
+        self.final_block = FinalConv1D(
+            input_channels=output_channels_list[0],
+            output_channels=num_classes,
+            num_layers=num_conv_layers_per_block,
+            base_dilation=base_dilation,
+        )
+        
+        # Initialize for identity function if requested
+        if identity_init:
+            self._initialize_as_identity()
+
+    def _initialize_as_identity(self):
+        """Initialize the network to act as identity function (output zeros).
+        
+        Only zeros the final layer to ensure the network outputs zeros initially,
+        while keeping proper initialization for all other layers to enable gradient flow.
+        """
+        # Zero out only the final layer weights and biases so it outputs zeros
+        # All other layers keep their default initialization for proper gradient flow
+        with torch.no_grad():
+            # Only zero the last convolution layer in the final block
+            final_layer = self.final_block.conv_layers[-1]
+            if hasattr(final_layer, 'weight') and final_layer.weight is not None:
+                nn.init.zeros_(final_layer.weight)
+            if hasattr(final_layer, 'bias') and final_layer.bias is not None:
+                nn.init.zeros_(final_layer.bias)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if (length := x.shape[2]) % (divisor := 2**self._num_pooling_layers):
+            raise ValueError(
+                f"Input length ({length}) must be divisible by 2 to the power of"
+                f" number of pooling layers ({divisor})."
+            )
+
+        hiddens = []
+        for downsample_block in self._downsample_blocks:
+            x, hidden = downsample_block(x)
+            hiddens.append(hidden)
+
+        for upsample_block, hidden in zip(self._upsample_blocks, reversed(hiddens)):
+            x = upsample_block(x) + hidden
+            
+        x = self.final_block(x)
+        return x
+
+    def calculate_receptive_field(self) -> int:
+        """
+        Calculate the theoretical receptive field of this network.
+        
+        Returns:
+            int: Receptive field in base pairs
+        """
+        receptive_field = 1
+        
+        # Encoder path - calculate actual dilation values used
+        for i in range(self._num_pooling_layers):
+            # Get the base dilation for this level (matches constructor)
+            level_base_dilation = self._base_dilation * (2 ** (2 * i))
+            
+            # Each layer in this level adds to receptive field
+            for layer_idx in range(self._num_conv_layers_per_block):
+                dilation = level_base_dilation * (2 ** layer_idx)
+                receptive_field += (3 - 1) * dilation  # kernel_size = 3
+            
+            # Pooling doubles the effective receptive field
+            receptive_field *= 2
+        
+        # Decoder path - calculate actual dilation values used
+        for i in range(self._num_pooling_layers):
+            # Get the base dilation for this level (matches constructor)
+            level_base_dilation = self._base_dilation * (2 ** (2 * (self._num_pooling_layers - 1 - i)))
+            
+            # Each layer in this level adds to receptive field
+            for layer_idx in range(self._num_conv_layers_per_block):
+                dilation = level_base_dilation * (2 ** layer_idx)
+                receptive_field += (3 - 1) * dilation
+        
+        # Final block
+        for layer_idx in range(self._num_conv_layers_per_block):
+            dilation = self._base_dilation * (2 ** layer_idx)
+            receptive_field += (3 - 1) * dilation
+            
+        return receptive_field
+
+
+class UnetClassifier(L.LightningModule):
+    """Lightning module for UNET with large receptive field using dilated convolutions."""
+    
+    def __init__(
+        self, 
+        embed_dim: int, 
+        num_classes: int, 
+        learning_rate: float = 1e-4,
+        output_channels_list: tuple[int, ...] = (64, 128, 256, 512, 1024),
+        num_conv_layers_per_block: int = 2,
+        base_dilation: int = 1,
+        identity_init: bool = False,
+        residual_mode: bool = True,
+    ):
+        super().__init__()
+        self.model = UNET1DSegmentationHead(
+            embed_dim=embed_dim,
+            num_classes=num_classes,
+            output_channels_list=output_channels_list,
+            num_conv_layers_per_block=num_conv_layers_per_block,
+            base_dilation=base_dilation,
+            identity_init=identity_init,
+        )
+        
+        self.criterion = nn.CrossEntropyLoss()
+        self.learning_rate = learning_rate
+        self.num_classes = num_classes
+        self.residual_mode = residual_mode
+        self.save_hyperparameters()
+        
+        # Log the receptive field
+        rf = self.model.calculate_receptive_field()
+        print(f"Dilated U-Net receptive field: {rf:,} bp")
+        print(f"Identity initialization: {identity_init}")
+        print(f"Residual mode: {residual_mode}")
+            
+    def forward(self, x: Tensor) -> Tensor:
+        if x.ndim != 3:
+            raise ValueError(f"Expected 3D tensor, got {x.ndim}D tensor; shape={x.shape}")
+        B, S, C = x.shape # (batch, sequence, class)
+        if C != self.num_classes:
+            raise ValueError(f"Expected {self.num_classes} classes in last dim, got {C}; shape={x.shape}")
+        
+        # Transpose for U-Net to (batch, class, sequence) and then back to (batch, sequence, class)
+        corrections = self.model(x.transpose(1, 2)).transpose(1, 2)
+        assert corrections.shape == (B, S, C)
+        
+        if self.residual_mode:
+            # Add corrections to input logits (residual connection)
+            output = x + corrections
+        else:
+            # Replace input logits with corrections
+            output = corrections
+            
+        return output
+    
+    def _compute_loss(self, batch: dict[str, Tensor]) -> Tensor:
+        """Compute cross entropy loss from batch data."""
+        input_logits = batch['input_logits']
+        target_labels = batch['target_labels']
+        if (actual := target_labels.shape) != (expected := input_logits.shape):
+            raise ValueError(f"Expected {expected} shape for target labels, got {actual}")
+        target_class = target_labels.argmax(dim=-1)
+        output_logits = self(input_logits)
+        loss = self.criterion(output_logits.reshape(-1, self.num_classes), target_class.view(-1))
+        return loss
+    
+    def training_step(self, batch, batch_idx):
+        loss = self._compute_loss(batch)
+        self.log('train/loss', loss, prog_bar=True)
+        return loss
+    
+    def validation_step(self, batch, batch_idx):
+        loss = self._compute_loss(batch)
+        self.log('val/loss', loss, prog_bar=True, sync_dist=True)
+        return loss
+    
+    def configure_optimizers(self):
+        optimizer = torch.optim.Adam(self.parameters(), lr=self.learning_rate)
+        expected_steps = self.trainer.estimated_stepping_batches
+        warmup_steps = math.ceil(expected_steps * .05)
+
+        def lr_lambda(step: int) -> float:
+            if step < warmup_steps:
+                # Linear warmup
+                return step / warmup_steps
+            else:
+                # Cosine annealing
+                progress = (step - warmup_steps) / (expected_steps - warmup_steps)
+                return 0.5 * (1.0 + math.cos(progress * math.pi))
+
+        scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
+        scheduler_config = dict(scheduler=scheduler, interval="step", frequency=1)
+        return [optimizer], [scheduler_config]

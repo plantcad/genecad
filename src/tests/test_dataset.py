@@ -79,3 +79,36 @@ def test_xarray_dataset():
         # Test with max_sample_count
         limited_dataset = XarrayDataset(os.path.join(tmpdir, "dataset_*.zarr"), max_sample_count=5)
         assert len(limited_dataset) == 5
+
+def test_single_zarr_full_chunk():
+    """Test XarrayDataset with single zarr file and chunk size equal to sequence dimension."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # Create single test dataset
+        original_ds = xr.Dataset(
+            data_vars={
+                "input_ids": (["sample", "sequence"], np.arange(12).reshape(3, 4)),
+                "embeddings": (["sample", "sequence"], np.arange(12, 24).reshape(3, 4)),
+            },
+            coords={
+                "sample": np.arange(3),
+                "sequence": np.arange(4),
+            }
+        )
+        zarr_path = os.path.join(tmpdir, "single_dataset.zarr")
+        original_ds.to_zarr(zarr_path, zarr_format=2)
+        
+        # Create dataset with chunk size equal to sequence dimension
+        dataset = XarrayDataset(zarr_path, chunk_size=4)
+        
+        # Verify single chunk contains entire original dataset
+        with patch.object(XarrayDataset, '_load_chunk', wraps=dataset._load_chunk) as mock_load_chunk:
+            # Access all samples
+            for idx in range(len(dataset)):
+                item = dataset[idx]
+                # Verify data matches original
+                assert np.array_equal(item["input_ids"], original_ds.input_ids.values[idx])
+                assert np.array_equal(item["embeddings"], original_ds.embeddings.values[idx])
+            
+            # Verify only one chunk was loaded
+            assert mock_load_chunk.call_count == 1
+            assert mock_load_chunk.call_args_list[0][0] == (0, 0)  # dataset_idx=0, local_dataset_idx=0
