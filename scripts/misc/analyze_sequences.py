@@ -1,14 +1,11 @@
-
-
-import xarray as xr
 import numpy as np
+import xarray as xr
 import pandas as pd
 from src.dataset import open_datatree
-from IPython.display import display
 
 xr.set_options(display_width=128)
-tap = lambda df, fn: fn(df) or df
-leaves = lambda dt: [dt.ds for dt in dt.subtree if dt.is_leaf]
+tap = lambda df, fn: fn(df) or df # noqa: E731
+leaves = lambda dt: [dt.ds for dt in dt.subtree if dt.is_leaf] # noqa: E731
 
 
 dt = open_datatree("/scratch/10459/eczech/data/dna/plant_caduceus_genome_annotation_task/pipeline/transform/sequences.zarr", consolidated=False)
@@ -354,7 +351,7 @@ dt["Athaliana"]["Chr1"]["sequence_tokens"]
     .unstack("strand") # Unstack from series to dataframe
     # Show tokens as a table with corresponding strand and position
     .pipe(tap, lambda data_frame: print(data_frame.to_markdown(index=True)))
-);
+); # noqa: E703
 # <xarray.DataArray 'sequence_tokens' (strand: 2, pos: 11)> Size: 22B
 # [22 values with dtype=|S1]
 # Coordinates:
@@ -496,7 +493,7 @@ dt["Athaliana"]["Chr1"]["sequence_tokens"]
 #           Chr9        20.7%  20.2%  15.6%  15.5%  8.0%  7.5%  6.2%  6.1%  <.1%  <.1%                                          
 
 
-from numba import njit
+from numba import njit # noqa: E402
 
 @njit
 def cumulative_sum(values: np.ndarray) -> np.ndarray:

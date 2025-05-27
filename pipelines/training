@@ -1,0 +1,124 @@
+# Directory variables
+RAW_DIR ?= $(WORK)/data/dna/plant_caduceus_genome_annotation_task/data_share_20250326/training_data
+DATA_DIR ?= $(WORK)/data/dna/plant_caduceus_genome_annotation_task/data_share_20250326
+PIPE_DIR ?= $(SCRATCH)/data/dna/plant_caduceus_genome_annotation_task/pipeline
+MODEL_PATH ?= kuleshov-group/compo-cad2-l24-dna-chtk-c8192-v2-b2-NpnkD-ba240000
+
+SPECIES_IDS ?= Acomosus Acoerulea Aofficinalis Bplatyphylla Bvulgaris Cillinoinensis Athaliana Osativa
+RUN_VERSION ?= v0.4
+EXTRACT_DIR ?= $(PIPE_DIR)/extract/$(RUN_VERSION)
+TRANSFORM_DIR ?= $(PIPE_DIR)/transform/$(RUN_VERSION)
+PREP_DIR ?= $(PIPE_DIR)/prep/$(RUN_VERSION)
+
+# Define all target to run the complete pipeline
+.PHONY: all clean extract-gff extract-fasta filter stack labels sequences npz keyfile help validate-configs consolidate summarize
+
+all: $(PREP_DIR)/sequence_dataset
+
+# Help target
+help:
+	@echo "Available targets:"
+	@echo "  extract-gff      - Extract GFF features from input files as Pandas/Parquet"
+	@echo "  extract-fasta    - Extract and tokenize FASTA sequences as Xarray/Zarr"
+	@echo "  filter           - Filter features based on a number of criteria (canonical transcripts, overlapping genes, incomplete annotations, etc.)"
+	@echo "  stack            - Convert features from hierarchical gene/transcript/feature format to a long, stacked format" 
+	@echo "  labels           - Create labels from features"
+	@echo "  sequences        - Create sequence dataset by joining labels and tokens"
+	@echo "  npz              - Extract NPZ formatted labels"
+	@echo "  keyfile          - Generate a keyfile mapping species to their label, fasta, and window files"
+	@echo "  consolidate      - Consolidate sequences into the final training and validation dataset format"
+	@echo "  validate-configs - Validate sequence IDs in GFF and FASTA files match configs"
+	@echo "  summarize        - Generate summary statistics and visualizations of training data"
+	@echo "  all              - Run complete pipeline"
+	@echo "  clean            - Remove all generated files"
+
+# Extract gff features
+$(EXTRACT_DIR)/raw_features.parquet: 
+	@mkdir -p $(EXTRACT_DIR)
+	python scripts/extract.py extract_gff_features \
+	  --input-dir $(RAW_DIR)/gff \
+	  --species-id $(SPECIES_IDS) \
+	  --output $@
+
+# Extract fasta sequences
+$(EXTRACT_DIR)/tokens.zarr: 
+	@mkdir -p $(EXTRACT_DIR)
+	python scripts/extract.py extract_fasta_sequences \
+	  --input-dir $(RAW_DIR)/fasta \
+	  --species-id $(SPECIES_IDS) \
+	  --tokenizer-path $(MODEL_PATH) \
+	  --output $@
+
+# Filter gff features
+$(TRANSFORM_DIR)/features.parquet $(TRANSFORM_DIR)/filters.parquet: $(EXTRACT_DIR)/raw_features.parquet
+	@mkdir -p $(TRANSFORM_DIR)
+	python scripts/transform.py filter_features \
+	  --input $< \
+	  --output-features $(TRANSFORM_DIR)/features.parquet \
+	  --output-filters $(TRANSFORM_DIR)/filters.parquet
+
+# Stack gff features
+$(TRANSFORM_DIR)/intervals.parquet: $(TRANSFORM_DIR)/features.parquet
+	python scripts/transform.py stack_features \
+	  --input $< \
+	  --output $@
+
+# Create labels
+$(TRANSFORM_DIR)/labels.zarr: $(TRANSFORM_DIR)/intervals.parquet $(TRANSFORM_DIR)/filters.parquet
+	python scripts/transform.py create_labels \
+	  --input-features $(TRANSFORM_DIR)/intervals.parquet \
+	  --input-filters $(TRANSFORM_DIR)/filters.parquet \
+	  --output $@
+
+# Create sequence dataset (labels and tokens)
+$(TRANSFORM_DIR)/sequences.zarr: $(TRANSFORM_DIR)/labels.zarr $(EXTRACT_DIR)/tokens.zarr
+	python scripts/transform.py create_sequence_dataset \
+	  --input-labels $(TRANSFORM_DIR)/labels.zarr \
+	  --input-tokens $(EXTRACT_DIR)/tokens.zarr \
+	  --output-path $@
+
+# Extract NPZ labels
+$(TRANSFORM_DIR)/npz: $(TRANSFORM_DIR)/labels.zarr
+	python scripts/transform.py extract_npz_labels \
+	  --input $< \
+	  --output $@
+
+# Generate keyfile
+$(TRANSFORM_DIR)/keyfile.tsv: $(TRANSFORM_DIR)/npz
+	python scripts/transform.py extract_npz_keyfile \
+	  --species-id $(SPECIES_IDS) \
+	  --labels-dir $(TRANSFORM_DIR)/npz \
+	  --data-dir $(RAW_DIR) \
+	  --output $@
+
+# Consolidate all data into final training and validation datasets
+# - With ~526k windows now, .005 validation proportion is ~2630 samples/windows (21M tokens)
+$(PREP_DIR)/sequence_dataset: $(TRANSFORM_DIR)/keyfile.tsv
+	python scripts/consolidate.py \
+	  --model-path $(MODEL_PATH) \
+	  --keyfile $(TRANSFORM_DIR)/keyfile.tsv \
+	  --output-dir $(PREP_DIR)/sequence_dataset \
+	  --num-workers 48 --batch-size 512 --val-proportion 0.02
+
+# Summarize training data
+summarize: $(PREP_DIR)/sequence_dataset
+	python scripts/misc/summarize_training_data.py \
+	  --input $(PREP_DIR)/sequence_dataset/train.zarr
+
+
+# Clean target
+clean:
+	rm -rf $(EXTRACT_DIR) $(TRANSFORM_DIR) $(PREP_DIR)
+
+extract-gff: $(EXTRACT_DIR)/raw_features.parquet
+extract-fasta: $(EXTRACT_DIR)/tokens.zarr
+filter: $(TRANSFORM_DIR)/features.parquet
+stack: $(TRANSFORM_DIR)/intervals.parquet
+labels: $(TRANSFORM_DIR)/labels.zarr
+sequences: $(TRANSFORM_DIR)/sequences.zarr
+npz: $(TRANSFORM_DIR)/npz 
+keyfile: $(TRANSFORM_DIR)/keyfile.tsv
+consolidate: $(PREP_DIR)/sequence_dataset
+validate-configs:
+	python scripts/extract.py validate_configs \
+	  --data-dir $(DATA_DIR) 

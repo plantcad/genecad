@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 import os
-import subprocess
-import pandas as pd
 import argparse
 import shutil
-import numpy as np
+import subprocess
 import matplotlib.pyplot as plt
+import pandas as pd
 
 def parse_args():
     parser = argparse.ArgumentParser(
@@ -116,7 +115,7 @@ def run_grid_search(args):
     merged_df.to_csv(os.path.join(results_dir, "merged_results.csv"), index=False)
     
     print(f"\nGrid search complete. Results saved to {os.path.join(results_dir, 'merged_results.csv')}")
-    print(f"Use the 'visualize' command to analyze the results.")
+    print("Use the 'visualize' command to analyze the results.")
     
     return merged_df
 

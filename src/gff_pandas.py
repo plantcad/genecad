@@ -11,6 +11,7 @@ https://github.com/the-sequence-ontology/specifications/blob/master/gff3.md
 """
 
 import pandas as pd
+import gzip
 from pathlib import Path
 
 PathLike = str | Path
@@ -88,7 +89,7 @@ def read_gff3_header(path: PathLike) -> str:
     Parameters
     ----------
     path : PathLike
-        Path to the GFF3 file
+        Path to the GFF3 file (can be gzipped with .gz extension)
         
     Returns
     -------
@@ -103,8 +104,9 @@ def read_gff3_header(path: PathLike) -> str:
     ##source-version example 1.0
     # This is a test file
     """
-    with open(path) as f:
-        return ''.join([line for line in f.readlines() if line.startswith("#")])
+    path = Path(path)
+    with (gzip.open(path, 'rt') if path.suffix == '.gz' else open(path)) as f:
+        return ''.join(line for line in f if line.startswith("#"))
     
 def parse_gff3_attributes(df: pd.DataFrame) -> pd.DataFrame:
     """Parse GFF3 attribute strings into a DataFrame of key-value pairs.
