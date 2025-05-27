@@ -13,6 +13,8 @@ import os
 from matplotlib.patches import Rectangle
 import random
 
+from src.config import WINDOW_SIZE
+
 # Color scheme for different features
 COLOR_SCHEME = {
     'Transcript': '#2ecc71',  # Green
@@ -152,7 +154,7 @@ def main():
                       help="Directory to save visualizations")
     parser.add_argument("--num-samples", type=int, default=5,
                       help="Number of random samples to visualize")
-    parser.add_argument("--window-size", type=int, default=8192,
+    parser.add_argument("--window-size", type=int, default=WINDOW_SIZE,
                       help="Number of base pairs to show in each visualization")
     parser.add_argument("--class-labels", nargs="+", default=["Transcript", "CDS", "Intron"],
                       help="List of class labels in order")

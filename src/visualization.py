@@ -231,7 +231,7 @@ def visualize_token_predictions(
     ax2.set_ylabel('Logit Value')
     
     # Third subplot: mask visualization
-    im3 = ax3.imshow(example_mask.reshape(1, -1), aspect='auto', cmap='binary', vmin=0, vmax=1, interpolation="none")
+    ax3.imshow(example_mask.reshape(1, -1), aspect='auto', cmap='binary', vmin=0, vmax=1, interpolation="none")
     ax3.set_title('Valid Mask')
     ax3.set_yticks([])
     ax3.set_xlabel('Position')
@@ -290,7 +290,7 @@ def visualize_entity_predictions(
     ax3 = fig.add_subplot(gs[3, 0])  # Mask
     cax = fig.add_subplot(gs[:, 1])  # Colorbar axis
 
-    entity_names = module.config.token_entity_names
+    entity_names = module.config.token_entity_names_with_background()
     num_entities = len(entity_names)
 
     def to_heatmap(labels: np.ndarray) -> np.ndarray:
@@ -308,19 +308,19 @@ def visualize_entity_predictions(
     
     # Second subplot: predicted entity labels
     cmap = plt.cm.get_cmap('tab10', num_entities)
-    im1 = ax1.imshow(to_heatmap(example_pred), aspect='auto', cmap=cmap, vmin=0, vmax=module.num_core_entities, interpolation="none")
+    ax1.imshow(to_heatmap(example_pred), aspect='auto', cmap=cmap, vmin=0, vmax=module.num_core_entities, interpolation="none")
     ax1.set_title('Predicted Entity Labels')
     ax1.set_yticks(np.arange(num_entities))
     ax1.set_yticklabels(entity_names)
     
     # Third subplot: true entity labels
-    im2 = ax2.imshow(to_heatmap(example_true), aspect='auto', cmap=cmap, vmin=0, vmax=module.num_core_entities, interpolation="none")
+    ax2.imshow(to_heatmap(example_true), aspect='auto', cmap=cmap, vmin=0, vmax=module.num_core_entities, interpolation="none")
     ax2.set_title('True Entity Labels')
     ax2.set_yticks(np.arange(num_entities))
     ax2.set_yticklabels(entity_names)
     
     # Fourth subplot: mask
-    im3 = ax3.imshow(example_mask.reshape(1, -1), aspect='auto', cmap='binary', vmin=0, vmax=1, interpolation="none")
+    ax3.imshow(example_mask.reshape(1, -1), aspect='auto', cmap='binary', vmin=0, vmax=1, interpolation="none")
     ax3.set_title('Valid Mask')
     ax3.set_yticks([])
     ax3.set_xlabel('Position')
@@ -567,116 +567,3 @@ def visualize_entity_interval_performance(
                 '.table tr:hover{background-color:#f5f5f5;}</style></head><body>')
         f.write(styled_table.to_html())
         f.write('</body></html>')
-
-# -------------------------------------------------------------------------
-# CRF Visualization
-# -------------------------------------------------------------------------
-
-def visualize_crf_transitions(
-    module: L.LightningModule,
-    prefix: str,
-    batch_idx: int | None = None,
-) -> None:
-    """
-    Visualize the CRF transition matrix as a heatmap with class names on margins.
-    
-    Parameters
-    ----------
-    module : L.LightningModule
-        Lightning module containing the CRF
-    prefix : str
-        Prefix for the file name (usually 'train', 'val', etc.)
-    batch_idx : int, optional
-        Batch index, by default None
-    """
-    # Check if module has a CRF
-    if not hasattr(module, 'crf') or module.crf is None:
-        logger.warning("Module does not have a CRF component, skipping transition visualization")
-        return
-    
-    # Get transitions matrix (convert from log space to probability space)
-    transitions = module.crf.transitions.detach().cpu().numpy()
-    transitions_prob = np.exp(transitions)
-    
-    # Create figure with proper layout for the heatmap
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(20, 10))
-    
-    # Plot the heatmap with linear scale
-    im1 = ax1.imshow(transitions_prob, cmap='viridis', interpolation='nearest')
-    
-    # Add color bar for linear scale
-    cbar1 = plt.colorbar(im1, ax=ax1)
-    cbar1.set_label('Transition Probability (Linear Scale)')
-    
-    # Plot the heatmap with log scale
-    # Add a small epsilon to avoid log(0)
-    epsilon = 1e-10
-    log_transitions = np.log10(transitions_prob + epsilon)
-    im2 = ax2.imshow(log_transitions, cmap='viridis', interpolation='nearest')
-    
-    # Add color bar for log scale
-    cbar2 = plt.colorbar(im2, ax=ax2)
-    cbar2.set_label('Transition Probability (Log10 Scale)')
-    
-    # Get class names for axes
-    num_labels = transitions.shape[0]
-    class_names = [module.config.token_label_name(i) for i in range(num_labels)]
-    
-    # Set ticks and labels for both plots
-    for ax in (ax1, ax2):
-        ax.set_xticks(np.arange(num_labels))
-        ax.set_yticks(np.arange(num_labels))
-        ax.set_xticklabels(class_names, rotation=45, ha='right')
-        ax.set_yticklabels(class_names)
-    
-    # Add titles and labels
-    ax1.set_title(f'CRF Transition Probabilities (Linear Scale)')
-    ax2.set_title(f'CRF Transition Probabilities (Log Scale)')
-    ax1.set_xlabel('To Label')
-    ax1.set_ylabel('From Label')
-    ax2.set_xlabel('To Label')
-    
-    # Loop over data dimensions and create text annotations for probabilities
-    for i in range(num_labels):
-        for j in range(num_labels):
-            text = ax1.text(j, i, f'{transitions_prob[i, j]:.2f}',
-                            ha="center", va="center", color="w" if transitions_prob[i, j] > 0.5 else "black",
-                            fontsize=8)
-            text = ax2.text(j, i, f'{log_transitions[i, j]:.2f}',
-                            ha="center", va="center", color="w" if log_transitions[i, j] > -0.3 else "black",
-                            fontsize=8)
-    
-    # Add overall title
-    fig.suptitle(f'CRF Transition Matrix (Step {module.global_step})', fontsize=16)
-    
-    # Adjust layout to make room for the labels
-    plt.tight_layout(rect=[0, 0, 1, 0.96])
-    
-    # Save the figure
-    path = get_visualization_path(prefix, "crf_transitions", module.global_step, batch_idx)
-    logger.info(f"Saving CRF transitions visualization to {path}")
-    plt.savefig(path)
-    plt.close()
-
-def visualize_crf(
-    module: L.LightningModule,
-    prefix: str,
-    batch_idx: int | None = None,
-) -> None:
-    """
-    Wrapper function to visualize CRF transitions.
-    
-    Parameters
-    ----------
-    module : L.LightningModule
-        Lightning module containing the CRF
-    prefix : str
-        Prefix for the file name (usually 'train', 'val', etc.)
-    batch_idx : int, optional
-        Batch index, by default None
-    """
-    attempt_visualization(visualize_crf_transitions)(
-        module, 
-        prefix=prefix, 
-        batch_idx=batch_idx,
-    )

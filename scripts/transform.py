@@ -1,14 +1,14 @@
-import glob 
 import pandas as pd
 import argparse
-import logging
 import os
+import logging
 from dataclasses import dataclass, asdict
 from src.dataset import DEFAULT_SEQUENCE_CHUNK_SIZE, open_datatree, set_dimension_chunks
-from src.sequence import N_BILUO_TAGS, find_overlapping_intervals, convert_entity_intervals_to_labels, convert_to_biluo_labels, convert_biluo_entity_names
+from src.sequence import find_overlapping_intervals, convert_entity_intervals_to_labels, convert_to_biluo_labels, convert_biluo_entity_names
 import numpy as np
 from src.schema import FeatureLevel, RegionType, FeatureType, SentinelType
 import xarray as xr
+from src.config import get_species_config, get_species_configs
 
 logger = logging.getLogger(__name__)
 
@@ -603,7 +603,7 @@ def create_sequence_dataset(input_labels_path: str, input_tokens_path: str, outp
     shared_groups = label_groups & token_groups
     
     # Identify shared groups and summarize those dropped
-    logger.info(f"Group statistics:")
+    logger.info("Group statistics:")
     logger.info(f"  Labels dataset: {len(label_groups)} groups")
     logger.info(f"  Tokens dataset: {len(token_groups)} groups")
     logger.info(f"  Shared groups: {len(shared_groups)} groups")
@@ -614,45 +614,61 @@ def create_sequence_dataset(input_labels_path: str, input_tokens_path: str, outp
         logger.warning(f"  Dropping {len(dropped_label_groups)} unshared groups from labels dataset: {dropped_label_groups}")
     if dropped_token_groups:
         logger.warning(f"  Dropping {len(dropped_token_groups)} unshared groups from tokens dataset: {dropped_token_groups}")
-    labels = labels.filter(lambda n: n.path in shared_groups)
-    assert len(labels.groups) == len(shared_groups)
-    tokens = tokens.filter(lambda n: n.path in shared_groups)
-    assert len(tokens.groups) == len(shared_groups)
-
-    # Ensure that sequence tokens always span a longer range than labels
-    def get_seq_dim(ds: xr.Dataset) -> pd.Series:
-        return pd.Series({ds.path: ds.sizes["sequence"] for ds in ds.subtree if ds.is_leaf})
-    sequence_dims = (
-        pd.concat([
-            get_seq_dim(tokens).rename("tokens"), 
-            get_seq_dim(labels).rename("labels")
-        ], axis=1)
-    )
-    if (sequence_dims["tokens"] < sequence_dims["labels"]).any():
-        invalid_groups = sequence_dims[sequence_dims["tokens"] < sequence_dims["labels"]]
-        raise ValueError(f"Found groups with more labels than tokens in sequence dimension: {invalid_groups}")
     
-    # Left join labels (i.e. annotations) to tokens, which will truncate the sequence tokens
-    # that extend beyond label tokens
-    logger.info("Merging labels and tokens")
-    def merge(*datasets):
-        return xr.merge(datasets, combine_attrs="drop_conflicts", join="left")
-    sequences = xr.map_over_datasets(merge, labels, tokens)
-    sequence_dims["result"] = get_seq_dim(sequences)
-    assert (sequence_dims["result"] == sequence_dims["labels"]).all()
-    logger.info(f"Merged sequence dataset:\n{sequences}")
-    logger.info(f"Sequence dimension summary:\n{sequence_dims}")
+    # Process each shared group individually
+    for group in shared_groups:
+        # Extract species_id and chrom_id from group path (handle leading /)
+        parts = group.strip('/').split('/')
+        if len(parts) > 2:
+            raise ValueError(f"Found invalid group: {group}")
+        if len(parts) < 2:
+            continue
+        species_id, chrom_id = parts
+        logger.info(f"Processing group: {species_id}/{chrom_id}")
+        
+        # Get datasets for this group
+        label_ds = labels[group].ds
+        token_ds = tokens[group].ds
+        
+        # Ensure that sequence tokens always span a longer range than labels
+        if token_ds.sizes["sequence"] < label_ds.sizes["sequence"]:
+            raise ValueError(f"Group {group}: More labels ({label_ds.sizes['sequence']}) than tokens ({token_ds.sizes['sequence']})")
+        
+        # Left join labels to tokens
+        merged_ds = xr.merge([label_ds, token_ds], combine_attrs="drop_conflicts", join="left")
+        assert merged_ds.sizes["sequence"] == label_ds.sizes["sequence"]
+        
+        # Write the merged dataset to its group
+        output_group = f"{species_id}/{chrom_id}"
+        logger.info(f"  Saving to {output_path}/{output_group}")
+        merged_ds.to_zarr(output_path, group=output_group, zarr_format=2, consolidated=True, mode="w")
     
-    # Write the merged DataTree to disk
-    logger.info(f"Writing merged dataset to {output_path}")
-    sequences.to_zarr(output_path, zarr_format=2, consolidated=True)
-    
+    # Load and print the full datatree
+    dt = open_datatree(output_path)
+    logger.info(f"Final data tree:\n{dt}")
     logger.info("Done")
 
 
 # -------------------------------------------------------------------------------------------------
 # Write npz labels
 # -------------------------------------------------------------------------------------------------
+
+def get_npz_label_path(species_id: str, directory: str) -> str:
+    """Get the path to the NPZ labels file for a species.
+    
+    Parameters
+    ----------
+    species_id : str
+        Species ID
+    directory : str
+        Directory containing NPZ files
+        
+    Returns
+    -------
+    str
+        Path to NPZ labels file
+    """
+    return os.path.join(directory, f"{species_id}_biluo_4class_labels.npz")
 
 def extract_npz_labels(input_path: str, output_path: str, species_ids: list[str] = None) -> None:
     """Extract npz labels from Xarray DataTree.
@@ -671,89 +687,194 @@ def extract_npz_labels(input_path: str, output_path: str, species_ids: list[str]
     datasets = [dt.ds for dt in dt.subtree if dt.is_leaf]
     logger.info(f"Loaded {len(datasets)} sequence datasets")
 
-    results = {}
-    for i, ds in enumerate(datasets):
+    # Group datasets by species to process one species at a time
+    species_datasets = {}
+    for ds in datasets:
         species_id = ds.attrs["species_id"]
-        chrom_id = ds.attrs["chromosome_id"]
-        
-        # Skip if species_id not in the specified list
         if species_ids and species_id not in species_ids:
-            logger.info(f"  Skipping {species_id}/{chrom_id} (not in specified species list)")
             continue
-            
-        logger.info(f"  Processing {species_id}/{chrom_id}")
-
-        # Extract non-overlapping, low-level features
-        intron_labels = ds.region_labels.sel(region='intron').rename(region="feature")
-        exonic_labels = ds.feature_labels.sel(feature=['five_prime_utr', 'cds', 'three_prime_utr'])
-        assert intron_labels.dtype == exonic_labels.dtype
-        labels = xr.concat([intron_labels, exonic_labels], dim='feature').astype(intron_labels.dtype)
-        if labels.sum(dim='feature').max().item() > 1:
-            raise ValueError("Found multiple features assigned to the same genomic coordinate")
-        
-        # Aggregate low-level features into masked, 1D labels
-        label_classes = labels.feature.values.tolist()
-        labels = xr.where(labels.any(dim='feature'), labels.argmax(dim='feature') + 1, 0)
-        # mask=True ==> keep label, so all must be True across multiple masks
-        mask = ds.label_masks.astype(bool).all(dim='reason') 
-        labels = xr.where(mask, labels, -1)
-        assert labels.dims == ('strand', 'sequence')
-
-        # Convert to biluo labels (flip negative strand for labelling)
-        tags_list = []
-        for strand_name in labels.strand.values:
-            values = labels.sel(strand=strand_name, drop=True).values
-            if strand_name == 'positive':
-                tags = convert_to_biluo_labels(values)
-            else:
-                tags = np.flip(convert_to_biluo_labels(np.flip(values)))
-            tags_list.append(tags)
-        tags = xr.DataArray(
-            np.stack(tags_list), 
-            dims=['strand', 'sequence'],
-            coords={'strand': labels.strand.values, 'sequence': labels.sequence.values}
-        )
-        assert tags.shape == labels.shape
-
-        # Show tag frequency
-        tag_classes = convert_biluo_entity_names(label_classes)
-        tag_class_map = {
-            **SentinelType.index_to_value(), 
-            **pd.Series(tag_classes, index=np.arange(len(tag_classes)) + 1).to_dict()
-        }
-        if i == 0:
-            logger.info(f"  Tag class map:\n{tag_class_map}")
-        tag_frequency = tags.to_series().map(tag_class_map).fillna("Unknown").value_counts()
-        logger.info(f"  Tag frequency:\n{tag_frequency}")
-
-        # Store result
-        if species_id not in results:
-            results[species_id] = {}
-        result = (
-            # Label npz convention is forward strand in first column
-            # with shape (chrom_length, 2)
-            tags.transpose("sequence", "strand")
-            .sel(strand=["positive", "negative"])
-            .to_numpy().astype(np.int8)
-        )
-        assert result.ndim == 2
-        assert result.shape[1] == 2
-        assert result.dtype == np.int8
-        results[species_id][chrom_id] = result
-
-    # Save one file per species
-    logger.info("Saving npz files")
+        if species_id not in species_datasets:
+            species_datasets[species_id] = []
+        species_datasets[species_id].append(ds)
+    
+    # Create output directory
     os.makedirs(output_path, exist_ok=True)
-    for species_id, chromosomes in results.items():
-        file_num = {"Osativa": "323", "Athaliana": "447"}.get(species_id, "0")
-        path = os.path.join(output_path, f"{species_id}_{file_num}_biluo_4class_labels.npz")
-        logger.info(f"  Saving {path}")
-        # Sort chromosomes by name given names Chr1, Chr2, etc.;
-        # insertion order is an essential assumption of the downstream data loader
-        chrom_ids = sorted(chromosomes.keys(), key=lambda x: int(x.replace('Chr', '')))
-        np.savez(path, **{k: chromosomes[k] for k in chrom_ids})
+    
+    # Process each species separately
+    for species_id, species_ds_list in species_datasets.items():
+        logger.info(f"Processing species: {species_id}")
+        species_config = get_species_config(species_id)
+        chromosomes = {}
+        
+        # Process all datasets for this species
+        for i, ds in enumerate(species_ds_list):
+            chrom_id = ds.attrs["chromosome_id"]
+            chrom_num = species_config.get_chromosome_number(chrom_id)
+            if chrom_num is None:
+                raise ValueError(f"Unable to determine chromosome number for id {chrom_id}")
+                
+            logger.info(f"[species={species_id}] Processing {chrom_id=} ({chrom_num=})")
+
+            # Extract non-overlapping, low-level features
+            intron_labels = ds.region_labels.sel(region='intron').rename(region="feature")
+            exonic_labels = ds.feature_labels.sel(feature=['five_prime_utr', 'cds', 'three_prime_utr'])
+            assert intron_labels.dtype == exonic_labels.dtype
+            labels = xr.concat([intron_labels, exonic_labels], dim='feature').astype(intron_labels.dtype)
+            if labels.sum(dim='feature').max().item() > 1:
+                raise ValueError("Found multiple features assigned to the same genomic coordinate")
+            
+            # Aggregate low-level features into masked, 1D labels
+            label_classes = labels.feature.values.tolist()
+            labels = xr.where(labels.any(dim='feature'), labels.argmax(dim='feature') + 1, 0)
+            # mask=True ==> keep label, so all must be True across multiple masks
+            mask = ds.label_masks.astype(bool).all(dim='reason') 
+            labels = xr.where(mask, labels, -1)
+            assert labels.dims == ('strand', 'sequence')
+
+            # Convert to biluo labels (flip negative strand for labelling)
+            tags_list = []
+            for strand_name in labels.strand.values:
+                values = labels.sel(strand=strand_name, drop=True).values
+                if strand_name == 'positive':
+                    tags = convert_to_biluo_labels(values)
+                else:
+                    tags = np.flip(convert_to_biluo_labels(np.flip(values)))
+                tags_list.append(tags)
+            tags = xr.DataArray(
+                np.stack(tags_list), 
+                dims=['strand', 'sequence'],
+                coords={'strand': labels.strand.values, 'sequence': labels.sequence.values}
+            )
+            assert tags.shape == labels.shape
+
+            # Show tag frequency
+            tag_classes = convert_biluo_entity_names(label_classes)
+            tag_class_map = {
+                **{i: str(v) for i, v in SentinelType.index_to_value().items()}, 
+                **pd.Series(tag_classes, index=np.arange(len(tag_classes)) + 1).to_dict()
+            }
+            if i == 0:
+                logger.info(f"  Tag class map:\n{tag_class_map}")
+            tag_frequency = tags.to_series().map(tag_class_map).fillna("Unknown").value_counts()
+            logger.info(f"  Tag frequency:\n{tag_frequency}")
+
+            # Store result
+            result = (
+                # Label npz convention is forward strand in first column
+                # with shape (chrom_length, 2)
+                tags.transpose("sequence", "strand")
+                .sel(strand=["positive", "negative"])
+                .to_numpy().astype(np.int8)
+            )
+            assert result.ndim == 2
+            assert result.shape[1] == 2
+            assert result.dtype == np.int8
+            chromosomes[chrom_id] = dict(chrom_num=chrom_num, result=result)
+        
+        # Save this species to disk and free memory
+        npz_path = get_npz_label_path(species_id, output_path)
+        logger.info(f"[species={species_id}] Saving {npz_path}")
+        # Sort chromosomes names by numerical order rather than lexical order;
+        # insertion order is an essential assumption of the current downstream data loader
+        chrom_ids = sorted(chromosomes.keys(), key=lambda x: chromosomes[x]["chrom_num"])
+        np.savez(npz_path, **{k: chromosomes[k]["result"] for k in chrom_ids})
 
     logger.info("Done")
+
+
+# -------------------------------------------------------------------------------------------------
+# Extract npz keyfile
+# -------------------------------------------------------------------------------------------------
+
+def extract_npz_keyfile(output_path: str, species_ids: list[str], labels_dir: str, data_dir: str) -> None:
+    """Generate a keyfile mapping species to their label, fasta, and window files.
+    
+    Parameters
+    ----------
+    output_path : str
+        Path to save the output TSV keyfile
+    species_ids : list[str]
+        List of species IDs to include in the keyfile
+    labels_dir : str
+        Path to directory containing NPZ label files
+    data_dir : str
+        Path to raw data directory with subdirs like "fasta" and "windows"
+    """
+    # Get configurations for all specified species
+    all_configs = get_species_configs(species_ids)
+    
+    # Filter for training species only
+    training_configs = [
+        config for config in all_configs
+        if config.split.use_in_training
+    ]
+    
+    if not training_configs:
+        raise ValueError(f"No training species found among the {len(all_configs)} provided species.")
+    logger.info(f"Found {len(training_configs)} training species:")
+    for config in training_configs:
+        logger.info(f"  {config.id}")
+
+    # Collect data for each species
+    data = []
+    for config in training_configs:
+        species_id = config.id
+        
+        # Check if windows.filename exists
+        if not config.windows or not config.windows.filename:
+            raise ValueError(f"Species {species_id} is missing required windows.filename configuration")
+            
+        # Construct paths
+        labels_path = get_npz_label_path(species_id, labels_dir)
+        fasta_path = os.path.join(data_dir, "fasta", config.fasta.filename)
+        windows_path = os.path.join(data_dir, "windows", config.windows.filename)
+        
+        # Check if all paths exist
+        paths_exist = True
+        if not os.path.exists(labels_path):
+            logger.warning(f"Labels path does not exist for {species_id}: {labels_path}")
+            paths_exist = False
+        if not os.path.exists(fasta_path):
+            logger.warning(f"Fasta path does not exist for {species_id}: {fasta_path}")
+            paths_exist = False
+        if not os.path.exists(windows_path):
+            logger.warning(f"Windows path does not exist for {species_id}: {windows_path}")
+            paths_exist = False
+            
+        # Skip this config if any path doesn't exist
+        if not paths_exist:
+            logger.warning(f"Skipping {species_id} due to missing files")
+            continue
+            
+        data.append({
+            "name": species_id,
+            "labels": labels_path,
+            "fasta": fasta_path,
+            "windows": windows_path
+        })
+    
+    if not data:
+        raise ValueError("No valid species configurations found with all required files")
+    
+    # Create DataFrame and save as TSV
+    df = pd.DataFrame(data)
+    logger.info(f"Generated keyfile with {len(df)} entries")
+    
+    # Set pandas to display all rows and columns
+    with pd.option_context(
+        'display.max_rows', None, 
+        'display.max_columns', None, 
+        'display.expand_frame_repr', False,
+        'display.max_colwidth', None
+    ):
+        logger.info(f"Keyfile contents:\n{df}")
+    
+    # Create parent directory if it doesn't exist
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    
+    # Save as TSV
+    df.to_csv(output_path, sep="\t", index=False)
+    logger.info(f"Saved keyfile to {output_path}")
 
 
 # -------------------------------------------------------------------------------------------------
@@ -791,7 +912,14 @@ def main():
     extract_parser = subparsers.add_parser("extract_npz_labels", help="Extract npz labels from DataTree")
     extract_parser.add_argument("--input", required=True, help="Path to input zarr file")
     extract_parser.add_argument("--output", required=True, help="Path to output npz file")
-    extract_parser.add_argument("--species-ids", nargs="+", help="List of species IDs to process (if not specified, all species are processed)")
+    extract_parser.add_argument("--species-id", nargs="+", help="List of species IDs to process (if not specified, all species are processed)")
+    
+    # Extract npz keyfile command
+    keyfile_parser = subparsers.add_parser("extract_npz_keyfile", help="Generate a keyfile mapping species to their label, fasta, and window files")
+    keyfile_parser.add_argument("--output", required=True, help="Path to output TSV keyfile")
+    keyfile_parser.add_argument("--species-id", nargs="+", required=True, help="List of species IDs to include in the keyfile")
+    keyfile_parser.add_argument("--labels-dir", required=True, help="Path to directory containing NPZ label files")
+    keyfile_parser.add_argument("--data-dir", required=True, help="Path to data directory with 'fasta' and 'windows' subdirs")
     
     args = parser.parse_args()
     
@@ -804,7 +932,9 @@ def main():
     elif args.command == "create_sequence_dataset":
         create_sequence_dataset(args.input_labels, args.input_tokens, args.output_path)
     elif args.command == "extract_npz_labels":
-        extract_npz_labels(args.input, args.output, args.species_ids)
+        extract_npz_labels(args.input, args.output, args.species_id)
+    elif args.command == "extract_npz_keyfile":
+        extract_npz_keyfile(args.output, args.species_id, args.labels_dir, args.data_dir)
     else:
         parser.print_help()
 

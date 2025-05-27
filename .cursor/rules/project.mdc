@@ -6,6 +6,20 @@ alwaysApply: true
 ## Files
 - Use `local` as a directory outside of source control for scratch work like planning documents and ad-hoc scripts
 
+## Scripts
+- Always run `source ~/.projectrc` in a terminal once before running anything else; this will change directories to this repository and initialize certain env vars as well as add this repository to the PYTHONPATH
+- Never change to this project repository directory yourself, always use `source ~/.projectrc`
+- Put any ad-hoc, utility scripts in `local/scratch`, which is not saved to source control; that should be your default choice unless prompted to do otherwise
+- Ensure that outputs of any of those scripts (plots, csvs, etc.) are also saved in `local/scratch` by default
+
+## Execution
+- This project will always run within the context of an HPC cluster, which means that by default you will be working on a login node
+- Always run scripts or other operations on the login node unless prompted to use a compute node
+- If prompted to allocate a **new** compute node, create an interactive session in the background via `idev -p gg -N 1 -n 1 -t 2:00:00 &`, potentially with instructions to use a different time limit
+- If prompted to use an **existing** compute node, find one via `squeue -u eczech` and use only nodes where `PARTITION` is "gg"
+- Use the same `squeue` command to find any newly allocated compute nodes; if you are ever unsure about whether to allocate a new node, check for one first using that `squeue` command
+- Execute any commands from that point on via `ssh NODE "bash -l -c 'source ~/.bashrc && source ~/.projectrc && COMMAND'"`
+
 ## Planning
 - Create thorough, numbered plans before coding
 - Put these plans in an appropriately `.md` named file under `local/plans` for implementation tasks that are more complicated, or when requested to draft a plan prior to execution

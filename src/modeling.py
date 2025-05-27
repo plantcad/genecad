@@ -1,21 +1,13 @@
-"""
-Utility related to pytorch-lightning.
-
-Primarily models, but this is also the place for loss functions
-"""
-import os
 import time
 import pandas as pd
-from typing import Optional
+from typing import Literal, Optional
 import lightning as L
 import torch
 import torch.nn as nn
 import numpy as np
 from torch import Tensor
-from torchcrf import CRF
-from torch.utils import data
 import torch.nn.functional as F
-from torchmetrics.functional.classification import multiclass_auroc
+from torchmetrics.functional.classification import multiclass_f1_score
 from lightning.pytorch.utilities import grad_norm
 from lightning.pytorch.callbacks import Callback
 from transformers import ModernBertConfig, ModernBertModel
@@ -30,15 +22,9 @@ from src.visualization import (
     visualize_entities,
     visualize_tokens,
 )
+from src.hub import load_base_model
 from dataclasses import dataclass, field
-from src.dist import process_group
 
-def worker_load_files(worker_id):
-    """ Open a fresh file handle for each DataLoader worker """
-    worker_info = data.get_worker_info()
-    dataset = worker_info.dataset
-
-    dataset.open_label_files()
 
 # ------------------------------------------------------------------------------------------------
 # Utilities
@@ -80,21 +66,9 @@ class ThroughputMonitor(Callback):
         pl_module.log("throughput/train_tokens_per_sec", token_per_sec)
 
 
-
 # ------------------------------------------------------------------------------------------------
-# Base Classifier
+# Gene Classifier
 # ------------------------------------------------------------------------------------------------
-
-def position_boundary_indices(input_ids: torch.Tensor) -> torch.Tensor:
-    if input_ids.ndim != 2:
-        raise ValueError(f"Input must be 2D, got {input_ids.shape=}")
-    batch_size, sequence_length = input_ids.shape
-    positions = torch.arange(sequence_length, device=input_ids.device)
-    # Generate indicies like [0, 1, 1, ..., 1, 1, 2]
-    boundary_indices = (positions > 0).long() + (positions == sequence_length-1).long()
-    boundary_indices = boundary_indices.unsqueeze(0).expand(batch_size, -1)
-    assert boundary_indices.shape == input_ids.shape
-    return boundary_indices
 
 
 @dataclass
@@ -122,74 +96,52 @@ TOKEN_CLASS_NAMES = [
     convert_biluo_index_to_class_name(i, entity_names=TOKEN_ENTITY_NAMES, sentinel_names=TOKEN_SENTINEL_NAMES)
     for i in range(NUM_LABELS)
 ]
-TOKEN_CLASS_WEIGHTS: list[float] = [
-    3.27254844e-07, # intergenic [0]
-    7.20223719e-04, # B-intron [1]
-    2.30126851e-06, # I-intron [2]
-    7.19396424e-04, # L-intron [3]
-    2.46485015e-01, # U-intron [4]
-    2.72806808e-03, # B-five_prime_utr [5]
-    1.50915858e-05, # I-five_prime_utr [6]
-    2.71827761e-03, # L-five_prime_utr [7]
-    2.46485015e-01, # U-five_prime_utr [8]
-    6.22306916e-04, # B-cds [9]
-    2.60387194e-06, # I-cds [10]
-    6.22228267e-04, # L-cds [11]
-    2.46485015e-01, # U-cds [12]
-    2.93720655e-03, # B-three_prime_utr [13]
-    9.16895564e-06, # I-three_prime_utr [14]
-    2.96273766e-03, # L-three_prime_utr [15]
-    2.46485015e-01, # U-three_prime_utr [16]
-]
-TOKEN_TRANSITION_PROBS = [
-    # intergenic              B-intron                I-intron                L-intron                U-intron                B-five_prime_utr        I-five_prime_utr        L-five_prime_utr        U-five_prime_utr        B-cds                   I-cds                   L-cds                   U-cds                   B-three_prime_utr       I-three_prime_utr       L-three_prime_utr       U-three_prime_utr     
-    [9.9986728674356296e-01, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 1.3250703334417960e-04, 0.0000000000000000e+00, 0.0000000000000000e+00, 2.0622309290219395e-07, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00],  # intergenic
-    [0.0000000000000000e+00, 0.0000000000000000e+00, 1.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00],  # B-intron
-    [0.0000000000000000e+00, 0.0000000000000000e+00, 9.9668850440768986e-01, 3.3114955923101274e-03, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00],  # I-intron
-    [0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 4.2768390774200638e-02, 0.0000000000000000e+00, 0.0000000000000000e+00, 3.7023625955596062e-04, 9.3457396384703950e-01, 0.0000000000000000e+00, 0.0000000000000000e+00, 5.6959424547070860e-05, 2.2230449694656800e-02, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00],  # L-intron
-    [0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00],  # U-intron
-    [0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 9.9608745324506631e-01, 3.9125467549337217e-03, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00],  # B-five_prime_utr
-    [0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 9.9441337268119323e-01, 5.5866273188067746e-03, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00],  # I-five_prime_utr
-    [0.0000000000000000e+00, 1.6436565131445827e-01, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 8.3554095911093129e-01, 0.0000000000000000e+00, 0.0000000000000000e+00, 9.3389574610487646e-05, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00],  # L-five_prime_utr
-    [0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 1.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00],  # U-five_prime_utr
-    [0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 9.9976382088457894e-01, 2.3617911542108623e-04, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00],  # B-cds
-    [0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 9.9579626722664549e-01, 4.2037327733545383e-03, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00],  # I-cds
-    [0.0000000000000000e+00, 8.0746419432388961e-01, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 1.9201134799702924e-01, 0.0000000000000000e+00, 0.0000000000000000e+00, 5.2445767908117832e-04],  # L-cds
-    [0.0000000000000000e+00, 2.9999999999999999e-01, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 6.9999999999999996e-01, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00],  # U-cds
-    [0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 9.9863362938030098e-01, 1.3663706196990653e-03, 0.0000000000000000e+00],  # B-three_prime_utr
-    [0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 9.9692930636621491e-01, 3.0706936337850763e-03, 0.0000000000000000e+00],  # I-three_prime_utr
-    [9.0914382564927843e-01, 9.0582253342692307e-02, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 2.7392100802930953e-04, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00],  # L-three_prime_utr
-    [1.1564625850340136e-01, 8.8435374149659862e-01, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00, 0.0000000000000000e+00],  # U-three_prime_utr
-]
+TOKEN_CLASS_FREQUENCIES: dict[str, float] = {
+    "intergenic": 7.531898e-01, # [0]
+    "B-intron": 3.422340e-04, # [1]
+    "I-intron": 1.071083e-01, # [2]
+    "L-intron": 3.426275e-04, # [3]
+    "U-intron": 2.781372e-08, # [4]
+    "B-five_prime_utr": 9.035149e-05, # [5]
+    "I-five_prime_utr": 1.633261e-02, # [6]
+    "L-five_prime_utr": 9.067691e-05, # [7]
+    "U-five_prime_utr": 2.447608e-07, # [8]
+    "B-cds": 3.960827e-04, # [9]
+    "I-cds": 9.466096e-02, # [10]
+    "L-cds": 3.961328e-04, # [11]
+    "U-cds": 2.781372e-08, # [12]
+    "B-three_prime_utr": 8.391818e-05, # [13]
+    "I-three_prime_utr": 2.688256e-02, # [14]
+    "L-three_prime_utr": 8.319502e-05, # [15]
+    "U-three_prime_utr": 2.072122e-07, # [16]
+}
+# Assert equality of pre-calculated frequency classes until support for dynamic configuration is necessary
+assert TOKEN_CLASS_NAMES == list(TOKEN_CLASS_FREQUENCIES.keys())
 
 
 @dataclass
-class SequenceSpanClassifierConfig:
+class GeneClassifierConfig:
     vocab_size: int = 16
     num_labels: int = NUM_LABELS
-    n_layers: int = 8
-    n_heads: int = 4
-    token_embedding_dim: int = 32
-    boundary_embedding_dim: int = 32
-    embedding_input_dim: int = 1536
-    use_input_projection: bool = True
-    input_projection_dim: int = 768 - 32 * 2
+    dropout: float = 0.1
     max_sequence_length: Optional[int] = None
+
+    architecture: Literal["encoder-only", "sequence-only", "classifier-only", "all"] = "encoder-only"
+    token_embedding_dim: int = 512
+    head_encoder_layers: int = 4
+    head_encoder_heads: int = 8
+    base_encoder_dim: int = 1536
+    base_encoder_path: str | None = None
+    base_encoder_revision: str | None = None
+    base_encoder_frozen: bool = True
+
     train_eval_frequency: Optional[int] = 250
     enable_visualization: bool = True
-    use_base_model: bool = True
-    dropout: float = 0.1
-    use_focal_loss: bool = False
-    use_crf: bool = False
-    init_crf_transitions: bool = False
-    freeze_crf: bool = False
-    focal_loss_alpha: list[float] = field(default_factory=lambda: TOKEN_CLASS_WEIGHTS)
-    focal_loss_gamma: float = 2.0
     token_entity_names: list[str] = field(default_factory=lambda: TOKEN_ENTITY_NAMES)
     token_class_names: list[str] = field(default_factory=lambda: TOKEN_CLASS_NAMES)
-    token_transition_probs: list[list[float]] = field(default_factory=lambda: TOKEN_TRANSITION_PROBS)
+    token_class_frequencies: list[float] | None = field(default_factory=lambda: TOKEN_CLASS_FREQUENCIES)
     interval_entity_classes: list[list[int]] = field(default_factory=lambda: [
-        # Maps token entity classes to interval entity classes
+        # Map token entity classes to interval entity classes
         [1, 2, 3, 4], # transcript
         [2, 3, 4], # exon
         [1], # intron
@@ -200,6 +152,32 @@ class SequenceSpanClassifierConfig:
     interval_entity_names: list[str] = field(default_factory=lambda: ["transcript", "exon"] + TOKEN_ENTITY_NAMES)
     sentinel_names: tuple[str, str] = field(default_factory=lambda: ("mask", "intergenic"))
 
+    @property
+    def hidden_size(self) -> int:
+        if self.architecture in ["all"]:
+            return min(self.base_encoder_dim, self.token_embedding_dim * 6)
+        if self.architecture in ["classifier-only"]:
+            return self.base_encoder_dim
+        if self.architecture in ["sequence-only", "encoder-only"]:
+            return self.token_embedding_dim
+        raise ValueError(f"Invalid architecture: {self.architecture}")
+
+    @property
+    def use_base_encoder(self) -> bool:
+        return self.architecture in ["all", "encoder-only", "classifier-only"]
+
+    @property
+    def use_head_encoder(self) -> bool:
+        return self.architecture in ["all", "sequence-only", "encoder-only"]
+
+    @property
+    def use_token_embedding(self) -> bool:
+        return self.architecture in ["all", "sequence-only"]
+    
+    @property
+    def use_precomputed_base_encodings(self) -> bool:
+        return self.use_base_encoder and self.base_encoder_path is None
+
     def interval_entity_name(self, entity: int) -> str:
         if 0 <= entity - 1 <= len(self.interval_entity_names) - 1:
             return self.interval_entity_names[entity - 1]
@@ -209,6 +187,18 @@ class SequenceSpanClassifierConfig:
     def token_entity_names_with_background(self) -> list[str]:
         return [self.sentinel_names[1]] + self.token_entity_names
     
+    def token_entity_name_map(self) -> dict[int, str]:
+        return {
+            **{
+                i-1: self.sentinel_names[i]
+                for i in range(len(self.sentinel_names))
+            },
+            **{
+                i+1: self.token_entity_names[i]
+                for i in range(len(self.token_entity_names))
+            }
+        }
+    
     def token_label_name(self, label: int) -> str:
         return convert_biluo_index_to_class_name(
             label=label, 
@@ -216,94 +206,101 @@ class SequenceSpanClassifierConfig:
             sentinel_names=self.sentinel_names
         )
     
-class SequenceSpanClassifier(L.LightningModule):
+def validate_config(config: GeneClassifierConfig) -> None:
+    if config.max_sequence_length is None:
+        raise ValueError("max_sequence_length must be set")
+    if (config.num_labels - 1) % N_BILUO_TAGS != 0:
+        raise ValueError(
+            "num_labels must be one more than a multiple of 4 for one background class and 4 BILUO classes per entity (B, I, L, U); "
+            f"got {config.num_labels=}"
+        )
+    if len(config.token_class_names) != config.num_labels:
+        raise ValueError(
+            "token_class_names must be the same length as num_labels; "
+            f"got {len(config.token_class_names)=} and {config.num_labels=}"
+        )
+    if config.token_embedding_dim > config.hidden_size:
+        raise ValueError(
+            "token_embedding_dim must be less than or equal to hidden_size; "
+            f"got {config.token_embedding_dim=} and {config.hidden_size=}"
+        )
 
-    def __init__(self, config: SequenceSpanClassifierConfig, learning_rate: float = 8e-4, learning_rate_decay: str = "none", learning_rate_warmup: int = 25):
-        super(SequenceSpanClassifier, self).__init__()
-        if config.max_sequence_length is None:
-            raise ValueError("max_sequence_length must be set")
-        if not config.use_input_projection and config.input_projection_dim != config.embedding_input_dim:
-            raise ValueError(
-                "input_projection_dim must be equal to embedding_input_dim if use_input_projection is False; "
-                f"got {config.input_projection_dim=} and {config.embedding_input_dim=}"
-            )
-        if (config.num_labels - 1) % N_BILUO_TAGS != 0:
-            raise ValueError(
-                "num_labels must be one more than a multiple of 4 for one background class and 4 BILUO classes per entity (B, I, L, U); "
-                f"got {config.num_labels=}"
-            )
-        if len(config.token_class_names) != config.num_labels:
-            raise ValueError(
-                "token_class_names must be the same length as num_labels; "
-                f"got {len(config.token_class_names)=} and {config.num_labels=}"
-            )
-        if config.use_focal_loss and len(config.focal_loss_alpha) != config.num_labels:
-            raise ValueError(
-                "focal_loss_alpha must be the same length as num_labels; "
-                f"got {len(config.focal_loss_alpha)=} and {config.num_labels=}"
-            )
+class GeneClassifier(L.LightningModule):
+
+    def __init__(self, config: GeneClassifierConfig, learning_rate: float = 8e-4, learning_rate_decay: str = "none", learning_rate_warmup: int = 25):
+        super(GeneClassifier, self).__init__()
+        validate_config(config)
         self.config = config
         self.learning_rate = learning_rate
         self.learning_rate_decay = learning_rate_decay
         self.learning_rate_warmup = learning_rate_warmup
-        self.criterion = (
-                FocalLoss(alpha=config.focal_loss_alpha, gamma=config.focal_loss_gamma)
-                if config.use_focal_loss else
-                torch.nn.CrossEntropyLoss()
-        )
-        self.token_embedding = nn.Embedding(config.vocab_size, config.token_embedding_dim)
-        self.boundary_embedding = nn.Embedding(3, config.boundary_embedding_dim)
-        self.embedding_projection = None
-        if config.use_input_projection:
-            self.embedding_projection = nn.Linear(config.embedding_input_dim, config.input_projection_dim)
-        self.hidden_size = (
-            config.input_projection_dim +
-            config.token_embedding_dim + 
-            config.boundary_embedding_dim
-        )
         self.num_labels = config.num_labels
         self.num_core_entities = len(config.token_entity_names)
         self.num_total_entities = self.num_core_entities + 1 # Entity count w/ background
-        self.mlp = MLP(
-            input_dim=self.hidden_size,
-            hidden_dim=4*self.hidden_size,
+        self.criterion = torch.nn.CrossEntropyLoss()
+
+        self.classifier = MLP(
+            input_dim=self.config.hidden_size,
+            hidden_dim=4*self.config.hidden_size,
             output_dim=self.num_labels,
             bias=True,
             dropout=self.config.dropout
         )
 
-        self.base_config = None
-        self.base_model = None
-        if config.use_base_model:
-            self.base_config = ModernBertConfig(
+        self.head_config = None
+        self.head_encoder = None
+        if config.use_head_encoder:
+            self.head_config = ModernBertConfig(
                 vocab_size=config.vocab_size,
-                hidden_size=self.hidden_size,
-                intermediate_size=self.hidden_size*4,
-                num_hidden_layers=config.n_layers,
-                num_attention_heads=config.n_heads,
+                hidden_size=self.config.hidden_size,
+                intermediate_size=self.config.hidden_size*4,
+                num_hidden_layers=config.head_encoder_layers,
+                num_attention_heads=config.head_encoder_heads,
                 pad_token_id=0,
                 max_position_embeddings=config.max_sequence_length,
                 attention_dropout=self.config.dropout,
                 mlp_dropout=self.config.dropout,
             )
-            self.base_model = ModernBertModel(self.base_config)
-        self.bias = nn.Parameter(torch.zeros(self.num_labels))
+            self.head_encoder = ModernBertModel(self.head_config)
 
-        self.crf = None
-        if config.use_crf:
-            self.crf = CRF(num_tags=self.num_labels, batch_first=True)
-            if config.init_crf_transitions:
-                transition_probs = np.array(config.token_transition_probs, dtype=np.float32)
-                if transition_probs.shape != (self.num_labels, self.num_labels):
-                    raise ValueError(f"Transition probabilities shape {transition_probs.shape} does not match expected shape {(self.num_labels, self.num_labels)}")
-                log_transition_probs = np.log(transition_probs + np.finfo(transition_probs.dtype).eps)
-                with torch.no_grad():
-                    self.crf.transitions.copy_(torch.tensor(log_transition_probs, dtype=torch.float))
-                    self.crf.start_transitions.zero_()
-                    self.crf.end_transitions.zero_()
-                self.crf.transitions.requires_grad = not config.freeze_crf
-                self.crf.start_transitions.requires_grad = not config.freeze_crf
-                self.crf.end_transitions.requires_grad = not config.freeze_crf
+        self.base_encoder = None
+        if config.use_base_encoder:
+            # If path is not provided, base encoder embeddings will be required as inputs
+            if not config.use_precomputed_base_encodings:
+                self.base_encoder = load_base_model(config.base_encoder_path, revision=config.base_encoder_revision)
+                if config.base_encoder_frozen:
+                    self.base_encoder = self.base_encoder.eval()
+                    for p in self.base_encoder.parameters():
+                        p.requires_grad = False
+                else:
+                    self.base_encoder = self.base_encoder.train()
+
+
+        self.token_embedding = None
+        if config.use_token_embedding:
+            # With no base encoder, expand token embedding dim to hidden size
+            token_embedding_dim = config.token_embedding_dim if config.use_base_encoder else config.hidden_size
+            self.token_embedding = nn.Embedding(config.vocab_size, token_embedding_dim)
+
+        self.embedding_projection = None
+        self.embedding_projection_dim = config.hidden_size - (0 if self.token_embedding is None else self.token_embedding.embedding_dim)
+        if config.use_base_encoder and config.base_encoder_dim != self.embedding_projection_dim:
+            # Use projection to ensure that projected base embeddings concatenated with
+            # token embeddings have length equal to hidden size
+            self.embedding_projection = nn.Linear(config.base_encoder_dim, self.embedding_projection_dim)
+
+        if self.config.token_class_frequencies is not None:
+            # Clip class frequencies on low side to 1:1M
+            freqs = np.clip(
+                np.array([
+                    self.config.token_class_frequencies[c] 
+                    for c in self.config.token_class_names
+                ]), 
+                a_min=1e-6, a_max=1
+            )
+            self.bias = nn.Parameter(torch.tensor(np.log10(freqs), dtype=self.dtype))
+        else:
+            self.bias = nn.Parameter(torch.zeros(self.num_labels))
 
         self.save_hyperparameters()
 
@@ -323,12 +320,14 @@ class SequenceSpanClassifier(L.LightningModule):
 
     def optimizer_step(self, epoch, batch_idx, optimizer, optimizer_closure):
         # See: https://github.com/Lightning-AI/pytorch-lightning/issues/328#issuecomment-550114178
-        if self.trainer.global_step < self.learning_rate_warmup:
-            lr_scale = min(1., float(self.trainer.global_step + 1) / self.learning_rate_warmup)
-            for pg in optimizer.param_groups:
-                pg['lr'] = lr_scale * self.learning_rate
-
+        for pg in optimizer.param_groups:
+            pg['lr'] = self._learning_rate(self.trainer.global_step)
         optimizer.step(closure=optimizer_closure)
+
+    def _learning_rate(self, step: int) -> float:
+        if step < self.learning_rate_warmup:
+            return min(1., float(step + 1) / self.learning_rate_warmup) * self.learning_rate
+        return self.learning_rate
 
     def training_step(self, batch, batch_idx):
         batch = self._prepare_batch(batch, source=Source(split="train", index=batch_idx))
@@ -343,9 +342,6 @@ class SequenceSpanClassifier(L.LightningModule):
         ):
             visualize = self.config.enable_visualization and self.global_step > 0
             self._evaluate(batch, "train", visualize=visualize)
-            if self.config.use_crf and visualize:
-                from src.visualization import visualize_crf
-                visualize_crf(self, prefix="train", batch_idx=batch_idx)
                 
         return loss
 
@@ -361,14 +357,14 @@ class SequenceSpanClassifier(L.LightningModule):
         self._evaluate(batch, "valid", visualize=visualize)
 
     def configure_optimizers(self):
-        optimizer = torch.optim.Adam(self.parameters(), lr=self.learning_rate)
+        optimizer = torch.optim.Adam(self.parameters(), lr=self._learning_rate(0))
         if self.learning_rate_decay == "none":
             return optimizer
         if self.learning_rate_decay != "cosine":
             raise ValueError(f"Invalid learning rate decay: {self.learning_rate_decay}")
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
             optimizer, 
-            eta_min=self.learning_rate * .1, 
+            eta_min=self.learning_rate * .01, 
             T_max=self.trainer.estimated_stepping_batches
         )
         scheduler_config = dict(
@@ -383,10 +379,10 @@ class SequenceSpanClassifier(L.LightningModule):
     # Model Methods
     # -------------------------------------------------------------------------
 
-    def forward(self, input_ids: Tensor, inputs_embeds: Tensor) -> Tensor:
+    def forward(self, input_ids: Tensor, inputs_embeds: Tensor | None = None) -> Tensor:
         B, S = input_ids.shape[0], input_ids.shape[1]
         assert S <= self.config.max_sequence_length
-        assert inputs_embeds.shape == (B, S, self.config.embedding_input_dim)
+        assert inputs_embeds is None or inputs_embeds.shape == (B, S, self.config.base_encoder_dim)
 
         hidden_states = self._hidden_states(input_ids, inputs_embeds)
 
@@ -397,49 +393,51 @@ class SequenceSpanClassifier(L.LightningModule):
 
         return logits
 
-    def _hidden_states(self, input_ids: Tensor, inputs_embeds: Tensor) -> Tensor:
-        B, S, H = input_ids.shape[0], input_ids.shape[1], self.hidden_size
+    def _hidden_states(self, input_ids: Tensor, inputs_embeds: Tensor | None = None) -> Tensor:
+        B, S, H = input_ids.shape[0], input_ids.shape[1], self.config.hidden_size
+
         # Compute token embeddings
-        token_embedding = self.token_embedding(input_ids)
-        assert token_embedding.shape == (B, S, self.config.token_embedding_dim)
+        token_embedding = None
+        if self.config.use_token_embedding:
+            token_embedding = self.token_embedding(input_ids)
 
-        # Compute boundary embedding 
-        boundary_indices = position_boundary_indices(input_ids)
-        boundary_embedding = self.boundary_embedding(boundary_indices)
-        assert boundary_embedding.shape == (B, S, self.config.boundary_embedding_dim)
+        # Compute base embedding
+        base_embedding = None
+        if self.config.use_base_encoder:
+            if self.base_encoder is None and inputs_embeds is None:
+                raise ValueError("inputs_embeds must be provided if use_base_encoder is True")
+            if self.base_encoder is None:
+                base_embedding = inputs_embeds
+            else:
+                base_embedding = self.base_encoder(input_ids=input_ids).last_hidden_state
+            assert base_embedding.shape == (B, S, self.config.base_encoder_dim)
 
-        # Compute embedding projection
-        if self.config.use_input_projection:
-            inputs_embeds = self.embedding_projection(inputs_embeds)
-            assert inputs_embeds.shape == (B, S, self.config.input_projection_dim)
+        # Project base embedding
+        if self.embedding_projection is not None:
+            base_embedding = self.embedding_projection(base_embedding)
+            assert base_embedding.shape == (B, S, self.embedding_projection_dim)
 
-        # Concatenate boundary embedding with input embeddings
-        hidden_states = torch.cat((inputs_embeds, token_embedding, boundary_embedding), dim=-1)
+        # Concatenate base and token embeddings
+        hidden_states = torch.cat(tuple(e for e in [base_embedding, token_embedding] if e is not None), dim=-1)
         assert hidden_states.shape == (B, S, H)
 
-        # Generate representations from base model
-        if self.config.use_base_model:
-            hidden_states = self.base_model(inputs_embeds=hidden_states).last_hidden_state
+        # Compute head encoding
+        if self.config.use_head_encoder:
+            hidden_states = self.head_encoder(inputs_embeds=hidden_states).last_hidden_state
             assert hidden_states.shape == (B, S, H)
         return hidden_states
 
     def _token_logits(self, hidden_states: Tensor) -> Tensor:
         B, S, C = hidden_states.shape[0], hidden_states.shape[1], self.num_labels
-        logits = self.bias + self.mlp(hidden_states)
+        logits = self.bias + self.classifier(hidden_states)
         assert logits.shape == (B, S, C)
         return logits
     
     def _compute_loss(self, batch: Batch) -> Tensor:
-        if self.config.use_crf:
-            # Assign mask to True for first token across the batch
-            mask = batch.masks | (torch.arange(batch.masks.shape[1], device=batch.masks.device) == 0)
-            loss = -self.crf(emissions=batch.logits, tags=batch.labels, mask=mask, reduction="token_mean")
-            return loss
-        else:
-            labels = torch.where(batch.masks, batch.labels, IGNORE_INDEX)
-            logits, labels = batch.logits.view(-1, self.num_labels), labels.view(-1)
-            loss = self.criterion(logits, labels)
-            return loss
+        labels = torch.where(batch.masks, batch.labels, IGNORE_INDEX)
+        logits, labels = batch.logits.view(-1, self.num_labels), labels.view(-1)
+        loss = self.criterion(logits, labels)
+        return loss
 
     def _evaluate(self, batch: Batch, prefix: str, visualize: bool = False) -> None:
         self._evaluate_tokens(batch, prefix, visualize=visualize)
@@ -455,12 +453,15 @@ class SequenceSpanClassifier(L.LightningModule):
                 prefix=prefix,
                 batch_idx=batch.source.index,
             )
-        labels = torch.where(batch.masks, batch.labels, IGNORE_INDEX)
-        logits, labels = batch.logits.view(-1, self.num_labels), labels.view(-1)
+        logits, labels, masks = batch.logits.view(-1, self.num_labels), batch.labels.view(-1), batch.masks.view(-1)
+        logits, labels = logits[masks], labels[masks]
+        assert len(logits) == len(labels)
+        if len(logits) == 0:
+            return
         
         metrics = {}
         for metric in [
-            ("auroc", multiclass_auroc),
+            ("f1", multiclass_f1_score),
         ]:
             name, func = metric
             values = func(logits, labels, num_classes=self.num_labels, average="none")
@@ -542,14 +543,14 @@ class SequenceSpanClassifier(L.LightningModule):
         # Calculate metrics for each entity
         if len(eval_intervals) > 0:
             metrics = {}
-            totals = {"f1": [], "precision": []} 
+            totals = {"f1": [], "precision": [], "recall": []} 
             for entity, group in eval_intervals.groupby("entity"):
                 stats = get_evaluation_interval_metrics(group)
                 entity_name = self.config.interval_entity_name(entity)
                 for k, v in stats.items():
                     metrics[f"{prefix}__entity__classes/{k}/{entity:02d}-{entity_name}"] = v
-                totals["f1"].append(stats["f1"])
-                totals["precision"].append(stats["precision"])
+                for k in totals.keys():
+                    totals[k].append(stats[k])
             for k, v in totals.items():
                 metrics[f"{prefix}__entity__overall/{k}"] = np.mean(v)
             self.log_dict(metrics, sync_dist=prefix == "valid")
@@ -561,7 +562,6 @@ class SequenceSpanClassifier(L.LightningModule):
         assert labels.shape == (B, S)
         assert (labels >= -1).all() and (labels < C).all()
 
-        # TODO: Evaluate inclusion of batch['soft_mask'];
         # label_mask and labels >= 0 are equivalent, but both are included here defensively
         masks = batch["label_mask"] & (labels >= 0)
         assert masks.shape == (B, S)
@@ -570,7 +570,7 @@ class SequenceSpanClassifier(L.LightningModule):
         # it can be removed from the labels from here on
         labels = torch.clamp(labels, min=0)
 
-        logits = self.forward(input_ids=batch["input_ids"], inputs_embeds=batch["inputs_embeds"])
+        logits = self.forward(input_ids=batch["input_ids"], inputs_embeds=batch.get("inputs_embeds"))
         assert logits.shape == (B, S, C)
 
         index = batch["sample_index"]
@@ -584,3 +584,356 @@ class SequenceSpanClassifier(L.LightningModule):
             index=index,
         )
     
+# -------------------------------------------------------------------------
+# CRF
+# -------------------------------------------------------------------------
+
+TOKEN_TRANSITION_LABELS = ["intergenic", "intron", "five_prime_utr", "cds", "three_prime_utr"]
+TOKEN_TRANSITION_PROBS = [
+    # intergenic              intron                  five_prime_utr          cds                     three_prime_utr
+    [9.9986728674356296e-01, 0.0000000000000000e+00, 1.3271325643708179e-04, 0.0000000000000000e+00, 0.0000000000000000e+00],  # intergenic
+    [0.0000000000000000e+00, 9.9670998028242297e-01, 1.4192693353026146e-04, 3.0749541662207606e-03, 7.3138617826025532e-05],  # intron
+    [0.0000000000000000e+00, 9.1231590182167715e-04, 9.9443444103113121e-01, 4.6532430670470975e-03, 0.0000000000000000e+00],  # five_prime_utr
+    [0.0000000000000000e+00, 3.3664534452795144e-03, 0.0000000000000000e+00, 9.9583064809038380e-01, 8.0289846433672328e-04],  # cds
+    [2.7761939578153979e-03, 2.8331069530538342e-04, 8.3618725786499447e-07, 0.0000000000000000e+00, 9.9693965915962135e-01],  # three_prime_utr
+]
+
+def token_transition_probs() -> pd.DataFrame:
+    return pd.DataFrame(
+        data=TOKEN_TRANSITION_PROBS,
+        index=TOKEN_TRANSITION_LABELS,
+        columns=TOKEN_TRANSITION_LABELS,
+    )
+
+def create_crf(config: GeneClassifierConfig, initialize: bool = True, freeze: bool = True):
+    if (actual := config.token_entity_names_with_background()) != (expected := TOKEN_TRANSITION_LABELS):
+        raise ValueError(f"Token entity names must match those used to create transition probabilities; expected labels: {expected}, got: {actual}")
+    from torchcrf import CRF
+    labels = config.token_entity_names_with_background()
+    crf = CRF(num_tags=len(labels), batch_first=True)
+    if initialize:
+        transition_probs = np.array(TOKEN_TRANSITION_PROBS, dtype=np.float32)
+        log_transition_probs = np.log(transition_probs + np.finfo(transition_probs.dtype).eps)
+        with torch.no_grad():
+            crf.transitions.copy_(torch.tensor(log_transition_probs, dtype=torch.float))
+            crf.start_transitions.zero_()
+            crf.end_transitions.zero_()
+        if freeze:
+            crf.transitions.requires_grad = False
+            crf.start_transitions.requires_grad = False
+            crf.end_transitions.requires_grad = False
+    return crf
+
+
+# -------------------------------------------------------------------------
+# UNET
+# -------------------------------------------------------------------------
+# From: https://huggingface.co/InstaDeepAI/segment_nt_multi_species/blob/main/modeling_segment_nt.py
+
+class DownSample1D(nn.Module):
+    """
+    1D-UNET downsampling block.
+    """
+
+    def __init__(
+        self,
+        input_channels: int,
+        output_channels: int,
+        num_layers: int = 2,
+    ):
+        """
+        Args:
+            output_channels: number of output channels.
+            activation_fn: name of the activation function to use.
+                Should be one of "gelu",
+                "gelu-no-approx", "relu", "swish", "silu", "sin".
+            num_layers: number of convolution layers.
+            name: module name.
+        """
+        
+        super().__init__()
+        self.first_layer = [nn.Conv1d(
+                in_channels=input_channels,
+                out_channels=output_channels,
+                kernel_size=3,
+                stride=1,
+                dilation=1,
+                padding="same",
+            )]
+        
+
+        self.next_layers = [
+            nn.Conv1d(
+                in_channels=output_channels,
+                out_channels=output_channels,
+                kernel_size=3,
+                stride=1,
+                dilation=1,
+                padding="same",
+            )
+            for _ in range(num_layers-1)
+        ]
+        self.conv_layers = nn.ModuleList(self.first_layer + self.next_layers)
+
+        self.avg_pool = nn.AvgPool1d(
+            kernel_size=2,
+            stride=2,
+            padding=0,
+        )
+        self.activation_fn = nn.SiLU()
+
+
+    def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        for i, conv_layer in enumerate(self.conv_layers):
+            x = self.activation_fn(conv_layer(x))
+
+        hidden = x
+        x = self.avg_pool(hidden)
+        return x, hidden
+    
+
+
+class UpSample1D(nn.Module):
+    """
+    1D-UNET upsampling block.
+    """
+
+    def __init__(
+        self,
+        input_channels: int,
+        output_channels: int,
+        num_layers: int = 2,
+    ):
+        """
+        Args:
+            output_channels: number of output channels.
+            activation_fn: name of the activation function to use.
+                Should be one of "gelu",
+                "gelu-no-approx", "relu", "swish", "silu", "sin".
+            interpolation_method: Method to be used for upsampling interpolation.
+                Should be one of "nearest", "linear", "cubic", "lanczos3", "lanczos5".
+            num_layers: number of convolution layers.
+            name: module name.
+        """
+        super().__init__()
+
+        self._first_layer = [nn.ConvTranspose1d(
+                in_channels=input_channels,
+                out_channels=output_channels,
+                kernel_size=3,
+                stride=1,
+                padding=1,
+            )]
+
+
+        self._next_layers = [
+            nn.ConvTranspose1d(
+                in_channels=output_channels,
+                out_channels=output_channels,
+                kernel_size=3,
+                stride=1,
+                padding=1,
+            )
+            for _ in range(num_layers-1)
+        ]
+
+        self.conv_layers = nn.ModuleList(self._first_layer + self._next_layers)
+
+        self._activation_fn = nn.SiLU()
+
+
+
+    def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        for i, conv_layer in enumerate(self.conv_layers):
+            x = self._activation_fn(conv_layer(x))      
+
+        # Different order than in Haiku because the channels are changed when going 
+        # from Haiku to Torch.
+        x = nn.functional.interpolate(x, size=2 * x.shape[2], mode="nearest")
+
+
+        return x
+
+
+
+class FinalConv1D(nn.Module):
+    """
+    Final output block of the 1D-UNET.
+    """
+
+    def __init__(
+        self,
+        input_channels: int,
+        output_channels: int,
+        num_layers: int = 2,
+    ):
+        """
+        Args:
+            output_channels: number of output channels.
+            activation_fn: name of the activation function to use.
+                Should be one of "gelu",
+                "gelu-no-approx", "relu", "swish", "silu", "sin".
+            num_layers: number of convolution layers.
+            name: module name.
+        """
+        super().__init__()
+
+        self._first_layer = [nn.Conv1d(
+                in_channels=input_channels,
+                out_channels=output_channels,
+                kernel_size=3,
+                stride=1,
+                dilation=1,
+                padding="same",
+            )]
+
+        self._next_layers = [
+            nn.Conv1d(
+                in_channels=output_channels,
+                out_channels=output_channels,
+                kernel_size=3,
+                stride=1,
+                dilation=1,
+                padding="same",
+            )
+            for _ in range(num_layers-1)
+        ]
+        self.conv_layers = nn.ModuleList(self._first_layer + self._next_layers)
+
+        self._activation_fn = nn.SiLU()
+
+
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        for i, conv_layer in enumerate(self.conv_layers):
+            x = conv_layer(x)
+            if i < len(self.conv_layers) - 1:
+                x = self._activation_fn(x)
+        return x
+
+
+class UNET1DSegmentationHead(nn.Module):
+    """
+    1D-UNET based head to be plugged on top of a pretrained model to perform
+    semantic segmentation.
+    """
+
+    def __init__(
+        self,
+        embed_dim: int,
+        num_classes: int,
+        output_channels_list: tuple[int, ...] = (64, 128, 256),
+        num_conv_layers_per_block: int = 2,
+    ):
+        """
+        Args:
+            num_classes: number of classes to segment
+            output_channels_list: list of the number of output channel at each level of
+                the UNET
+            num_conv_layers_per_block: number of convolution layers per block.
+        """
+        super().__init__()
+        self._num_pooling_layers = len(output_channels_list)
+
+
+        downsample_input_channels_list = (embed_dim, ) + output_channels_list[:-1]
+
+        output_channels_list_reversed = tuple(reversed(output_channels_list))
+        upsample_input_channels_list = (output_channels_list[-1],) + output_channels_list_reversed
+        upsample_output_channels_list =  output_channels_list_reversed
+
+        self._downsample_blocks = nn.ModuleList([
+            DownSample1D(
+                input_channels= input_channels,
+                output_channels=output_channels,
+                num_layers=num_conv_layers_per_block,
+            )
+            for input_channels, output_channels in zip(downsample_input_channels_list, output_channels_list)
+        ])
+
+        self._upsample_blocks = nn.ModuleList([
+            UpSample1D(
+                input_channels = input_channels,
+                output_channels=output_channels,
+                num_layers=num_conv_layers_per_block,
+            )
+            for input_channels, output_channels in zip(upsample_input_channels_list, upsample_output_channels_list)
+        ])
+
+        self.final_block = FinalConv1D(
+            input_channels=output_channels_list[0],
+            output_channels=num_classes,
+            num_layers=num_conv_layers_per_block,
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+
+        if (length := x.shape[2]) % (divisor := 2**self._num_pooling_layers):
+            raise ValueError(
+                f"Input length ({length}) must be divisible by the 2 to the power of"
+                f" number of pooling layers ({divisor})."
+            )
+
+        hiddens = []
+        for downsample_block in self._downsample_blocks:
+            x, hidden = downsample_block(x)
+            hiddens.append(hidden)
+
+        for i, (upsample_block, hidden) in enumerate(zip(self._upsample_blocks, reversed(hiddens))):
+            x = upsample_block(x) + hidden
+        x = self.final_block(x)
+        return x
+
+
+class UnetClassifier(L.LightningModule):
+    """Lightning module for UNET smoothing model."""
+    
+    def __init__(self, embed_dim: int, num_classes: int, learning_rate: float = 1e-4):
+        super().__init__()
+        self.model = UNET1DSegmentationHead(
+            embed_dim=embed_dim,
+            num_classes=num_classes,
+            output_channels_list=(64, 128, 256),
+            num_conv_layers_per_block=2,
+        )
+        
+        self.criterion = nn.CrossEntropyLoss()
+        self.learning_rate = learning_rate
+        self.num_classes = num_classes
+        self.save_hyperparameters()
+            
+    def forward(self, x: Tensor) -> Tensor:
+        if x.ndim != 3:
+            raise ValueError(f"Expected 3D tensor, got {x.ndim}D tensor; shape={x.shape}")
+        B, S, C = x.shape # (batch, sequence, class)
+        if C != self.num_classes:
+            raise ValueError(f"Expected {self.num_classes} classes in last dim, got {C}; shape={x.shape}")
+        # Transpose for U-Net to (batch, class, sequence) and then back to (batch, sequence, class)
+        output = self.model(x.transpose(1, 2)).transpose(1, 2)
+        assert output.shape == (B, S, C)
+        return output
+    
+    def _compute_loss(self, batch: dict[str, Tensor]) -> Tensor:
+        """Compute cross entropy loss from batch data."""
+        input_logits = batch['input_logits']
+        target_labels = batch['target_labels']
+        if (actual := target_labels.shape) != (expected := input_logits.shape):
+            raise ValueError(f"Expected {expected} shape for target labels, got {actual}")
+        target_class = target_labels.argmax(dim=-1)
+        output_logits = self(input_logits)
+        loss = self.criterion(output_logits.reshape(-1, self.num_classes), target_class.view(-1))
+        return loss
+    
+    def training_step(self, batch, batch_idx):
+        loss = self._compute_loss(batch)
+        self.log('train/loss', loss, prog_bar=True)
+        return loss
+    
+    def validation_step(self, batch, batch_idx):
+        loss = self._compute_loss(batch)
+        self.log('val/loss', loss, prog_bar=True, sync_dist=True)
+        return loss
+    
+    def configure_optimizers(self):
+        optimizer = torch.optim.Adam(self.parameters(), lr=self.learning_rate)
+        return optimizer

@@ -23,7 +23,12 @@ import collections
 import io
 import itertools
 import six
+import json
 from six.moves import urllib
+from Bio.SeqRecord import SeqRecord
+from Bio import SeqFeature
+from Bio import SeqIO
+
 # Make defaultdict compatible with versions of python older than 2.4
 try:
     collections.defaultdict
@@ -40,9 +45,6 @@ except ImportError:
     from Bio.Seq import _UndefinedSequenceData
     from Bio.Seq import Seq
 
-from Bio.SeqRecord import SeqRecord
-from Bio import SeqFeature
-from Bio import SeqIO
 
 def _gff_line_map(line, params):
     """Map part of Map-Reduce; parses a line of GFF into a dictionary.
@@ -235,7 +237,7 @@ def _gff_line_map(line, params):
             else:
                 final_key = 'annotation'
             if params.jsonify:
-                return [(final_key, simplejson.dumps(gff_info))]
+                return [(final_key, json.dumps(gff_info))]
             else:
                 return [(final_key, gff_info)]
     return []
@@ -246,14 +248,14 @@ def _gff_line_reduce(map_results, out, params):
     final_items = dict()
     for gff_type, final_val in map_results:
         if params.jsonify and gff_type not in ['directive']:
-            final_val = simplejson.loads(final_val)
+            final_val = json.loads(final_val)
         try:
             final_items[gff_type].append(final_val)
         except KeyError:
             final_items[gff_type] = [final_val]
     for key, vals in final_items.items():
         if params.jsonify:
-            vals = simplejson.dumps(vals)
+            vals = json.dumps(vals)
         out.add(key, vals)
 
 class _MultiIDRemapper:
@@ -731,7 +733,7 @@ class GFFParser(_AbstractMapReduceGFF):
             next = __next__
             def read(self, size=-1):
                 if size < 0:
-                    return "".join(l for l in self._iter)
+                    return "".join(line for line in self._iter)
                 elif size == 0:
                     return ""  # Used by Biopython to sniff unicode vs bytes
                 else:

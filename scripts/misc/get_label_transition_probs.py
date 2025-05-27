@@ -2,8 +2,8 @@ import pandas as pd
 import numpy as np
 import xarray as xr
 from numba import njit
-from src.modeling import TOKEN_CLASS_NAMES
-
+from src.modeling import GeneClassifierConfig
+from src.sequence import convert_to_entity_labels
 
 @njit
 def _transition_counts(labels: np.ndarray, classes: int) -> np.ndarray:
@@ -37,12 +37,19 @@ def _transition_counts(labels: np.ndarray, classes: int) -> np.ndarray:
 
     return counts
 
+def _convert_biluo_labels_to_entity_labels(labels: np.ndarray, sequence_length: int) -> np.ndarray:
+    assert labels.shape == (sequence_length,)
+    return convert_to_entity_labels(labels)
 
 def get_transition_probs(ds: xr.Dataset, classes: list[str]) -> pd.DataFrame:
     mask = ds.soft_mask & ds.label_mask
     labels = xr.where(mask, ds.labels, -1).to_numpy()
     assert labels.shape == (ds.sizes["sample"], ds.sizes["sequence"])
-    counts = _transition_counts(labels, len(classes))
+    entities = np.apply_along_axis(
+        _convert_biluo_labels_to_entity_labels, 
+        axis=1, arr=labels, sequence_length=ds.sizes["sequence"]
+    )
+    counts = _transition_counts(entities, len(classes))
     row_sums = counts.sum(axis=1, keepdims=True)
     # Avoid division by zero for states with no outgoing transitions
     probs = np.divide(counts, row_sums, where=row_sums != 0, out=np.zeros_like(counts))
@@ -87,5 +94,7 @@ def format_transition_probs(df: pd.DataFrame, precision: int = 16) -> str:
 
 path = "/scratch/10459/eczech/data/dna/plant_caduceus_genome_annotation_task/pipeline/prep/sequence_dataset/train.zarr"
 ds = xr.open_zarr(path, consolidated=True)
-probs = get_transition_probs(ds, TOKEN_CLASS_NAMES)
+config = GeneClassifierConfig()
+class_names = config.token_entity_names_with_background()
+probs = get_transition_probs(ds, class_names)
 print(format_transition_probs(probs, precision=16))

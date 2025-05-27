@@ -3,10 +3,10 @@ import logging
 import pandas as pd
 import re
 import os
-import subprocess
-from pathlib import Path
+import glob
 from src.gff_pandas import read_gff3, write_gff3
 from src.gff_compare import run_gffcompare, parse_gffcompare_stats
+from src.config import SPECIES_CONFIGS
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -16,17 +16,33 @@ logger = logging.getLogger(__name__)
 # Utility functions
 # -------------------------------------------------------------------------------------------------
 
-def load_gff(path: str) -> pd.DataFrame:
+def load_gff(path: str, attributes_to_drop: list[str] | None = None) -> pd.DataFrame:
     """Load GFF file into a pandas DataFrame.
     
     Parameters
     ----------
     path : str
         Path to input GFF file
+    attributes_to_drop : list[str] | None, optional
+        List of attributes to drop from the GFF file, typically to prevent
+        conflicts in normalized names
     """
     logger.info(f"Loading GFF file {path}")
     df = read_gff3(path)
     logger.info(f"Loading complete: {df.shape[0]} records found")
+
+    if attributes_to_drop:
+        # Drop parsed attributes and remove them from the original attributes as a delimited string
+        # TODO: Move away from GFF for intermediate representations to avoid these terrible standards
+        df = df.drop(columns=attributes_to_drop)
+        df["attributes"] = [
+            ";".join([
+                kv
+                for kv in attrs.split(";")
+                if kv.split("=")[0] not in attributes_to_drop
+            ])
+            for attrs in df["attributes"].fillna("")
+        ]
 
     # Create mapping of old column names to new lcase names
     col_mapping = {}
@@ -144,7 +160,7 @@ def merge_gff_files(input_paths: list[str], output_path: str) -> None:
     # Write merged GFF
     save_gff(output_path, merged_df)
 
-def filter_to_chromosome(input_path: str, output_path: str, chromosome_id: str) -> None:
+def filter_to_chromosome(input_path: str, output_path: str, chromosome_id: str, species_id: str = None) -> None:
     """Filter GFF file to include only entries from a specific chromosome.
     
     Parameters
@@ -155,16 +171,51 @@ def filter_to_chromosome(input_path: str, output_path: str, chromosome_id: str) 
         Path to output GFF file
     chromosome_id : str
         Chromosome ID to filter for
+    species_id : str, optional
+        Species ID to use for chromosome mapping
     """
-    logger.info(f"Filtering {input_path} to chromosome {chromosome_id}")
+    logger.info(f"Filtering {input_path} to chromosome {chromosome_id}" + 
+                (f" with species mapping for {species_id}" if species_id else ""))
+    
+    # Find the seq_ids to filter for based on species config if provided
+    seq_ids_to_filter = [chromosome_id]  # Default if no species_id provided
+    normalized_id = chromosome_id  # Default if no species_id provided
+    attributes_to_drop = None
+    
+    if species_id:
+        if species_id not in SPECIES_CONFIGS:
+            raise ValueError(f"Unknown species ID: {species_id}. Available species: {list(SPECIES_CONFIGS.keys())}")
+        
+        # Look up the chromosome mapping for this species
+        species_config = SPECIES_CONFIGS[species_id]
+        
+        # Find all source chromosome IDs that map to our target normalized ID
+        source_ids = [source_id for source_id, norm_id in species_config.chromosome_map.items() 
+                     if norm_id == chromosome_id]
+        
+        if not source_ids:
+            raise ValueError(f"No source chromosome IDs found for normalized ID '{chromosome_id}' in species '{species_id}'")
+        
+        attributes_to_drop = species_config.gff.attributes_to_drop
+        seq_ids_to_filter = source_ids
+        normalized_id = chromosome_id
+        
+        logger.info(f"Using source chromosome IDs: {seq_ids_to_filter}")
+        logger.info(f"Chromosome ID will be normalized from {chromosome_id} to {normalized_id}")
+        logger.info(f"The following GFF attributes will be dropped: {attributes_to_drop}")
     
     # Read GFF file
-    features = load_gff(input_path)
-    
-    # Filter to specified chromosome
+    features = load_gff(input_path, attributes_to_drop=attributes_to_drop)
     original_count = features.shape[0]
-    features = features[features["seq_id"] == chromosome_id]
+    
+    # Filter to specified chromosome(s)
+    features = features[features["seq_id"].isin(seq_ids_to_filter)]
     filtered_count = features.shape[0]
+    
+    # Normalize seq_id if using species mapping
+    if species_id and filtered_count > 0:
+        features["seq_id"] = normalized_id
+        logger.info(f"Normalized seq_id to {normalized_id}")
     
     # Write filtered GFF
     save_gff(output_path, features)
@@ -278,10 +329,13 @@ def filter_to_representative_transcripts(input_path: str, output_path: str, mode
     output_path : str
         Path to output GFF file
     mode : str
-        Selection mode: "longest" or "annotated"
+        Selection mode: "longest", "annotated", or "annotated_or_longest"
+        - "longest": Always select the longest transcript for each gene
+        - "annotated": Use the canonical_transcript=1 annotation, error if column missing
+        - "annotated_or_longest": Use canonical_transcript if the column exists, otherwise use longest
     """
-    if mode not in ["longest", "annotated"]:
-        raise ValueError(f"Mode must be either 'longest' or 'annotated', got {mode}")
+    if mode not in ["longest", "annotated", "annotated_or_longest"]:
+        raise ValueError(f"Mode must be either 'longest', 'annotated', or 'annotated_or_longest', got {mode}")
     
     logger.info(f"Filtering {input_path} to keep only representative transcripts using mode: {mode}")
     
@@ -290,12 +344,23 @@ def filter_to_representative_transcripts(input_path: str, output_path: str, mode
     
     original_count = features.shape[0]
     
-    # Check for proper canonical_transcript values if using annotated mode
-    if mode == "annotated":
-        canonical_values = features["canonical_transcript"].dropna().unique()
-        non_valid = [v for v in canonical_values if v not in ["1", ""]]
-        if non_valid:
-            raise ValueError(f"Found invalid canonical_transcript values: {non_valid}. Expected only '1' or ''.")
+    # Check if the canonical_transcript column exists when using annotated modes
+    has_canonical_column = 'canonical_transcript' in features.columns
+    
+    if mode == "annotated" and not has_canonical_column:
+        error_msg = "Cannot use 'annotated' mode: 'canonical_transcript' column not found in features"
+        logger.error(error_msg)
+        raise ValueError(error_msg)
+    
+    # If using annotated_or_longest and the column doesn't exist, fall back to longest
+    effective_mode = mode
+    if mode == "annotated_or_longest":
+        if has_canonical_column:
+            logger.info("Using 'annotated' mode (canonical_transcript column found)")
+            effective_mode = "annotated"
+        else:
+            logger.info("Falling back to 'longest' mode (canonical_transcript column not found)")
+            effective_mode = "longest"
     
     # Calculate feature lengths
     features["length"] = features["end"] - features["start"] + 1
@@ -324,7 +389,13 @@ def filter_to_representative_transcripts(input_path: str, output_path: str, mode
             logger.warning(f"Gene {gene_id} has no mRNA children")
             continue
         
-        if mode == "annotated":
+        if effective_mode == "annotated":
+            # Check for proper canonical_transcript values
+            canonical_values = features["canonical_transcript"].dropna().unique()
+            non_valid = [v for v in canonical_values if v not in ["1", ""]]
+            if non_valid:
+                raise ValueError(f"Found invalid canonical_transcript values: {non_valid}. Expected only '1' or ''.")
+                
             # Try to find canonical transcript
             canonical_mrnas = gene_mrnas[gene_mrnas["canonical_transcript"] == "1"]
             
@@ -440,6 +511,49 @@ def filter_to_valid_genes(input_path: str, output_path: str) -> None:
     # Write filtered GFF
     save_gff(output_path, features)
     logger.info(f"Filter complete: {features.shape[0]}/{original_count} records retained")
+
+def remove_exon_utrs(input_path: str, output_path: str) -> None:
+    """Remove five_prime_UTR, three_prime_UTR, and exon features from a GFF file.
+    
+    Parameters
+    ----------
+    input_path : str
+        Path to input GFF file
+    output_path : str
+        Path to output GFF file
+    """
+    logger.info(f"Removing UTR and exon features from {input_path}")
+    
+    # Read GFF file
+    features = load_gff(input_path)
+    original_count = features.shape[0]
+    
+    # Find all UTR features
+    utr_types = ["five_prime_UTR", "three_prime_UTR", "exon"]
+    utrs = features[features["type"].isin(utr_types)]
+    
+    # Count UTRs by type
+    utr_type_counts = utrs["type"].value_counts()
+    
+    logger.info(f"Found {len(utrs)} UTR/exon features:")
+    for utr_type, count in utr_type_counts.items():
+        logger.info(f"  - {count} {utr_type} features")
+    
+    # Remove UTR features
+    filtered_features = features[~features["type"].isin(utr_types)]
+    removed_count = original_count - len(filtered_features)
+    
+    # Count features by type after removal
+    remaining_type_counts = filtered_features["type"].value_counts()
+    
+    logger.info("After removal, feature types remaining:")
+    for feature_type, count in remaining_type_counts.items():
+        percentage = (count / len(filtered_features)) * 100
+        logger.info(f"  - {count} {feature_type} features ({percentage:.1f}%)")
+    
+    # Write filtered GFF
+    save_gff(output_path, filtered_features)
+    logger.info(f"UTR/exon removal complete: {removed_count} features removed, {len(filtered_features)}/{original_count} records retained ({len(filtered_features)/original_count*100:.1f}%)")
 
 def compare_gff_files(reference_path: str, input_path: str, output_dir: str, gffcompare_path: str) -> None:
     """Compare an input GFF file against a reference using gffcompare.
@@ -602,42 +716,49 @@ def summarize_gff(input_path: str) -> None:
     # Calculate fraction of genes with a canonical transcript
     print("\n=== Canonical Transcript Annotation ===")
     
-    # Get counts of all values for canonical_transcript
-    canonical_values = mrnas["canonical_transcript"].fillna("").value_counts()
+    # Check if canonical_transcript column exists
+    has_canonical_column = 'canonical_transcript' in mrnas.columns
     
-    # Print distribution of canonical_transcript values
-    print("\nCanonical transcript value distribution:")
-    print(f"{'Value':<20} {'Count':<10} {'Percentage':<10}")
-    print("-" * 50)
-    
-    # Flag for unexpected values
-    has_unexpected_values = False
-    expected_values = {"1", ""}
-    
-    # Print all values and mark unexpected ones
-    for value, count in canonical_values.items():
-        percentage = (count / len(mrnas)) * 100
-        # Mark unexpected values with '!!!'
-        marker = " !!! UNEXPECTED VALUE !!!" if value not in expected_values else ""
-        if marker:
-            has_unexpected_values = True
-        print(f"{value if value else '<empty>':<20} {count:<10} {percentage:.2f}%{marker}")
-    
-    if has_unexpected_values:
-        print("\nWARNING: Unexpected canonical_transcript values detected!")
-        print("Expected values are '1' or empty/missing.")
-    
-    # Find mRNAs with canonical_transcript="1"
-    canonical_mrnas = mrnas[mrnas["canonical_transcript"] == "1"]
-    
-    # Get the set of genes that have at least one canonical transcript
-    genes_with_canonical = set(canonical_mrnas["parent"].unique())
-    genes_with_canonical_count = len(genes_with_canonical)
-    
-    # Calculate percentage
-    canonical_percentage = (genes_with_canonical_count / total_genes) * 100 if total_genes > 0 else 0
-    
-    print(f"\nGenes with canonical transcript: {genes_with_canonical_count}/{total_genes} ({canonical_percentage:.2f}%)")
+    if not has_canonical_column:
+        print("\nNo canonical_transcript column found in the GFF file.")
+        print("Skipping canonical transcript analysis.")
+    else:
+        # Get counts of all values for canonical_transcript
+        canonical_values = mrnas["canonical_transcript"].fillna("").value_counts()
+        
+        # Print distribution of canonical_transcript values
+        print("\nCanonical transcript value distribution:")
+        print(f"{'Value':<20} {'Count':<10} {'Percentage':<10}")
+        print("-" * 50)
+        
+        # Flag for unexpected values
+        has_unexpected_values = False
+        expected_values = {"1", ""}
+        
+        # Print all values and mark unexpected ones
+        for value, count in canonical_values.items():
+            percentage = (count / len(mrnas)) * 100
+            # Mark unexpected values with '!!!'
+            marker = " !!! UNEXPECTED VALUE !!!" if value not in expected_values else ""
+            if marker:
+                has_unexpected_values = True
+            print(f"{value if value else '<empty>':<20} {count:<10} {percentage:.2f}%{marker}")
+        
+        if has_unexpected_values:
+            print("\nWARNING: Unexpected canonical_transcript values detected!")
+            print("Expected values are '1' or empty/missing.")
+        
+        # Find mRNAs with canonical_transcript="1"
+        canonical_mrnas = mrnas[mrnas["canonical_transcript"] == "1"]
+        
+        # Get the set of genes that have at least one canonical transcript
+        genes_with_canonical = set(canonical_mrnas["parent"].unique())
+        genes_with_canonical_count = len(genes_with_canonical)
+        
+        # Calculate percentage
+        canonical_percentage = (genes_with_canonical_count / total_genes) * 100 if total_genes > 0 else 0
+        
+        print(f"\nGenes with canonical transcript: {genes_with_canonical_count}/{total_genes} ({canonical_percentage:.2f}%)")
     
     # Calculate type combinations per gene
     print("\n=== Feature Type Combinations Per Transcript ===")
@@ -669,6 +790,64 @@ def summarize_gff(input_path: str) -> None:
         combo_str = ", ".join(sorted(combo))
         print(f"{combo_str:<50} {count:<15} {percentage:.2f}%")
 
+def collect_results(input_dir: str, output_path: str = None) -> None:
+    """Collect and consolidate gffcompare.stats.csv files from subdirectories.
+    
+    Parameters
+    ----------
+    input_dir : str
+        Path to the directory containing subdirectories with stats.csv files
+    output_path : str, optional
+        Path to save the consolidated results file. If None, defaults to
+        {input_dir}/gffcompare.stats.consolidated.csv
+    """
+    logger.info(f"Collecting gffcompare results from subdirectories of {input_dir}")
+    
+    # Find all gffcompare.stats.csv files in subdirectories
+    if output_path is None:
+        output_path = os.path.join(input_dir, "gffcompare.stats.consolidated.csv")
+        
+    stats_files = glob.glob(os.path.join(input_dir, "*/gffcompare.stats.csv"))
+    
+    if not stats_files:
+        logger.error(f"No gffcompare.stats.csv files found in subdirectories of {input_dir}")
+        return
+    
+    logger.info(f"Found {len(stats_files)} stats files")
+    
+    # Collect and process each file
+    dfs = []
+    for file_path in stats_files:
+        # Extract the directory name as source
+        source = os.path.basename(os.path.dirname(file_path))
+        logger.info(f"Processing {file_path} (source: {source})")
+        
+        # Read the CSV file
+        df = pd.read_csv(file_path, sep='\t')
+        
+        # Add source column
+        df['source'] = source
+        
+        dfs.append(df)
+    
+    # Concatenate all dataframes
+    if not dfs:
+        logger.error("No valid data found to consolidate")
+        return
+    
+    consolidated_df = pd.concat(dfs, ignore_index=True)
+    
+    # Sort by source and level
+    consolidated_df = consolidated_df.sort_values(['source', 'level'])
+    
+    # Print the consolidated dataframe
+    print(consolidated_df.to_string(index=False))
+    
+    # Save to file
+    logger.info(f"Saving consolidated results to {output_path}")
+    consolidated_df.to_csv(output_path, sep='\t', index=False)
+    logger.info("Results saved successfully")
+
 def main() -> None:
     """Parse command line arguments and execute the appropriate function."""
     parser = argparse.ArgumentParser(description="Manipulate GFF files")
@@ -684,6 +863,7 @@ def main() -> None:
     filter_parser.add_argument("--input", required=True, help="Input GFF file")
     filter_parser.add_argument("--output", required=True, help="Output GFF file")
     filter_parser.add_argument("--chromosome-id", required=True, help="Chromosome ID to filter for")
+    filter_parser.add_argument("--species-id", help="Species ID to use for chromosome mapping")
     
     # Filter to strand command
     strand_parser = subparsers.add_parser("filter_to_strand", help="Filter GFF file to include only entries from a specific strand")
@@ -704,15 +884,21 @@ def main() -> None:
     length_parser.add_argument("--min-length", required=True, type=int, help="Minimum feature length to retain")
     
     # Filter to representative transcripts command
-    rep_parser = subparsers.add_parser("filter_to_representative_transcripts", help="Filter GFF file to keep only representative transcripts for each gene")
+    rep_parser = subparsers.add_parser("filter_to_representative_transcripts", help="Filter GFF file to keep only one representative transcript for each gene")
     rep_parser.add_argument("--input", required=True, help="Input GFF file")
     rep_parser.add_argument("--output", required=True, help="Output GFF file")
-    rep_parser.add_argument("--mode", required=True, choices=["longest", "annotated"], help="Selection mode: use longest transcript or annotated canonical transcript (falling back to longest)")
+    rep_parser.add_argument("--mode", required=True, choices=["longest", "annotated", "annotated_or_longest"], 
+                         help="Selection mode: 'longest' always uses longest transcript, 'annotated' uses canonical_transcript=1 (errors if missing), 'annotated_or_longest' tries canonical annotationfirst then falls back to longest if that annotation does not exist for even a single feature")
     
     # Filter to valid genes command
     valid_parser = subparsers.add_parser("filter_to_valid_genes", help="Filter GFF file to remove transcripts without required features and genes without valid transcripts")
     valid_parser.add_argument("--input", required=True, help="Input GFF file")
     valid_parser.add_argument("--output", required=True, help="Output GFF file")
+    
+    # Remove UTRs command
+    utrs_parser = subparsers.add_parser("remove_exon_utrs", help="Remove five_prime_UTR, three_prime_UTR, and exon features from a GFF file")
+    utrs_parser.add_argument("--input", required=True, help="Input GFF file")
+    utrs_parser.add_argument("--output", required=True, help="Output GFF file")
     
     # Compare command
     compare_parser = subparsers.add_parser("compare", help="Compare an input GFF file against a reference using gffcompare")
@@ -725,12 +911,17 @@ def main() -> None:
     summarize_parser = subparsers.add_parser("summarize", help="Summarize the distribution of source and type fields in a GFF file")
     summarize_parser.add_argument("--input", required=True, help="Input GFF file")
     
+    # Collect results command
+    collect_parser = subparsers.add_parser("collect_results", help="Collect and consolidate gffcompare.stats.csv files from subdirectories")
+    collect_parser.add_argument("--input", required=True, help="Input directory containing subdirectories with stats.csv files")
+    collect_parser.add_argument("--output", help="Output file path for consolidated results (default: {input}/gffcompare.stats.consolidated.csv)")
+    
     args = parser.parse_args()
     
     if args.command == "merge":
         merge_gff_files(args.input, args.output)
     elif args.command == "filter_to_chromosome":
-        filter_to_chromosome(args.input, args.output, args.chromosome_id)
+        filter_to_chromosome(args.input, args.output, args.chromosome_id, args.species_id)
     elif args.command == "filter_to_strand":
         filter_to_strand(args.input, args.output, args.strand)
     elif args.command == "set_source":
@@ -741,10 +932,14 @@ def main() -> None:
         filter_to_representative_transcripts(args.input, args.output, args.mode)
     elif args.command == "filter_to_valid_genes":
         filter_to_valid_genes(args.input, args.output)
+    elif args.command == "remove_exon_utrs":
+        remove_exon_utrs(args.input, args.output)
     elif args.command == "compare":
         compare_gff_files(args.reference, args.input, args.output, args.gffcompare_path)
     elif args.command == "summarize":
         summarize_gff(args.input)
+    elif args.command == "collect_results":
+        collect_results(args.input, args.output)
     else:
         parser.print_help()
 
