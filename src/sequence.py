@@ -669,6 +669,27 @@ def create_prediction_windows(
 # Decoding utilities
 # -------------------------------------------------------------------------------------------------
 
+def transition_matrix_stationary_distribution(transition_matrix: np.ndarray) -> np.ndarray:
+    """Compute the stationary distribution of a markov chain transition matrix.
+
+    Parameters
+    ----------
+    transition_matrix : np.ndarray of shape (N, N)
+        Transition matrix of a markov chain
+
+    Returns
+    -------
+    np.ndarray of shape (N,)
+        Stationary distribution of the markov chain
+    """
+    eigenvals, eigenvecs = np.linalg.eig(transition_matrix.T)
+    # Find closest eigenvalue to 1
+    idx = np.argmin(np.abs(eigenvals - 1.0))
+    # Extract the corresponding eigenvector and normalize
+    dist = np.real(eigenvecs[:, idx])
+    dist = dist / dist.sum()
+    return dist
+
 def _validate_decode_inputs(
     emission_probs: np.ndarray,
     transition_matrix: np.ndarray,
@@ -704,20 +725,13 @@ def _validate_decode_inputs(
         raise ValueError("Transition matrix rows must sum to 1")
     
     if initial_probs is None:
-        # Use stationary distribution of the transition matrix
-        # (eigenvector with eigenvalue 1)
-        eigenvals, eigenvecs = np.linalg.eig(transition_matrix.T)
-        # Find closest eigenvalue to 1
-        idx = np.argmin(np.abs(eigenvals - 1.0))
-        # Extract the corresponding eigenvector and normalize
-        initial_probs = np.real(eigenvecs[:, idx])
-        initial_probs = initial_probs / initial_probs.sum()
+        initial_probs = transition_matrix_stationary_distribution(transition_matrix)
     else:
         initial_probs = np.asarray(initial_probs, dtype=float)
         if initial_probs.shape != (N,):
             raise ValueError(f"Initial probabilities shape {initial_probs.shape} doesn't match number of states {N}")
-        elif not np.isclose(initial_probs.sum(), 1.0):
-            raise ValueError("Initial probabilities must sum to 1")
+    if not np.isclose(initial_probs.sum(), 1.0):
+        raise ValueError(f"Initial probabilities must sum to 1; {initial_probs=}")
             
     return emission_probs, transition_matrix, initial_probs
 
@@ -885,7 +899,8 @@ def viterbi_decode(
     emission_probs: npt.ArrayLike, 
     transition_matrix: npt.ArrayLike,
     initial_probs: npt.ArrayLike | None = None,
-    alpha: float | None = None
+    alpha: float | None = None,
+    epsilon: float | None = None
 ) -> npt.NDArray[np.int64]:
     """Find most likely sequence of states using the Viterbi algorithm.
     
@@ -902,6 +917,9 @@ def viterbi_decode(
         If None, the stationary distribution of the transition matrix is used.
     alpha : float, optional
         Increase the likelihood of all transitions by this amount; must be between 0 and 1
+    epsilon : float, optional
+        Minimum probability for any state used to stabilize log probabilities;
+        must be between 0 and 1 and defaults to np.finfo(float).eps if not provided
     
     Returns
     -------
@@ -910,6 +928,10 @@ def viterbi_decode(
     """
     if alpha is not None:
         transition_matrix = regularize_transition_matrix(transition_matrix, alpha)
+    if epsilon is None:
+        epsilon = np.finfo(float).eps
+    if not 0 <= epsilon <= 1:
+        raise ValueError(f"Epsilon must be between 0 and 1; got {epsilon}")
 
     # Validate and prepare inputs
     emission_probs, transition_matrix, initial_probs = _validate_decode_inputs(
@@ -917,9 +939,9 @@ def viterbi_decode(
     )
     
     # Work in log space to avoid numerical underflow
-    log_emission = np.log(emission_probs + np.finfo(float).eps)
-    log_transition = np.log(transition_matrix + np.finfo(float).eps)
-    log_initial = np.log(initial_probs + np.finfo(float).eps)
+    log_emission = np.log(emission_probs + epsilon)
+    log_transition = np.log(transition_matrix + epsilon)
+    log_initial = np.log(initial_probs + epsilon)
     
     # Run Viterbi algorithm including backtracking
     return _viterbi_decode(log_emission, log_transition, log_initial)

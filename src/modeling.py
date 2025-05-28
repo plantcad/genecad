@@ -803,7 +803,6 @@ class UNET1DSegmentationHead(nn.Module):
         output_channels_list: tuple[int, ...] = (64, 128, 256, 512, 1024),
         num_conv_layers_per_block: int = 2,
         base_dilation: int = 1,
-        identity_init: bool = True,
     ):
         """
         Args:
@@ -812,13 +811,11 @@ class UNET1DSegmentationHead(nn.Module):
             output_channels_list: list of the number of output channels at each level
             num_conv_layers_per_block: number of convolution layers per block
             base_dilation: base dilation rate for the first level
-            identity_init: if True, initialize to act as identity function (output zeros)
         """
         super().__init__()
         self._num_pooling_layers = len(output_channels_list)
         self._base_dilation = base_dilation
         self._num_conv_layers_per_block = num_conv_layers_per_block
-        self._identity_init = identity_init
 
         downsample_input_channels_list = (embed_dim, ) + output_channels_list[:-1]
         output_channels_list_reversed = tuple(reversed(output_channels_list))
@@ -858,26 +855,6 @@ class UNET1DSegmentationHead(nn.Module):
             num_layers=num_conv_layers_per_block,
             base_dilation=base_dilation,
         )
-        
-        # Initialize for identity function if requested
-        if identity_init:
-            self._initialize_as_identity()
-
-    def _initialize_as_identity(self):
-        """Initialize the network to act as identity function (output zeros).
-        
-        Only zeros the final layer to ensure the network outputs zeros initially,
-        while keeping proper initialization for all other layers to enable gradient flow.
-        """
-        # Zero out only the final layer weights and biases so it outputs zeros
-        # All other layers keep their default initialization for proper gradient flow
-        with torch.no_grad():
-            # Only zero the last convolution layer in the final block
-            final_layer = self.final_block.conv_layers[-1]
-            if hasattr(final_layer, 'weight') and final_layer.weight is not None:
-                nn.init.zeros_(final_layer.weight)
-            if hasattr(final_layer, 'bias') and final_layer.bias is not None:
-                nn.init.zeros_(final_layer.bias)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         if (length := x.shape[2]) % (divisor := 2**self._num_pooling_layers):
@@ -948,7 +925,6 @@ class UnetClassifier(L.LightningModule):
         output_channels_list: tuple[int, ...] = (64, 128, 256, 512, 1024),
         num_conv_layers_per_block: int = 2,
         base_dilation: int = 1,
-        identity_init: bool = False,
         residual_mode: bool = True,
     ):
         super().__init__()
@@ -958,7 +934,6 @@ class UnetClassifier(L.LightningModule):
             output_channels_list=output_channels_list,
             num_conv_layers_per_block=num_conv_layers_per_block,
             base_dilation=base_dilation,
-            identity_init=identity_init,
         )
         
         self.criterion = nn.CrossEntropyLoss()
@@ -970,7 +945,6 @@ class UnetClassifier(L.LightningModule):
         # Log the receptive field
         rf = self.model.calculate_receptive_field()
         print(f"Dilated U-Net receptive field: {rf:,} bp")
-        print(f"Identity initialization: {identity_init}")
         print(f"Residual mode: {residual_mode}")
             
     def forward(self, x: Tensor) -> Tensor:

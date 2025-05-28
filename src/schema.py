@@ -35,7 +35,17 @@ class RegionType(StrEnum):
     
     @classmethod
     def intergenic(cls) -> str:
-        return "intergenic"
+        return SentinelType.INTERGENIC.value
+    
+    @classmethod
+    def value_to_feature_type(cls) -> dict["RegionType", "FeatureType"]:
+        return {
+            RegionType.GENE: FeatureType.GENE,
+            RegionType.TRANSCRIPT: FeatureType.MRNA,
+            RegionType.FIVE_PRIME_UTR: FeatureType.FIVE_PRIME_UTR,
+            RegionType.CODING_SEQUENCE: FeatureType.CDS,
+            RegionType.THREE_PRIME_UTR: FeatureType.THREE_PRIME_UTR,
+        }
     
     def get_index(self) -> int:
         return self.value_to_index()[self]

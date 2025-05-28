@@ -35,3 +35,16 @@ def get_species_data_dir(config: SpeciesConfig) -> str:
         return "testing_data"
     else:
         raise ValueError(f"Invalid split configuration for species {config.id}")
+    
+
+def normalize_genomic_region_label(label: str, strict: bool = True) -> str | None:
+    label = label.lower()
+    if label in ["intergenic", "intron", "five_prime_utr", "cds", "three_prime_utr"]:
+        return label
+    if label == "mrna":
+        return "transcript"
+    if label == "coding_sequence":
+        return "cds"
+    if strict:
+        raise ValueError(f"Invalid label: {label}")
+    return None
