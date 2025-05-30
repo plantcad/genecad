@@ -19,6 +19,7 @@ from src.sequence import (
     convert_to_entity_labels,
     get_evaluation_interval_metrics,
 )
+from src.schema import SEQUENCE_MODELING_FEATURES
 from src.visualization import (
     visualize_entities,
     visualize_tokens,
@@ -589,25 +590,24 @@ class GeneClassifier(L.LightningModule):
 # CRF
 # -------------------------------------------------------------------------
 
-TOKEN_TRANSITION_LABELS = ["intergenic", "intron", "five_prime_utr", "cds", "three_prime_utr"]
 TOKEN_TRANSITION_PROBS = [
     # intergenic              intron                  five_prime_utr          cds                     three_prime_utr
-    [9.9986728674356296e-01, 0.0000000000000000e+00, 1.3271325643708179e-04, 0.0000000000000000e+00, 0.0000000000000000e+00],  # intergenic
-    [0.0000000000000000e+00, 9.9670998028242297e-01, 1.4192693353026146e-04, 3.0749541662207606e-03, 7.3138617826025532e-05],  # intron
-    [0.0000000000000000e+00, 9.1231590182167715e-04, 9.9443444103113121e-01, 4.6532430670470975e-03, 0.0000000000000000e+00],  # five_prime_utr
-    [0.0000000000000000e+00, 3.3664534452795144e-03, 0.0000000000000000e+00, 9.9583064809038380e-01, 8.0289846433672328e-04],  # cds
-    [2.7761939578153979e-03, 2.8331069530538342e-04, 8.3618725786499447e-07, 0.0000000000000000e+00, 9.9693965915962135e-01],  # three_prime_utr
+    [9.9995043940833084e-01, 0.0000000000000000e+00, 4.9560591669216442e-05, 0.0000000000000000e+00, 0.0000000000000000e+00],  # intergenic
+    [0.0000000000000000e+00, 9.9669866350105285e-01, 1.4053978186751904e-04, 3.0901254015455425e-03, 7.0671315534084214e-05],  # intron
+    [0.0000000000000000e+00, 8.8466835423086916e-04, 9.9451467488120215e-01, 4.6006567645669990e-03, 0.0000000000000000e+00],  # five_prime_utr
+    [0.0000000000000000e+00, 3.3405151589122515e-03, 0.0000000000000000e+00, 9.9585209719964018e-01, 8.0738764144757324e-04],  # cds
+    [2.8711465041655749e-03, 2.6647086976677194e-04, 1.0282342852383601e-06, 0.0000000000000000e+00, 9.9686135439178236e-01],  # three_prime_utr
 ]
 
 def token_transition_probs() -> pd.DataFrame:
     return pd.DataFrame(
         data=TOKEN_TRANSITION_PROBS,
-        index=TOKEN_TRANSITION_LABELS,
-        columns=TOKEN_TRANSITION_LABELS,
+        index=SEQUENCE_MODELING_FEATURES,
+        columns=SEQUENCE_MODELING_FEATURES,
     )
 
 def create_crf(config: GeneClassifierConfig, initialize: bool = True, freeze: bool = True):
-    if (actual := config.token_entity_names_with_background()) != (expected := TOKEN_TRANSITION_LABELS):
+    if (actual := config.token_entity_names_with_background()) != (expected := SEQUENCE_MODELING_FEATURES):
         raise ValueError(f"Token entity names must match those used to create transition probabilities; expected labels: {expected}, got: {actual}")
     from torchcrf import CRF
     labels = config.token_entity_names_with_background()
@@ -874,46 +874,6 @@ class UNET1DSegmentationHead(nn.Module):
         x = self.final_block(x)
         return x
 
-    def calculate_receptive_field(self) -> int:
-        """
-        Calculate the theoretical receptive field of this network.
-        
-        Returns:
-            int: Receptive field in base pairs
-        """
-        receptive_field = 1
-        
-        # Encoder path - calculate actual dilation values used
-        for i in range(self._num_pooling_layers):
-            # Get the base dilation for this level (matches constructor)
-            level_base_dilation = self._base_dilation * (2 ** (2 * i))
-            
-            # Each layer in this level adds to receptive field
-            for layer_idx in range(self._num_conv_layers_per_block):
-                dilation = level_base_dilation * (2 ** layer_idx)
-                receptive_field += (3 - 1) * dilation  # kernel_size = 3
-            
-            # Pooling doubles the effective receptive field
-            receptive_field *= 2
-        
-        # Decoder path - calculate actual dilation values used
-        for i in range(self._num_pooling_layers):
-            # Get the base dilation for this level (matches constructor)
-            level_base_dilation = self._base_dilation * (2 ** (2 * (self._num_pooling_layers - 1 - i)))
-            
-            # Each layer in this level adds to receptive field
-            for layer_idx in range(self._num_conv_layers_per_block):
-                dilation = level_base_dilation * (2 ** layer_idx)
-                receptive_field += (3 - 1) * dilation
-        
-        # Final block
-        for layer_idx in range(self._num_conv_layers_per_block):
-            dilation = self._base_dilation * (2 ** layer_idx)
-            receptive_field += (3 - 1) * dilation
-            
-        return receptive_field
-
-
 class UnetClassifier(L.LightningModule):
     """Lightning module for UNET with large receptive field using dilated convolutions."""
     
@@ -941,11 +901,6 @@ class UnetClassifier(L.LightningModule):
         self.num_classes = num_classes
         self.residual_mode = residual_mode
         self.save_hyperparameters()
-        
-        # Log the receptive field
-        rf = self.model.calculate_receptive_field()
-        print(f"Dilated U-Net receptive field: {rf:,} bp")
-        print(f"Residual mode: {residual_mode}")
             
     def forward(self, x: Tensor) -> Tensor:
         if x.ndim != 3:

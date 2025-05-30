@@ -11,6 +11,8 @@ alwaysApply: true
 - Never change to this project repository directory yourself, always use `source ~/.projectrc`
 - Put any ad-hoc, utility scripts in `local/scratch`, which is not saved to source control; that should be your default choice unless prompted to do otherwise
 - Ensure that outputs of any of those scripts (plots, csvs, etc.) are also saved in `local/scratch` by default
+- If necessary, save the output of script runs to an appropriately named log file in `local/logs/exec`
+- Do not add `sys.path.append(...)` to scripts EVER; source code is added to the PYTHONPATH by `.projectrc`
 
 ## Execution
 - This project will always run within the context of an HPC cluster, which means that by default you will be working on a login node

@@ -999,3 +999,5 @@ def brute_force_decode(
     best_path, _ = max(path_probs, key=lambda x: x[1])
     
     return np.array(best_path, dtype=np.int64)
+
+

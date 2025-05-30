@@ -6,7 +6,7 @@ from typing import Literal, Any
 from numpy import typing as npt
 from pydantic import BaseModel, Field, field_validator, ValidationInfo
 from src.config import WINDOW_SIZE
-from src.sequence import convert_entity_labels_to_intervals, create_sequence_windows, replace_interval_classes, viterbi_decode
+from src.sequence import convert_entity_labels_to_intervals, create_sequence_windows, viterbi_decode
 import torch
 import torch.nn.functional as F
 import numpy as np
@@ -16,6 +16,9 @@ from transformers import AutoModel, AutoConfig, AutoTokenizer
 from src.dataset import open_datatree, set_dimension_chunks
 from src.prediction import merge_prediction_datasets
 from src.modeling import GeneClassifier, GeneClassifierConfig, token_transition_probs
+from src.decoding import semi_markov_viterbi_segmentation
+from src.analysis import load_feature_length_distributions
+from src.schema import ModelingFeatureType as MFT
 import pandas as pd
 from src.dist import process_group
 
@@ -24,6 +27,57 @@ logger = logging.getLogger(__name__)
 def batched(input_list: list[Any], batch_size: int) -> list[list[Any]]:
     """Batches a list into sublists of a specified size."""
     return [input_list[i:i + batch_size] for i in range(0, len(input_list), batch_size)]
+    
+def load_duration_probabilities(feature_labels: list[str]) -> dict[int, np.ndarray]:
+    """Load duration probabilities for semi-Markov decoding.
+    
+    Parameters
+    ----------
+    feature_labels : list[str]
+        List of feature labels in the order they appear in the model
+        
+    Returns
+    -------
+    dict[int, np.ndarray]
+        Dictionary mapping state index to smoothed duration probability array
+    """
+    path = 'local/data/feature_length_distributions.parquet'
+    sigma = 8.0
+    max_length = 8192
+
+    min_lengths = {
+        MFT.INTERGENIC: None,
+        MFT.INTRON: None,
+        MFT.FIVE_PRIME_UTR: None,
+        MFT.THREE_PRIME_UTR: None,
+        MFT.CDS: None,
+    }
+
+    # Load smoothed distributions
+    smoothed_distributions = load_feature_length_distributions(
+        path=path,
+        feature_labels=feature_labels,
+        min_length=min_lengths,
+        max_length=max_length,
+        sigma=sigma
+    )
+    
+    # Convert to the format expected by semi-Markov decoder
+    duration_probs = {}
+    for i, feature in enumerate(feature_labels):
+        duration_probs[i] = smoothed_distributions[feature].values
+    
+    # Log information
+    logger.info(f"Loaded duration probabilities for {len(duration_probs)} features (Gaussian smoothing σ={sigma})")
+    for i, feature in enumerate(feature_labels):
+        max_length = len(duration_probs[i])
+        tail_mass = duration_probs[i][-1]
+        # Calculate mean length from probabilities
+        durations = np.arange(1, max_length + 1)
+        mean_length = np.sum(durations * duration_probs[i])
+        logger.info(f"  {feature}: {max_length} duration bins, tail mass: {tail_mass:.3f}, mean length: {mean_length:.1f}")
+    
+    return duration_probs
     
 def load_classifier(args: Args) -> GeneClassifier:
     logger.info(f"Loading model from {args.model_checkpoint}")
@@ -348,14 +402,13 @@ def _detect_intervals(
     strands = predictions.strand.values.tolist()
     assert set(strands) == {"positive", "negative"}
     
-    def _decode_intervals(logits: npt.ArrayLike) -> pd.DataFrame:
+    def _decode_intervals_viterbi(logits: npt.ArrayLike) -> np.ndarray:
         transition_probs = token_transition_probs()
         if transition_probs.columns.tolist() != config.token_entity_names_with_background():
             raise ValueError(f"Transition probability classes must match token entity names; expected: {config.token_entity_names_with_background()}, got: {transition_probs.columns.tolist()}")
         emissions = F.softmax(torch.from_numpy(logits), dim=-1).numpy()
         assert emissions.min() >= 0 and emissions.max() <= 1
         assert transition_probs.index.tolist() == transition_probs.columns.tolist()
-        classes = transition_probs.columns.tolist()
 
         # Decoding takes ~90 seconds for 308452471 tokens on Grace CPU
         alpha = args.viterbi_alpha
@@ -366,26 +419,32 @@ def _detect_intervals(
             alpha=alpha
         )
         
-        # Only run replace_interval_classes if max_length is provided;
-        # This is a fragile, experimental heuristic that is not intended
-        # to be used for long.  It is useful for probing at the impact of 
-        # errors in predictions like those mentioned in:
-        # https://github.com/Open-Athena/oa-cornell-dna/issues/20#issuecomment-2889327465
-        if args.viterbi_remap_max_length is not None:
-            max_length = args.viterbi_remap_max_length
-            logger.info(f"Remapping 'intergenic' classes to 'intron' in transcript regions ({max_length=})")
-            labels = replace_interval_classes(
-                labels=labels,
-                start_class=classes.index("five_prime_utr"), # 2
-                end_class=classes.index("three_prime_utr"), # 4
-                middle_class=classes.index("cds"), # 3
-                target_class=classes.index("intergenic"), # 0
-                destination_class=classes.index("intron"), # 1
-                max_length=max_length
-            )
-        else:
-            logger.info("Skipping intergenic to intron remapping (viterbi-remap-max-length not provided)")
-            
+        assert labels.ndim == 1
+        assert len(labels) == len(logits)
+        return labels
+
+    def _decode_intervals_semi_markov(logits: npt.ArrayLike) -> np.ndarray:
+        transition_probs = token_transition_probs()
+        if transition_probs.columns.tolist() != config.token_entity_names_with_background():
+            raise ValueError(f"Transition probability classes must match token entity names; expected: {config.token_entity_names_with_background()}, got: {transition_probs.columns.tolist()}")
+        emissions = F.softmax(torch.from_numpy(logits), dim=-1).numpy()
+        assert emissions.min() >= 0 and emissions.max() <= 1
+        assert transition_probs.index.tolist() == transition_probs.columns.tolist()
+        
+        feature_labels = transition_probs.columns.tolist()
+        duration_probs = load_duration_probabilities(feature_labels)
+        
+        logger.info("Running semi-Markov viterbi decoding")
+        labels = semi_markov_viterbi_segmentation(
+            emission_probs=emissions,
+            transition_matrix=transition_probs.values,
+            duration_probs=duration_probs,
+            background_class=feature_labels.index(MFT.INTERGENIC.value),
+            background_class_min_length=32_768,
+            background_class_buffer=256,
+            num_workers=64
+        )
+        
         assert labels.ndim == 1
         assert len(labels) == len(logits)
         return labels
@@ -396,30 +455,35 @@ def _detect_intervals(
         logger.info(f"Running direct decoding for {strand!r} strand")
         intervals = convert_entity_labels_to_intervals(labels=labels, class_groups=config.interval_entity_classes)
         region_intervals.append(intervals.assign(strand=strand, decoding="direct"))
-        # CRF label decoding
+        
+        # CRF/Semi-Markov label decoding
         logits = predictions.sel(strand=strand).feature_logits.values
+        
+        # Viterbi decoding
         logger.info(f"Running viterbi decoding for {strand!r} strand")
         if strand == "positive":
-            decoded_labels = _decode_intervals(logits=logits)
+            viterbi_labels = _decode_intervals_viterbi(logits=logits)
         else:
-            # Copy the flipped array to avoid torch error: 
-            # ValueError: At least one stride in the given numpy array is negative, and tensors with negative strides are not currently supported. (You can probably work around this by making a copy of your array  with array.copy().)
-            decoded_labels = flip(_decode_intervals(logits=flip(logits).copy()))
+            viterbi_labels = flip(_decode_intervals_viterbi(logits=flip(logits).copy()))
+        
         intervals = convert_entity_labels_to_intervals(
-            labels=decoded_labels, 
+            labels=viterbi_labels, 
             class_groups=config.interval_entity_classes
         )
         region_intervals.append(intervals.assign(strand=strand, decoding="viterbi"))
         
-        # Save comparison data if requested
-        if args.save_viterbi_comparison:
-            _save_viterbi_comparison(
-                strand=strand,
-                labels=labels,
-                decoded_labels=decoded_labels,
-                output_path=args.output,
-                sequence_values=predictions.sequence.values
-            )
+        # Semi-Markov decoding
+        logger.info(f"Running semi-Markov decoding for {strand!r} strand")
+        if strand == "positive":
+            sm_labels = _decode_intervals_semi_markov(logits=logits)
+        else:
+            sm_labels = flip(_decode_intervals_semi_markov(logits=flip(logits).copy()))
+        
+        intervals = convert_entity_labels_to_intervals(
+            labels=sm_labels, 
+            class_groups=config.interval_entity_classes
+        )
+        region_intervals.append(intervals.assign(strand=strand, decoding="sm-viterbi"))
         
     region_intervals = pd.concat(region_intervals, ignore_index=True, axis=0)
     region_name_map = {
@@ -485,48 +549,6 @@ def detect_intervals(args: Args):
     
     logger.info("Done")
 
-def _save_viterbi_comparison(strand: str, labels: npt.ArrayLike, decoded_labels: npt.ArrayLike, 
-                            output_path: str, sequence_values: npt.ArrayLike) -> None:
-    """
-    Save comparison data between direct decoding and viterbi decoding.
-    
-    Parameters
-    ----------
-    strand : str
-        The strand being processed ("positive" or "negative")
-    labels : npt.ArrayLike
-        The directly decoded labels
-    decoded_labels : npt.ArrayLike
-        The viterbi decoded labels
-    output_path : str
-        The base output path for the comparison data
-    sequence_values : npt.ArrayLike
-        The sequence coordinate values
-    """
-    logger.info(f"Saving viterbi comparison data for {strand!r} strand")
-    # Get parent dir of output_path and save to "viterbi_comparison"
-    temp_dir = os.path.join(os.path.dirname(output_path), "viterbi_comparison")
-    os.makedirs(temp_dir, exist_ok=True)
-    temp_path = os.path.join(temp_dir, f"{strand}.zarr")
-    if os.path.exists(temp_path):
-        import shutil
-        shutil.rmtree(temp_path)
-    temp_ds = xr.Dataset(
-        data_vars={
-            "direct_labels": (["sequence"], labels), 
-            "viterbi_labels": (["sequence"], decoded_labels),
-        },
-        coords={"sequence": sequence_values},
-        attrs={"strand": strand},
-    )
-    logger.info(f"Viterbi comparison dataset:\n{temp_ds}")
-    temp_ds.to_zarr(
-        temp_path,
-        zarr_format=2,
-        consolidated=True,
-    )
-    logger.info(f"Saved viterbi comparison data to {temp_path}")
-    
 # -------------------------------------------------------------------------------------------------
 # GFF Exports
 # -------------------------------------------------------------------------------------------------
@@ -782,16 +804,14 @@ def main():
     detect_parser.add_argument("--input-dir", required=True, help="Path to input zarr dataset from generate_logits")
     detect_parser.add_argument("--output", required=True, help="Path to output zarr dataset for intervals")
     detect_parser.add_argument("--window-size", type=int, default=WINDOW_SIZE, help="Window size for sequence processing")
-    detect_parser.add_argument("--save-viterbi-comparison", action="store_true", default=False, help="Save comparison data between direct and viterbi decoding")
     detect_parser.add_argument("--viterbi-alpha", type=float, default=None, help="Alpha parameter for viterbi decoding (default: None)")
-    detect_parser.add_argument("--viterbi-remap-max-length", type=int, default=None, help="Max length for intergenic-to-intron remapping (default: None, skips remapping)")
     
     # Export GFF command
     gff_parser = subparsers.add_parser("export_gff", help="Export predictions to GFF format")
     gff_parser.add_argument("--input", required=True, help="Path to input zarr dataset from run_inference")
     gff_parser.add_argument("--output", required=True, help="Path to output GFF file")
     gff_parser.add_argument("--min-transcript-length", type=int, default=0, help="Minimum transcript length (default: 0, no filtering)")
-    gff_parser.add_argument("--decoding-method", type=str, default="direct", help="Decoding method to use (default: direct)")
+    gff_parser.add_argument("--decoding-method", type=str, choices=["direct", "viterbi", "sm-viterbi"], default="direct", help="Decoding method to use (default: direct)")
     
     args = parser.parse_args()
     

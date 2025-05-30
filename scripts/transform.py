@@ -6,7 +6,7 @@ from dataclasses import dataclass, asdict
 from src.dataset import DEFAULT_SEQUENCE_CHUNK_SIZE, open_datatree, set_dimension_chunks
 from src.sequence import find_overlapping_intervals, convert_entity_intervals_to_labels, convert_to_biluo_labels, convert_biluo_entity_names
 import numpy as np
-from src.schema import FeatureLevel, RegionType, FeatureType, SentinelType
+from src.schema import FeatureLevel, RegionType, GffFeatureType, SentinelType
 import xarray as xr
 from src.config import get_species_config, get_species_configs
 
@@ -97,7 +97,7 @@ def filter_canonical_transcripts(df: pd.DataFrame) -> tuple[pd.DataFrame, list[F
 def filter_incomplete_features(df: pd.DataFrame) -> tuple[pd.DataFrame, list[Filter]]:
     """Filter the dataframe to only keep genes with fully annotated canonical transcripts. """
     # Get list of "base" features, meaning those at the lowest level (i.e. UTRs and CDS)
-    base_features = FeatureType.get_values(level=2)
+    base_features = GffFeatureType.get_values(level=2)
     genes_with_incomplete_features = (
         df
         # It is crucial to do this first as significantly more 
@@ -302,8 +302,8 @@ def stack_gff_features(df: pd.DataFrame) -> pd.DataFrame:
     base_key = ["species_id", "chromosome_id"]
     base_cols = ["filename", "chromosome_length"]
     for prefix, type, key, level in [
-        ("gene", FeatureType.GENE, ["gene_id"], FeatureLevel.GENE),
-        ("transcript", FeatureType.MRNA, ["gene_id", "transcript_id"], FeatureLevel.TRANSCRIPT),
+        ("gene", GffFeatureType.GENE, ["gene_id"], FeatureLevel.GENE),
+        ("transcript", GffFeatureType.MRNA, ["gene_id", "transcript_id"], FeatureLevel.TRANSCRIPT),
         ("feature", None, ["gene_id", "transcript_id", "feature_id"], FeatureLevel.ANNOTATION),
     ]:
         cols = {f"{prefix}_{c}": c for c in ["id", "name", "strand", "start", "stop"]}
@@ -359,13 +359,13 @@ def stack_features(input_path: str, output_path: str) -> None:
 def _create_feature_labels(df: pd.DataFrame, domain: tuple[int, int]) -> tuple[np.ndarray, list[str]]:
     # Filter to lowest level features like CDS, 5' UTR, 3' UTR, etc.
     annotation_features = [
-        ft for ft in FeatureType 
-        if FeatureType.value_to_level()[ft] == FeatureLevel.ANNOTATION
+        ft for ft in GffFeatureType 
+        if GffFeatureType.value_to_level()[ft] == FeatureLevel.ANNOTATION
     ]
     df = df[df["feature_type"].isin(annotation_features)]
     
     feature_type_to_index = {ft: i for i, ft in enumerate(annotation_features)}
-    feature_coords = [FeatureType.value_to_slug()[ft] for ft in annotation_features]
+    feature_coords = [GffFeatureType.value_to_slug()[ft] for ft in annotation_features]
     num_feature_types = len(feature_coords)
     domain_size = domain[1] - domain[0]
 
@@ -391,11 +391,11 @@ def _create_feature_labels(df: pd.DataFrame, domain: tuple[int, int]) -> tuple[n
 
 def _create_region_labels(group: pd.DataFrame, domain: tuple[int, int]) -> tuple[np.ndarray, list[str]]:
     domain_size = domain[1] - domain[0]
-    num_region_types = len(RegionType)
     region_coords: list[str] = list(RegionType)
+    num_region_types = len(region_coords)
 
     # Helper function to create region dataframes from specific feature types
-    def create_region_df(feature_types: list[FeatureType], label_index: int) -> pd.DataFrame:
+    def create_region_df(feature_types: list[GffFeatureType], label_index: int) -> pd.DataFrame:
         return (
             group
             .pipe(lambda df: df[df["feature_type"].isin(feature_types)])
@@ -404,7 +404,7 @@ def _create_region_labels(group: pd.DataFrame, domain: tuple[int, int]) -> tuple
         )
     
     # Helper function to create aggregated region dataframes
-    def create_aggregated_region_df(feature_types: list[FeatureType], label_index: int) -> pd.DataFrame:
+    def create_aggregated_region_df(feature_types: list[GffFeatureType], label_index: int) -> pd.DataFrame:
         return (
             group
             .pipe(lambda df: df[df["feature_type"].isin(feature_types)])
@@ -420,22 +420,22 @@ def _create_region_labels(group: pd.DataFrame, domain: tuple[int, int]) -> tuple
     # Create dataframes containing intervals for each region type
     region_interval_sets = [
         # Regions defined directly by features
-        create_region_df([FeatureType.GENE], RegionType.GENE.get_index()),
-        create_region_df([FeatureType.MRNA], RegionType.TRANSCRIPT.get_index()),
+        create_region_df([GffFeatureType.GENE], RegionType.GENE.get_index()),
+        create_region_df([GffFeatureType.MRNA], RegionType.TRANSCRIPT.get_index()),
         create_region_df(
-            [FeatureType.CDS, FeatureType.FIVE_PRIME_UTR, FeatureType.THREE_PRIME_UTR], 
+            [GffFeatureType.CDS, GffFeatureType.FIVE_PRIME_UTR, GffFeatureType.THREE_PRIME_UTR], 
             RegionType.EXON.get_index()
         ),
         
         # Regions defined by min/max spans of consituent features
-        create_aggregated_region_df([FeatureType.CDS], RegionType.CODING_SEQUENCE.get_index()),
-        create_aggregated_region_df([FeatureType.FIVE_PRIME_UTR], RegionType.FIVE_PRIME_UTR.get_index()),
-        create_aggregated_region_df([FeatureType.THREE_PRIME_UTR], RegionType.THREE_PRIME_UTR.get_index()),
+        create_aggregated_region_df([GffFeatureType.CDS], RegionType.CODING_SEQUENCE.get_index()),
+        create_aggregated_region_df([GffFeatureType.FIVE_PRIME_UTR], RegionType.FIVE_PRIME_UTR.get_index()),
+        create_aggregated_region_df([GffFeatureType.THREE_PRIME_UTR], RegionType.THREE_PRIME_UTR.get_index()),
 
         # This is not the definition of introns, but rather a region confining where they should exist;
         # they will be fully defined later by subtracting regions from this initial window
         create_aggregated_region_df(
-            [FeatureType.CDS, FeatureType.FIVE_PRIME_UTR, FeatureType.THREE_PRIME_UTR], 
+            [GffFeatureType.CDS, GffFeatureType.FIVE_PRIME_UTR, GffFeatureType.THREE_PRIME_UTR], 
             RegionType.INTRON.get_index()
         ),
     ]
@@ -448,10 +448,12 @@ def _create_region_labels(group: pd.DataFrame, domain: tuple[int, int]) -> tuple
     
     # Generate region labels
     region_labels = convert_entity_intervals_to_labels(
-        # Convert all enum indices to 1-based indices for labelling
+        # Convert all enum indices to 1-based indices for interval conversion
         region_intervals.assign(label=lambda df: df["label"] + 1),
         domain,
         num_labels=num_region_types,
+        # Overlapping intervals are expected in this case, e.g.
+        # genes and their transcripts
         on_overlap="ignore"
     )
     assert region_labels.shape == (domain_size, num_region_types)

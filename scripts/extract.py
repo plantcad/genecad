@@ -12,7 +12,7 @@ from Bio.SeqFeature import SeqFeature
 from src.gff_parser import parse as parse_gff
 from src.gff_pandas import read_gff3
 from src.dataset import DEFAULT_SEQUENCE_CHUNK_SIZE, open_datatree, set_dimension_chunks
-from src.schema import FeatureType, SequenceFeature, PositionInfo
+from src.schema import GffFeatureType, SequenceFeature, PositionInfo
 from src.config import SPECIES_CONFIGS, SpeciesConfig, get_species_configs
 
 
@@ -142,7 +142,7 @@ def _extract_gff_features(path: str, species_config: SpeciesConfig) -> pd.DataFr
         
         # Process each gene
         for gene in chrom.features:
-            if gene.type != FeatureType.GENE:
+            if gene.type != GffFeatureType.GENE:
                 raise ValueError(f"Found unexpected chromosome feature type: {gene.type}")
                 
             gene_id = get_feature_id(gene)
@@ -151,7 +151,7 @@ def _extract_gff_features(path: str, species_config: SpeciesConfig) -> pd.DataFr
             
             # Process each transcript
             for transcript in gene.sub_features:
-                if transcript.type != FeatureType.MRNA:
+                if transcript.type != GffFeatureType.MRNA:
                     raise ValueError(f"Found unexpected gene feature type: {transcript.type}")
                     
                 transcript_id = get_feature_id(transcript)
@@ -162,9 +162,9 @@ def _extract_gff_features(path: str, species_config: SpeciesConfig) -> pd.DataFr
                 # Process each feature
                 for feature in transcript.sub_features:
                     if feature.type not in [
-                        FeatureType.FIVE_PRIME_UTR,
-                        FeatureType.CDS,
-                        FeatureType.THREE_PRIME_UTR,
+                        GffFeatureType.FIVE_PRIME_UTR,
+                        GffFeatureType.CDS,
+                        GffFeatureType.THREE_PRIME_UTR,
                     ]:
                         raise ValueError(f"Found unexpected transcript feature type: {feature.type}")
                         

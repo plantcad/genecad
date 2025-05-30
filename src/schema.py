@@ -20,6 +20,18 @@ class SentinelType(StrEnum):
     def index_to_value(cls) -> dict[int, "SentinelType"]:
         return {i: ft for ft, i in cls.value_to_index().items()}
 
+
+class ModelingFeatureType(StrEnum):
+    INTERGENIC = 'intergenic'
+    INTRON = 'intron'
+    FIVE_PRIME_UTR = 'five_prime_utr'
+    CDS = 'cds'
+    THREE_PRIME_UTR = 'three_prime_utr'
+
+SEQUENCE_MODELING_FEATURES = [
+    e.value for e in ModelingFeatureType
+]
+
 class RegionType(StrEnum):
     GENE = 'gene'
     TRANSCRIPT = 'transcript'
@@ -38,13 +50,13 @@ class RegionType(StrEnum):
         return SentinelType.INTERGENIC.value
     
     @classmethod
-    def value_to_feature_type(cls) -> dict["RegionType", "FeatureType"]:
+    def value_to_feature_type(cls) -> dict["RegionType", "GffFeatureType"]:
         return {
-            RegionType.GENE: FeatureType.GENE,
-            RegionType.TRANSCRIPT: FeatureType.MRNA,
-            RegionType.FIVE_PRIME_UTR: FeatureType.FIVE_PRIME_UTR,
-            RegionType.CODING_SEQUENCE: FeatureType.CDS,
-            RegionType.THREE_PRIME_UTR: FeatureType.THREE_PRIME_UTR,
+            RegionType.GENE: GffFeatureType.GENE,
+            RegionType.TRANSCRIPT: GffFeatureType.MRNA,
+            RegionType.FIVE_PRIME_UTR: GffFeatureType.FIVE_PRIME_UTR,
+            RegionType.CODING_SEQUENCE: GffFeatureType.CDS,
+            RegionType.THREE_PRIME_UTR: GffFeatureType.THREE_PRIME_UTR,
         }
     
     def get_index(self) -> int:
@@ -55,7 +67,7 @@ class FeatureLevel(IntEnum):
     TRANSCRIPT = 1
     ANNOTATION = 2
 
-class FeatureType(StrEnum):
+class GffFeatureType(StrEnum):
     GENE = 'gene'
     MRNA = 'mRNA'
     FIVE_PRIME_UTR = 'five_prime_UTR'
@@ -63,41 +75,41 @@ class FeatureType(StrEnum):
     THREE_PRIME_UTR = 'three_prime_UTR'
 
     @classmethod
-    def value_to_index(cls) -> dict["FeatureType", int]:
-        return {ft: i for i, ft in enumerate(FeatureType)}
+    def value_to_index(cls) -> dict["GffFeatureType", int]:
+        return {ft: i for i, ft in enumerate(GffFeatureType)}
     
     @classmethod
-    def index_to_value(cls) -> dict[int, "FeatureType"]:
+    def index_to_value(cls) -> dict[int, "GffFeatureType"]:
         return {i: ft for ft, i in cls.value_to_index().items()}
     
     @classmethod
-    def value_to_level(cls) -> dict["FeatureType", int]:
+    def value_to_level(cls) -> dict["GffFeatureType", int]:
         mapping = {
-            FeatureType.GENE: FeatureLevel.GENE.value,
-            FeatureType.MRNA: FeatureLevel.TRANSCRIPT.value,
-            FeatureType.FIVE_PRIME_UTR: FeatureLevel.ANNOTATION.value,
-            FeatureType.CDS: FeatureLevel.ANNOTATION.value,
-            FeatureType.THREE_PRIME_UTR: FeatureLevel.ANNOTATION.value,
+            GffFeatureType.GENE: FeatureLevel.GENE.value,
+            GffFeatureType.MRNA: FeatureLevel.TRANSCRIPT.value,
+            GffFeatureType.FIVE_PRIME_UTR: FeatureLevel.ANNOTATION.value,
+            GffFeatureType.CDS: FeatureLevel.ANNOTATION.value,
+            GffFeatureType.THREE_PRIME_UTR: FeatureLevel.ANNOTATION.value,
         }
-        assert set(FeatureType) == set(mapping.keys())
+        assert set(GffFeatureType) == set(mapping.keys())
         return mapping
     
     @classmethod
-    def value_to_slug(cls) -> dict["FeatureType", int]:
+    def value_to_slug(cls) -> dict["GffFeatureType", int]:
         mapping = {
-            FeatureType.GENE: "gene",
-            FeatureType.MRNA: "mrna",
-            FeatureType.FIVE_PRIME_UTR: "five_prime_utr",
-            FeatureType.CDS: "cds",
-            FeatureType.THREE_PRIME_UTR: "three_prime_utr",
+            GffFeatureType.GENE: "gene",
+            GffFeatureType.MRNA: "mrna",
+            GffFeatureType.FIVE_PRIME_UTR: "five_prime_utr",
+            GffFeatureType.CDS: "cds",
+            GffFeatureType.THREE_PRIME_UTR: "three_prime_utr",
         }
-        assert set(FeatureType) == set(mapping.keys())
+        assert set(GffFeatureType) == set(mapping.keys())
         return mapping
     
     @classmethod
-    def get_values(cls, level: int) -> list["FeatureType"]:
+    def get_values(cls, level: int) -> list["GffFeatureType"]:
         mapping = cls.value_to_level()
-        return [ft for ft in FeatureType if mapping[ft] == level]
+        return [ft for ft in GffFeatureType if mapping[ft] == level]
 
     def get_index(self) -> int:
         return self.value_to_index()[self]
@@ -158,7 +170,7 @@ class SequenceFeature(BaseModel):
     feature_id:              str         = required_field("Feature identifier")
     feature_name:            str | None  = optional_field("Feature name")
     feature_strand:          int         = required_field("Feature strand: 1 for forward, -1 for reverse")
-    feature_type:            FeatureType = required_field("Feature type (e.g. CDS, UTR)")
+    feature_type:            GffFeatureType = required_field("Feature type (e.g. CDS, UTR)")
     feature_start:           int         = required_field("Feature start position (inclusive)")
     feature_stop:            int         = required_field("Feature stop position (exclusive)")
 
