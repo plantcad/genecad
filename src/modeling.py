@@ -471,7 +471,7 @@ class GeneClassifier(L.LightningModule):
                 label_name = self.config.token_label_name(i)
                 metrics[f"{prefix}__token__classes/{name}/{i:02d}-{label_name}"] = values[i]
             metrics[f"{prefix}__token__overall/{name}"] = values.mean()
-        self.log_dict(metrics, sync_dist=prefix == "valid")
+        self.log_dict(metrics, sync_dist=True)
 
     def aggregate_logits(self, logits: Tensor) -> Tensor:
         (B, S, _), E = logits.shape, self.num_core_entities
@@ -555,7 +555,7 @@ class GeneClassifier(L.LightningModule):
                     totals[k].append(stats[k])
             for k, v in totals.items():
                 metrics[f"{prefix}__entity__overall/{k}"] = np.mean(v)
-            self.log_dict(metrics, sync_dist=prefix == "valid")
+            self.log_dict(metrics, sync_dist=True)
 
     def _prepare_batch(self, batch: dict[str, Tensor], source: Source | None = None) -> Batch:
         (B, S), C = batch["input_ids"].shape, self.num_labels

@@ -395,6 +395,22 @@ def _detect_intervals(
         Dataset containing inferred region intervals
     """
     logger.info("Inferring regions from predicted labels")
+    
+    # Parse and validate decoding methods
+    valid_methods = {"direct", "viterbi", "sm-viterbi"}
+    decoding_methods = [method.strip() for method in args.decoding_methods.split(",")]
+    
+    # Validate that at least one method is provided
+    if not decoding_methods or all(not method for method in decoding_methods):
+        raise ValueError("At least one decoding method must be provided")
+    
+    # Validate that all methods are valid
+    invalid_methods = set(decoding_methods) - valid_methods
+    if invalid_methods:
+        raise ValueError(f"Invalid decoding methods: {invalid_methods}. Valid choices are: {valid_methods}")
+    
+    logger.info(f"Running decoding methods: {decoding_methods}")
+    
     # TODO: Fetch the label properties necessary from attributions stored in the predictions
     # datasets rather than from the configuration files, or from the original model checkpoint.
     config = GeneClassifierConfig()
@@ -451,39 +467,42 @@ def _detect_intervals(
         
     for strand in strands:
         # Direct label inference
-        labels = predictions.sel(strand=strand).feature_predictions.values 
-        logger.info(f"Running direct decoding for {strand!r} strand")
-        intervals = convert_entity_labels_to_intervals(labels=labels, class_groups=config.interval_entity_classes)
-        region_intervals.append(intervals.assign(strand=strand, decoding="direct"))
+        if "direct" in decoding_methods:
+            labels = predictions.sel(strand=strand).feature_predictions.values 
+            logger.info(f"Running direct decoding for {strand!r} strand")
+            intervals = convert_entity_labels_to_intervals(labels=labels, class_groups=config.interval_entity_classes)
+            region_intervals.append(intervals.assign(strand=strand, decoding="direct"))
         
         # CRF/Semi-Markov label decoding
         logits = predictions.sel(strand=strand).feature_logits.values
         
         # Viterbi decoding
-        logger.info(f"Running viterbi decoding for {strand!r} strand")
-        if strand == "positive":
-            viterbi_labels = _decode_intervals_viterbi(logits=logits)
-        else:
-            viterbi_labels = flip(_decode_intervals_viterbi(logits=flip(logits).copy()))
-        
-        intervals = convert_entity_labels_to_intervals(
-            labels=viterbi_labels, 
-            class_groups=config.interval_entity_classes
-        )
-        region_intervals.append(intervals.assign(strand=strand, decoding="viterbi"))
+        if "viterbi" in decoding_methods:
+            logger.info(f"Running viterbi decoding for {strand!r} strand")
+            if strand == "positive":
+                viterbi_labels = _decode_intervals_viterbi(logits=logits)
+            else:
+                viterbi_labels = flip(_decode_intervals_viterbi(logits=flip(logits).copy()))
+            
+            intervals = convert_entity_labels_to_intervals(
+                labels=viterbi_labels, 
+                class_groups=config.interval_entity_classes
+            )
+            region_intervals.append(intervals.assign(strand=strand, decoding="viterbi"))
         
         # Semi-Markov decoding
-        logger.info(f"Running semi-Markov decoding for {strand!r} strand")
-        if strand == "positive":
-            sm_labels = _decode_intervals_semi_markov(logits=logits)
-        else:
-            sm_labels = flip(_decode_intervals_semi_markov(logits=flip(logits).copy()))
-        
-        intervals = convert_entity_labels_to_intervals(
-            labels=sm_labels, 
-            class_groups=config.interval_entity_classes
-        )
-        region_intervals.append(intervals.assign(strand=strand, decoding="sm-viterbi"))
+        if "sm-viterbi" in decoding_methods:
+            logger.info(f"Running semi-Markov decoding for {strand!r} strand")
+            if strand == "positive":
+                sm_labels = _decode_intervals_semi_markov(logits=logits)
+            else:
+                sm_labels = flip(_decode_intervals_semi_markov(logits=flip(logits).copy()))
+            
+            intervals = convert_entity_labels_to_intervals(
+                labels=sm_labels, 
+                class_groups=config.interval_entity_classes
+            )
+            region_intervals.append(intervals.assign(strand=strand, decoding="sm-viterbi"))
         
     region_intervals = pd.concat(region_intervals, ignore_index=True, axis=0)
     region_name_map = {
@@ -805,6 +824,7 @@ def main():
     detect_parser.add_argument("--output", required=True, help="Path to output zarr dataset for intervals")
     detect_parser.add_argument("--window-size", type=int, default=WINDOW_SIZE, help="Window size for sequence processing")
     detect_parser.add_argument("--viterbi-alpha", type=float, default=None, help="Alpha parameter for viterbi decoding (default: None)")
+    detect_parser.add_argument("--decoding-methods", type=str, default="direct,viterbi,sm-viterbi", help="Comma-separated list of decoding methods to run (choices: direct, viterbi, sm-viterbi)")
     
     # Export GFF command
     gff_parser = subparsers.add_parser("export_gff", help="Export predictions to GFF format")

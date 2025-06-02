@@ -20,9 +20,6 @@ def get_configurations() -> list[dict]:
         if arch in ['sequence-only', 'encoder-only', 'all'] and frzn == 'no':
             continue
 
-        if arch == "all" and lr == 1e-4:
-            lr = 2.5e-5
-
         configs.append({
             'architecture': arch,
             'learning_rate': lr,

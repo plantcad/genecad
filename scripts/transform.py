@@ -208,7 +208,7 @@ def _gene_count(df: pd.DataFrame) -> int:
     """Count the number of genes in the dataframe."""
     return df[['species_id', 'chromosome_id', 'gene_id']].drop_duplicates().pipe(len)
 
-def filter_features(input_path: str, features_output_path: str, filters_output_path: str) -> None:
+def filter_features(input_path: str, features_output_path: str, filters_output_path: str, remove_incomplete_features: bool = False) -> None:
     """Process GFF features by filtering to canonical transcripts and removing overlapping features.
     
     Parameters
@@ -219,6 +219,8 @@ def filter_features(input_path: str, features_output_path: str, filters_output_p
         Path to output parquet file for filtered features
     filters_output_path : str
         Path to output parquet file for filter definitions
+    remove_incomplete_features : bool, optional
+        Whether to filter out genes with incomplete feature annotations, by default False
     """
     # Read input dataframe
     logger.info(f"Reading input from {input_path}")
@@ -235,8 +237,12 @@ def filter_features(input_path: str, features_output_path: str, filters_output_p
     # Find overlapping genes
     filtered_features, gene_overlap_filters = filter_overlapping_genes(filtered_features)
 
-    # Filter to transcripts with complete features
-    filtered_features, incomplete_features_filters = filter_incomplete_features(filtered_features)
+    # Filter to transcripts with complete features (conditional)
+    if remove_incomplete_features:
+        filtered_features, incomplete_features_filters = filter_incomplete_features(filtered_features)
+    else:
+        logger.info("Skipping incomplete features filter (--remove-incomplete-features=no)")
+        incomplete_features_filters = []
     
     # Find genes with overlapping features
     filtered_features, feature_overlap_filters = filter_overlapping_features(filtered_features)
@@ -892,6 +898,7 @@ def main():
     filter_parser.add_argument("--input", required=True, help="Path to input parquet file")
     filter_parser.add_argument("--output-features", required=True, help="Path to output parquet file for filtered features")
     filter_parser.add_argument("--output-filters", required=True, help="Path to output parquet file for filter definitions")
+    filter_parser.add_argument("--remove-incomplete-features", choices=["yes", "no"], default="yes", help="Whether to filter out genes with incomplete feature annotations (default: no)")
     
     # Stack features command
     stack_parser = subparsers.add_parser("stack_features", help="Convert features from wide to stacked format")
@@ -926,7 +933,8 @@ def main():
     args = parser.parse_args()
     
     if args.command == "filter_features":
-        filter_features(args.input, args.output_features, args.output_filters)
+        remove_incomplete = args.remove_incomplete_features == "yes"
+        filter_features(args.input, args.output_features, args.output_filters, remove_incomplete)
     elif args.command == "stack_features":
         stack_features(args.input, args.output)
     elif args.command == "create_labels":

@@ -240,8 +240,8 @@ athaliana_config = SpeciesConfig(
     name="Arabidopsis thaliana",
     chromosome_map={
         **{f"Chr{i}": f"chr{i}" for i in range(1, 6)},
-        "ChrC": "chrc",
-        "ChrM": "chrm",
+        "ChrC": "chr6",
+        "ChrM": "chr7",
     },
     gff=SpeciesGffConfig(filename="Athaliana_447_Araport11.gene.gff3"),
     fasta=SpeciesFastaConfig(filename="Athaliana_447.fasta"),
@@ -255,8 +255,8 @@ osativa_config = SpeciesConfig(
     name="Oryza sativa",
     chromosome_map={
         **{f"Chr{i}": f"chr{i}" for i in range(1, 13)},
-        "ChrSy": "chrsy",
-        "ChrUn": "chrun",
+        "ChrSy": "chr13",
+        "ChrUn": "chr14",
     },
     gff=SpeciesGffConfig(filename="Osativa_323_v7.0.gene.gff3"),
     fasta=SpeciesFastaConfig(filename="Osativa_323.fasta"),
