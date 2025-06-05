@@ -21,6 +21,7 @@ from src.analysis import load_feature_length_distributions
 from src.schema import ModelingFeatureType as MFT
 import pandas as pd
 from src.dist import process_group
+import torch._dynamo
 
 logger = logging.getLogger(__name__)
 
@@ -349,6 +350,13 @@ def create_predictions(args: Args):
     # Set to avoid:
     # UserWarning: TensorFloat32 tensor cores for float32 matrix multiplication available but not enabled. Consider setting `torch.set_float32_matmul_precision('high')` for better performance.
     torch.set_float32_matmul_precision("medium") # same setting as training
+
+    # Supress errors related to models trained with torch.compile, e.g.:
+    # AssertionError: increase TRITON_MAX_BLOCK['X'] to 4096
+    # https://github.com/pytorch/pytorch/issues/135028#issuecomment-2330421513
+    # Eager mode is fine in this pipeline so far -- compilation barely makes a difference
+    if args.suppress_dynamo_errors == "yes":
+        torch._dynamo.config.suppress_errors = True
 
     # Load the models and tokenizer
     base_model, classifier, tokenizer = load_models(args)
@@ -817,6 +825,7 @@ def main():
     inference_parser.add_argument("--stride", type=int, default=WINDOW_SIZE//2, help="Stride size for overlapping windows")
     inference_parser.add_argument("--batch-size", type=int, default=64, help="Batch size for inference")
     inference_parser.add_argument("--device", type=str, default="cuda", help="Device to use for inference (cuda/cpu)")
+    inference_parser.add_argument("--suppress-dynamo-errors", type=str, choices=["yes", "no"], default="yes", help="Whether to suppress torch dynamo errors (default: yes)")
     
     # Detect intervals command
     detect_parser = subparsers.add_parser("detect_intervals", help="Detect intervals from generated logits")

@@ -4,8 +4,10 @@ import itertools
 import sys
 from argparse import ArgumentParser, Namespace
 from train import parse_args, train
+from src.logging import rank_zero_logger
 
-logger = logging.getLogger(__name__)
+logger = rank_zero_logger(logging.getLogger(__name__))
+
 
 def get_configurations() -> list[dict]:
     configs = []

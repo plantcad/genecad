@@ -1,14 +1,9 @@
-"""
-Training script for LLM gene annotation classifier
-
-This trainer is intended to take prepared datasets (created by prepare_model_lightning.py)
-and fine-tune a model for a classification task.
-"""
 import argparse
 import os
 import time
 import logging
 import torch
+import warnings
 from torch.utils.data import DataLoader
 from torch import set_float32_matmul_precision
 import xarray as xr
@@ -20,8 +15,9 @@ from typing import Optional
 from src.dataset import XarrayDataset
 from src.config import WINDOW_SIZE
 from src.modeling import GeneClassifier, GeneClassifierConfig, ThroughputMonitor
+from src.logging import rank_zero_logger
 
-logger = logging.getLogger(__name__)
+logger = rank_zero_logger(logging.getLogger(__name__))
 
 def parse_args(args: Optional[list[str]] = None) -> Args:
     parser = argparse.ArgumentParser(description="Train genome annotation model")
@@ -57,6 +53,7 @@ def parse_args(args: Optional[list[str]] = None) -> Args:
     parser.add_argument('--enable-visualization', type=str, default="yes", choices=["yes", "no"], help='Enable visualization during training')
     parser.add_argument('--base-encoder-path', type=str, default=None, help='Path to the base encoder model to use, e.g. "kuleshov-group/compo-cad2-l24-dna-chtk-c8192-v2-b2-NpnkD-ba240000"')
     parser.add_argument('--base-encoder-frozen', type=str, default="yes", choices=["yes", "no"], help='Freeze the base encoder during training')
+    parser.add_argument('--torch-compile', type=str, default="no", choices=["yes", "no"], help='Enable torch.compile for model optimization')
     return parser.parse_args(args)
 
 def sample_transform(ds: xr.Dataset) -> dict:
@@ -72,7 +69,10 @@ def sample_transform(ds: xr.Dataset) -> dict:
     return sample_dict
 
 def train(args: Args) -> None:
-    
+    # Suppress Lightning warnings about sync_dist (these metrics are fine as averages across batches); e.g.:
+    # It is recommended to use `self.log('valid__token__classes/f1/14-I-three_prime_utr', ..., sync_dist=True)` when logging on epoch level in distributed setting to accumulate the metric across devices.
+    warnings.filterwarnings("ignore", ".*It is recommended to use `self.log(.*, sync_dist=True)`.*")
+
     # Set precision and random seed
     set_float32_matmul_precision("medium")
     L.seed_everything(args.seed)
@@ -158,7 +158,7 @@ def train(args: Args) -> None:
             enable_visualization=args.enable_visualization == "yes",
             base_encoder_frozen=args.base_encoder_frozen == "yes",
         )
-        model = GeneClassifier(config, learning_rate=args.learning_rate, learning_rate_decay=args.learning_rate_decay)
+        model = GeneClassifier(config, learning_rate=args.learning_rate, learning_rate_decay=args.learning_rate_decay, torch_compile=args.torch_compile == "yes")
     
     logger.info(f"Model for training:\n{model}")
 
@@ -194,6 +194,7 @@ def train(args: Args) -> None:
         precision="bf16-mixed",
         devices=args.gpu,
         num_nodes=args.num_nodes,
+        gradient_clip_val=1.0,
         strategy=strategy,
         accelerator="gpu",
         val_check_interval=args.val_check_interval,
@@ -224,7 +225,6 @@ if __name__ == "__main__":
     # Configure logging
     logging.basicConfig(level=logging.INFO, 
                         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-
     start_time = time.time()
     main()
     end_time = time.time()

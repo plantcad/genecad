@@ -7,3 +7,4 @@ def process_group() -> tuple[int, int]:
         world_size = int(os.environ.get("WORLD_SIZE"))
         return rank, world_size
     return 0, 1 
+
