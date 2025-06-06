@@ -7,6 +7,7 @@ import glob
 from src.gff_pandas import read_gff3, write_gff3
 from src.gff_compare import run_gffcompare, parse_gffcompare_stats
 from src.config import SPECIES_CONFIGS
+from src.schema import GffFeatureType, RegionType
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -281,8 +282,8 @@ def set_source(input_path: str, output_path: str, source: str) -> None:
     save_gff(output_path, features)
     logger.info(f"Source field updated for {features.shape[0]} records")
 
-def filter_to_min_length(input_path: str, output_path: str, min_length: int) -> None:
-    """Filter GFF file to remove features shorter than minimum length and their children.
+def filter_to_min_gene_length(input_path: str, output_path: str, min_length: int) -> None:
+    """Filter GFF file to remove genes shorter than minimum length and their children.
     
     Parameters
     ----------
@@ -291,33 +292,148 @@ def filter_to_min_length(input_path: str, output_path: str, min_length: int) -> 
     output_path : str
         Path to output GFF file
     min_length : int
-        Minimum feature length to retain
+        Minimum gene length to retain
     """
-    logger.info(f"Filtering {input_path} to remove features shorter than {min_length} bp")
+    logger.info(f"Filtering {input_path} to remove genes shorter than {min_length} bp")
     
     # Read GFF file
     features = load_gff(input_path)
     
     original_count = features.shape[0]
     
-    # Calculate feature lengths
-    feature_lengths = features["end"] - features["start"] + 1
+    # Filter to only gene features for length checking
+    genes = features[features["type"] == GffFeatureType.GENE.value]
+    logger.info(f"Found {len(genes)} gene features to check for length")
     
-    # Identify features to remove based on length
-    too_short_mask = feature_lengths < min_length
-    too_short_ids = set(features.loc[too_short_mask, "id"].dropna())
-    logger.info(f"Found {len(too_short_ids)} features shorter than {min_length} bp")
+    # Calculate gene lengths
+    gene_lengths = genes["end"] - genes["start"] + 1
+    
+    # Identify genes to remove based on length
+    too_short_mask = gene_lengths < min_length
+    too_short_ids = set(genes.loc[too_short_mask, "id"].dropna())
+    logger.info(f"Found {len(too_short_ids)} genes shorter than {min_length} bp")
     
     # Remove features and their children
     features, removed_count, indirect_count = remove_features_by_id(features, too_short_ids)
     
-    logger.info(f"Removing {len(too_short_ids)} features directly (too short)")
-    logger.info(f"Removing {indirect_count} features indirectly (parent too short)")
+    logger.info(f"Removing {len(too_short_ids)} genes directly (too short)")
+    logger.info(f"Removing {indirect_count} features indirectly (parent gene too short)")
     logger.info(f"Total features removed: {removed_count}")
     
     # Write filtered GFF
     save_gff(output_path, features)
     logger.info(f"Filter complete: {features.shape[0]}/{original_count} records retained")
+
+def filter_to_min_feature_length(input_path: str, output_path: str, feature_types: list[str], min_length: int) -> None:
+    """Filter GFF file to remove small features of specified types and update gene/mRNA boundaries.
+    
+    Parameters
+    ----------
+    input_path : str
+        Path to input GFF file
+    output_path : str
+        Path to output GFF file
+    feature_types : list[str]
+        List of feature types to filter by length
+    min_length : int
+        Minimum feature length to retain
+    """
+    logger.info(f"Filtering {input_path} to remove {feature_types} features shorter than {min_length} bp")
+    
+    # Read GFF file
+    features = load_gff(input_path)
+    original_count = features.shape[0]
+    
+    # Validate feature types against schema
+    valid_types = set(GffFeatureType)
+    requested_types = set(feature_types)
+    invalid_types = requested_types - valid_types
+    
+    if invalid_types:
+        logger.error(f"Invalid feature types requested: {sorted(invalid_types)}")
+        logger.error(f"Valid feature types: {sorted(valid_types)}")
+        raise ValueError(f"Feature types {sorted(invalid_types)} are not valid GFF feature types")
+    
+    logger.info(f"Validated feature types: {sorted(requested_types)} (all valid)")
+    
+    # Calculate feature lengths
+    features["length"] = features["end"] - features["start"] + 1
+    
+    # Find features to remove (small features of specified types)
+    small_features_mask = (
+        features["type"].isin(feature_types) & 
+        (features["length"] < min_length)
+    )
+    small_feature_ids = set(features.loc[small_features_mask, "id"].dropna())
+    
+    logger.info(f"Found {len(small_feature_ids)} small features to remove")
+    
+    # Remove small features
+    features_filtered = features[~features.index.isin(features[small_features_mask].index)]
+    
+    # Group features by gene and update boundaries
+    genes = features_filtered[features_filtered["type"] == GffFeatureType.GENE.value]
+    mrnas = features_filtered[features_filtered["type"] == GffFeatureType.MRNA.value]
+    
+    # Track statistics for boundary updates
+    genes_updated = 0
+    transcripts_updated = 0
+    total_genes = len(genes)
+    total_transcripts = len(mrnas)
+    
+    for _, gene in genes.iterrows():
+        gene_id = gene["id"]
+        original_gene_start = gene["start"]
+        original_gene_end = gene["end"]
+        
+        # Find all features belonging to this gene (direct children and grandchildren via mRNAs)
+        gene_children = features_filtered[features_filtered["parent"] == gene_id]
+        gene_mrna_ids = gene_children[gene_children["type"] == GffFeatureType.MRNA.value]["id"].tolist()
+        
+        # First, update mRNA boundaries for this gene
+        for mrna_id in gene_mrna_ids:
+            mrna_features = features_filtered[features_filtered["parent"] == mrna_id]
+            if not mrna_features.empty:
+                original_mrna = features_filtered[features_filtered["id"] == mrna_id].iloc[0]
+                original_mrna_start = original_mrna["start"]
+                original_mrna_end = original_mrna["end"]
+                
+                mrna_start = mrna_features["start"].min()
+                mrna_end = mrna_features["end"].max()
+                
+                # Update mRNA boundaries and track if changed
+                if mrna_start != original_mrna_start or mrna_end != original_mrna_end:
+                    transcripts_updated += 1
+                    features_filtered.loc[features_filtered["id"] == mrna_id, "start"] = mrna_start
+                    features_filtered.loc[features_filtered["id"] == mrna_id, "end"] = mrna_end
+        
+        # Now update gene boundaries based on updated mRNA boundaries
+        updated_gene_children = features_filtered[features_filtered["parent"] == gene_id]
+        updated_mrnas = updated_gene_children[updated_gene_children["type"] == GffFeatureType.MRNA.value]
+        
+        if not updated_mrnas.empty:
+            new_start = updated_mrnas["start"].min()
+            new_end = updated_mrnas["end"].max()
+            
+            # Update gene boundaries and track if changed
+            if new_start != original_gene_start or new_end != original_gene_end:
+                genes_updated += 1
+                features_filtered.loc[features_filtered["id"] == gene_id, "start"] = new_start
+                features_filtered.loc[features_filtered["id"] == gene_id, "end"] = new_end
+    
+    # Remove temporary length column
+    features_filtered = features_filtered.drop(columns=["length"])
+    
+    removed_count = original_count - len(features_filtered)
+    
+    # Log statistics
+    logger.info(f"Boundary updates:")
+    logger.info(f"  - Genes: {genes_updated}/{total_genes} ({genes_updated/total_genes*100:.1f}%) had boundaries updated")
+    logger.info(f"  - Transcripts: {transcripts_updated}/{total_transcripts} ({transcripts_updated/total_transcripts*100:.1f}%) had boundaries updated")
+    
+    # Write filtered GFF
+    save_gff(output_path, features_filtered)
+    logger.info(f"Filter complete: {removed_count} features removed, {len(features_filtered)}/{original_count} records retained")
 
 def filter_to_representative_transcripts(input_path: str, output_path: str, mode: str) -> None:
     """Filter GFF file to keep only representative transcripts for each gene.
@@ -366,14 +482,14 @@ def filter_to_representative_transcripts(input_path: str, output_path: str, mode
     features["length"] = features["end"] - features["start"] + 1
     
     # Find all genes and their mRNA children
-    genes = features[features["type"] == "gene"]
+    genes = features[features["type"] == GffFeatureType.GENE.value]
     logger.info(f"Found {len(genes)} gene features")
     
     # Get gene IDs
     gene_ids = set(genes["id"].dropna())
     
     # Find all mRNAs
-    mrnas = features[features["type"] == "mRNA"]
+    mrnas = features[features["type"] == GffFeatureType.MRNA.value]
     logger.info(f"Found {len(mrnas)} mRNA features")
     
     # Track which mRNAs to keep and how they were selected
@@ -444,7 +560,7 @@ def filter_to_representative_transcripts(input_path: str, output_path: str, mode
     save_gff(output_path, features)
     logger.info(f"Filter complete: {features.shape[0]}/{original_count} records retained")
 
-def filter_to_valid_genes(input_path: str, output_path: str) -> None:
+def filter_to_valid_genes(input_path: str, output_path: str, require_utrs: bool = True) -> None:
     """Filter GFF file to remove mRNAs without required features and genes without valid mRNAs.
     
     Parameters
@@ -453,15 +569,22 @@ def filter_to_valid_genes(input_path: str, output_path: str) -> None:
         Path to input GFF file
     output_path : str
         Path to output GFF file
+    require_utrs : bool, default True
+        If True, require mRNAs to have five_prime_UTR, CDS, and three_prime_UTR.
+        If False, only require CDS.
     """
     logger.info(f"Filtering {input_path} to keep only valid transcripts and genes")
+    if require_utrs:
+        logger.info("Requiring five_prime_UTR, CDS, and three_prime_UTR for valid transcripts")
+    else:
+        logger.info("Requiring only CDS for valid transcripts")
     
     # Read GFF file
     features = load_gff(input_path)
     original_count = features.shape[0]
     
     # Find all mRNAs
-    mrnas = features[features["type"] == "mRNA"]
+    mrnas = features[features["type"] == GffFeatureType.MRNA.value]
     logger.info(f"Found {len(mrnas)} mRNA features")
     
     # Create index of parent -> children
@@ -476,12 +599,17 @@ def filter_to_valid_genes(input_path: str, output_path: str) -> None:
             children = features_by_parent.loc[[mrna_id]]
             
             # Check if it has all required feature types
-            has_five_prime = (children["type"] == "five_prime_UTR").any()
-            has_cds = (children["type"] == "CDS").any()
-            has_three_prime = (children["type"] == "three_prime_UTR").any()
+            has_cds = (children["type"] == GffFeatureType.CDS.value).any()
             
-            if has_five_prime and has_cds and has_three_prime:
-                valid_mrnas.add(mrna_id)
+            if require_utrs:
+                has_five_prime = (children["type"] == GffFeatureType.FIVE_PRIME_UTR.value).any()
+                has_three_prime = (children["type"] == GffFeatureType.THREE_PRIME_UTR.value).any()
+                
+                if has_five_prime and has_cds and has_three_prime:
+                    valid_mrnas.add(mrna_id)
+            else:
+                if has_cds:
+                    valid_mrnas.add(mrna_id)
     
     # Identify invalid mRNAs
     invalid_mrnas = set(mrnas["id"].dropna()) - valid_mrnas
@@ -493,12 +621,12 @@ def filter_to_valid_genes(input_path: str, output_path: str) -> None:
         logger.info(f"Removed {len(invalid_mrnas)} invalid mRNAs, {mrna_indirect_count} child features, {mrna_removed_count} total features")
     
     # Find all genes
-    genes = features[features["type"] == "gene"]
+    genes = features[features["type"] == GffFeatureType.GENE.value]
     logger.info(f"Found {len(genes)} gene features")
     
     # Identify genes with no valid mRNA children using set operations
     all_gene_ids = set(genes["id"].dropna())
-    mrna_parent_ids = set(features[(features["type"] == "mRNA")]["parent"].dropna())
+    mrna_parent_ids = set(features[(features["type"] == GffFeatureType.MRNA.value)]["parent"].dropna())
     invalid_genes = all_gene_ids - mrna_parent_ids
     
     logger.info(f"Found {len(invalid_genes)} genes with no valid transcripts")
@@ -528,8 +656,8 @@ def remove_exon_utrs(input_path: str, output_path: str) -> None:
     features = load_gff(input_path)
     original_count = features.shape[0]
     
-    # Find all UTR features
-    utr_types = ["five_prime_UTR", "three_prime_UTR", "exon"]
+    # Find all UTR features (note: "exon" is not in GffFeatureType so we keep it as string)
+    utr_types = [GffFeatureType.FIVE_PRIME_UTR.value, GffFeatureType.THREE_PRIME_UTR.value, RegionType.EXON.value]
     utrs = features[features["type"].isin(utr_types)]
     
     # Count UTRs by type
@@ -689,12 +817,12 @@ def summarize_gff(input_path: str) -> None:
     print("-" * 50)
     
     # Find all genes
-    genes = features[features["type"] == "gene"]
+    genes = features[features["type"] == GffFeatureType.GENE.value]
     gene_ids = set(genes["id"].dropna())
     total_genes = len(gene_ids)
     
     # Filter for mRNAs
-    mrnas = features[features["type"] == "mRNA"]
+    mrnas = features[features["type"] == GffFeatureType.MRNA.value]
     
     # Count mRNAs per gene using groupby
     gene_transcript_counts = mrnas.groupby("parent").size()
@@ -766,12 +894,12 @@ def summarize_gff(input_path: str) -> None:
     print("-" * 75)
     
     # Get all mRNA IDs
-    mrna_ids = set(features[features["type"] == "mRNA"]["id"].dropna())
+    mrna_ids = set(features[features["type"] == GffFeatureType.MRNA.value]["id"].dropna())
     
     # Filter to features that are children of mRNAs and not mRNAs themselves
     transcript_features = features[
         (features["parent"].isin(mrna_ids)) & 
-        (features["type"] != "mRNA")
+        (features["type"] != GffFeatureType.MRNA.value)
     ]
     
     # Group by parent (transcript) and get unique types, then count combinations
@@ -878,10 +1006,17 @@ def main() -> None:
     source_parser.add_argument("--source", required=True, help="Source value to set")
     
     # Filter to minimum length command
-    length_parser = subparsers.add_parser("filter_to_min_length", help="Filter GFF file to remove features and their children if shorter than minimum length")
+    length_parser = subparsers.add_parser("filter_to_min_gene_length", help="Filter GFF file to remove genes shorter than minimum length and their children")
     length_parser.add_argument("--input", required=True, help="Input GFF file")
     length_parser.add_argument("--output", required=True, help="Output GFF file")
-    length_parser.add_argument("--min-length", required=True, type=int, help="Minimum feature length to retain")
+    length_parser.add_argument("--min-length", required=True, type=int, help="Minimum gene length to retain")
+    
+    # Filter small features command
+    small_features_parser = subparsers.add_parser("filter_to_min_feature_length", help="Filter GFF file to remove small features of specified types and update gene/mRNA boundaries")
+    small_features_parser.add_argument("--input", required=True, help="Input GFF file")
+    small_features_parser.add_argument("--output", required=True, help="Output GFF file")
+    small_features_parser.add_argument("--feature-types", required=True, help="Comma-separated list of feature types to filter by length")
+    small_features_parser.add_argument("--min-length", required=True, type=int, help="Minimum feature length to retain")
     
     # Filter to representative transcripts command
     rep_parser = subparsers.add_parser("filter_to_representative_transcripts", help="Filter GFF file to keep only one representative transcript for each gene")
@@ -894,6 +1029,7 @@ def main() -> None:
     valid_parser = subparsers.add_parser("filter_to_valid_genes", help="Filter GFF file to remove transcripts without required features and genes without valid transcripts")
     valid_parser.add_argument("--input", required=True, help="Input GFF file")
     valid_parser.add_argument("--output", required=True, help="Output GFF file")
+    valid_parser.add_argument("--require-utrs", choices=["yes", "no"], default="yes", help="Require UTRs for valid transcripts (default: yes)")
     
     # Remove UTRs command
     utrs_parser = subparsers.add_parser("remove_exon_utrs", help="Remove five_prime_UTR, three_prime_UTR, and exon features from a GFF file")
@@ -926,12 +1062,14 @@ def main() -> None:
         filter_to_strand(args.input, args.output, args.strand)
     elif args.command == "set_source":
         set_source(args.input, args.output, args.source)
-    elif args.command == "filter_to_min_length":
-        filter_to_min_length(args.input, args.output, args.min_length)
+    elif args.command == "filter_to_min_gene_length":
+        filter_to_min_gene_length(args.input, args.output, args.min_length)
+    elif args.command == "filter_to_min_feature_length":
+        filter_to_min_feature_length(args.input, args.output, args.feature_types.split(','), args.min_length)
     elif args.command == "filter_to_representative_transcripts":
         filter_to_representative_transcripts(args.input, args.output, args.mode)
     elif args.command == "filter_to_valid_genes":
-        filter_to_valid_genes(args.input, args.output)
+        filter_to_valid_genes(args.input, args.output, args.require_utrs == "yes")
     elif args.command == "remove_exon_utrs":
         remove_exon_utrs(args.input, args.output)
     elif args.command == "compare":

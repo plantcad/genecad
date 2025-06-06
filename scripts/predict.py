@@ -18,7 +18,7 @@ from src.prediction import merge_prediction_datasets
 from src.modeling import GeneClassifier, GeneClassifierConfig, token_transition_probs
 from src.decoding import semi_markov_viterbi_segmentation
 from src.analysis import load_feature_length_distributions
-from src.schema import ModelingFeatureType as MFT
+from src.schema import GffFeatureType, ModelingFeatureType as MFT
 import pandas as pd
 from src.dist import process_group
 import torch._dynamo
@@ -685,7 +685,7 @@ def group_intervals_by_transcript(intervals: pd.DataFrame, min_transcript_length
     logger.info(f"Grouped intervals into {len(genes)} transcripts/genes.")
     return genes
 
-def generate_gff(genes: list[pd.DataFrame], chrom_id: str, output_path: str) -> None:
+def generate_gff(genes: list[pd.DataFrame], chrom_id: str, output_path: str, strip_introns: bool = True) -> None:
     """
     Generate a GFF3 file from grouped gene intervals.
 
@@ -697,6 +697,8 @@ def generate_gff(genes: list[pd.DataFrame], chrom_id: str, output_path: str) -> 
         The chromosome ID for the GFF records.
     output_path : str
         Path to write the GFF3 output file.
+    strip_introns : bool, default True
+        Whether to remove intron features before calculating gene boundaries.
     """
     logger.info(f"Generating GFF3 output for {len(genes)} genes on {chrom_id}")
     gff_records = []
@@ -704,23 +706,49 @@ def generate_gff(genes: list[pd.DataFrame], chrom_id: str, output_path: str) -> 
     source = "plantCaduceus" # GFF source field
 
     gff_feature_map = {
-        "cds": "CDS",
-        "five_prime_utr": "five_prime_UTR",
-        "three_prime_utr": "three_prime_UTR",
+        "cds": GffFeatureType.CDS.value,
+        "five_prime_utr": GffFeatureType.FIVE_PRIME_UTR.value,
+        "three_prime_utr": GffFeatureType.THREE_PRIME_UTR.value,
     }
+    
+    # Valid entity names
+    valid_entity_names = {"exon", "cds", "intron", "five_prime_utr", "three_prime_utr", "transcript"}
 
     for gene_group in genes:
+        # Validate entity names
+        invalid_entities = set(gene_group['entity_name'].unique()) - valid_entity_names
+        if invalid_entities:
+            raise ValueError(f"Unexpected entity_name values found: {invalid_entities}. "
+                           f"Valid values are: {valid_entity_names}")
+
+        # Filter out introns if strip_introns is True
+        if strip_introns:
+            boundary_features = ['five_prime_utr', 'three_prime_utr', 'cds']
+            gene_group_filtered = gene_group[gene_group['entity_name'].isin(boundary_features)].copy()
+            if len(gene_group_filtered) == 0:
+                continue
+        else:
+            start_entities = set(gene_group[gene_group['start'] == gene_group['start'].min()]['entity_name'])
+            stop_entities = set(gene_group[gene_group['stop'] == gene_group['stop'].max()]['entity_name'])
+            
+            if 'intron' in start_entities or 'intron' in stop_entities:
+                raise ValueError(
+                    "Gene has terminal introns, but strip_introns is False. "
+                    f"This would result in incorrect gene boundaries. Gene records:\n{gene_group}"
+                )
+            gene_group_filtered = gene_group.copy()
+        
         gene_counter += 1
         gene_id = f"gene_{gene_counter}"
         rna_id = f"{gene_id}.t1"
 
-        gene_start = int(gene_group['start'].min())
-        gene_stop = int(gene_group['stop'].max())
-        strand_symbol = '+' if gene_group['strand'].iloc[0] == 'positive' else '-'
+        gene_start = int(gene_group_filtered['start'].min())
+        gene_stop = int(gene_group_filtered['stop'].max())
+        strand_symbol = '+' if gene_group_filtered['strand'].iloc[0] == 'positive' else '-'
         
         # Create gene record
         gff_records.append(GffRecord(
-            seqid=chrom_id, source=source, type="gene",
+            seqid=chrom_id, source=source, type=GffFeatureType.GENE.value,
             start=gene_start + 1, end=gene_stop + 1, # 1-based
             strand=strand_symbol,
             attributes=_create_gff_attributes(id=gene_id)
@@ -728,19 +756,16 @@ def generate_gff(genes: list[pd.DataFrame], chrom_id: str, output_path: str) -> 
 
         # Create mRNA record
         gff_records.append(GffRecord(
-            seqid=chrom_id, source=source, type="mRNA",
+            seqid=chrom_id, source=source, type=GffFeatureType.MRNA.value,
             start=gene_start + 1, end=gene_stop + 1, # 1-based
             strand=strand_symbol,
             attributes=_create_gff_attributes(id=rna_id, parent_id=gene_id)
         ))
 
-        # Create feature records (CDS, UTRs)
+        # Create feature records (CDS, UTRs) - use original gene_group to include all features except when filtered
         feature_counters = {ftype: 0 for ftype in gff_feature_map.values()}
         for _, interval in gene_group.iterrows():
             entity_name = interval['entity_name']
-            if entity_name == 'transcript':
-                continue
-                
             gff_type = gff_feature_map.get(entity_name)
             if not gff_type:
                 continue
@@ -796,8 +821,11 @@ def export_gff(args: Args):
     # Group intervals by transcript
     genes = group_intervals_by_transcript(intervals_table, args.min_transcript_length)
     
+    # Convert strip_introns argument to boolean
+    strip_introns = args.strip_introns.lower() == "yes"
+    
     # Generate and save GFF
-    generate_gff(genes, chrom_id, args.output)
+    generate_gff(genes, chrom_id, args.output, strip_introns=strip_introns)
     
     logger.info("GFF export complete")
 
@@ -841,6 +869,7 @@ def main():
     gff_parser.add_argument("--output", required=True, help="Path to output GFF file")
     gff_parser.add_argument("--min-transcript-length", type=int, default=0, help="Minimum transcript length (default: 0, no filtering)")
     gff_parser.add_argument("--decoding-method", type=str, choices=["direct", "viterbi", "sm-viterbi"], default="direct", help="Decoding method to use (default: direct)")
+    gff_parser.add_argument("--strip-introns", type=str, choices=["yes", "no"], default="no", help="Whether to strip terminal introns from genes (default: no)")
     
     args = parser.parse_args()
     
