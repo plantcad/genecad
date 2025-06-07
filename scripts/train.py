@@ -59,7 +59,7 @@ def parse_args(args: Optional[list[str]] = None) -> Args:
 def sample_transform(ds: xr.Dataset) -> dict:
     """Custom sample transformation function for training data"""
     sample_dict = {}
-    for k in ["input_ids", "label_mask", "labels", "embeddings", "sample_index"]:
+    for k in ["input_ids", "label_mask", "tag_labels", "embeddings", "sample_index"]:
         if k == "embeddings" and k not in ds:
             continue
         n = "inputs_embeds" if k == "embeddings" else k
@@ -71,7 +71,7 @@ def sample_transform(ds: xr.Dataset) -> dict:
 def train(args: Args) -> None:
     # Suppress Lightning warnings about sync_dist (these metrics are fine as averages across batches); e.g.:
     # It is recommended to use `self.log('valid__token__classes/f1/14-I-three_prime_utr', ..., sync_dist=True)` when logging on epoch level in distributed setting to accumulate the metric across devices.
-    warnings.filterwarnings("ignore", ".*It is recommended to use `self.log(.*, sync_dist=True)`.*")
+    warnings.filterwarnings("ignore", ".*It is recommended to use `self.log\(.*sync_dist=True\).*")
 
     # Set precision and random seed
     set_float32_matmul_precision("medium")

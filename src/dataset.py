@@ -3,11 +3,13 @@ Module containing subclasses of torch Dataset for use with training and inferenc
 
 Most subclasses require fasta sequence and a tokenizer as input, though some take pre-tokenized data
 """
+import io
 import torch
 from torch.utils.data import Dataset
 import numpy as np
 import xarray as xr
 import zarr
+import pandas as pd
 import glob
 from typing import Any, Callable
 import logging
@@ -94,6 +96,13 @@ def open_datatree(zarr_path: str, **kwargs: Any) -> xr.DataTree:
     # Convert dictionary to DataTree
     return xr.DataTree.from_dict(datasets_dict)
 
+
+def info_str(df: pd.DataFrame) -> str:
+    """Get a string summary of pandas DataFrame.info()"""
+    buf = io.StringIO()
+    df.info(buf=buf)
+    info_string = buf.getvalue()
+    return info_string
 
 def default_transform(ds: xr.Dataset) -> dict[str, Any]:
     sample_dict = {k: ds[k].values for k in ds.data_vars}

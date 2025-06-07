@@ -3,10 +3,10 @@ import argparse
 import os
 import logging
 from dataclasses import dataclass, asdict
-from src.dataset import DEFAULT_SEQUENCE_CHUNK_SIZE, open_datatree, set_dimension_chunks
+from src.dataset import DEFAULT_SEQUENCE_CHUNK_SIZE, open_datatree, set_dimension_chunks, info_str
 from src.sequence import find_overlapping_intervals, convert_entity_intervals_to_labels, convert_to_biluo_labels, convert_biluo_entity_names
 import numpy as np
-from src.schema import FeatureLevel, RegionType, GffFeatureType, SentinelType
+from src.schema import FeatureLevel, FilterReason, RegionType, GffFeatureType, SentinelType
 import xarray as xr
 from src.config import get_species_config, get_species_configs
 
@@ -21,6 +21,7 @@ class Filter:
     species_id: str
     chromosome_id: str
     gene_id: str
+    strand: str
     reason: str
 
 def create_filters(df: pd.DataFrame, reason: str) -> list[Filter]:
@@ -30,11 +31,12 @@ def create_filters(df: pd.DataFrame, reason: str) -> list[Filter]:
             species_id=row['species_id'],
             chromosome_id=row['chromosome_id'],
             gene_id=row['gene_id'],
+            strand=row['strand'],
             reason=reason
         )
         for _, row in (
             df
-            .drop_duplicates(subset=['species_id', 'chromosome_id', 'gene_id'])
+            .drop_duplicates(subset=['species_id', 'chromosome_id', 'gene_id', 'strand'])
             .iterrows()
         )
     ]
@@ -44,15 +46,15 @@ def apply_filters(df: pd.DataFrame, filters: list[Filter]) -> pd.DataFrame:
     if not filters:
         return df
     
-    # Extract unique (species_id, chromosome_id, gene_id) tuples from filters
+    # Extract unique (species_id, chromosome_id, gene_id, strand) tuples from filters
     genes_to_filter = set(
-        (f.species_id, f.chromosome_id, f.gene_id) 
+        (f.species_id, f.chromosome_id, f.gene_id, f.strand) 
         for f in filters
     )
     
     # Filter out the genes
     return df[
-        ~df[['species_id', 'chromosome_id', 'gene_id']].apply(tuple, axis=1).isin(genes_to_filter)
+        ~df[['species_id', 'chromosome_id', 'gene_id', 'strand']].apply(tuple, axis=1).isin(genes_to_filter)
     ]
 
 def filter_canonical_transcripts(df: pd.DataFrame) -> tuple[pd.DataFrame, list[Filter]]:
@@ -61,9 +63,9 @@ def filter_canonical_transcripts(df: pd.DataFrame) -> tuple[pd.DataFrame, list[F
     # Count canonical transcripts per gene
     canonical_counts = (
         # First, get unique transcripts (we have to only count each transcript once)
-        df[['species_id', 'chromosome_id', 'gene_id', 'transcript_id', 'transcript_is_canonical']]
+        df[['species_id', 'chromosome_id', 'gene_id', 'strand', 'transcript_id', 'transcript_is_canonical']]
         .drop_duplicates()
-        .groupby(['species_id', 'chromosome_id', 'gene_id'])['transcript_is_canonical']
+        .groupby(['species_id', 'chromosome_id', 'gene_id', 'strand'])['transcript_is_canonical']
         .sum().reset_index()
     )
     
@@ -77,8 +79,8 @@ def filter_canonical_transcripts(df: pd.DataFrame) -> tuple[pd.DataFrame, list[F
     
     # Create filters for both cases
     filters = (
-        create_filters(genes_with_no_canonical, 'no_canonical_transcript')
-        + create_filters(genes_with_multiple_canonical, 'multiple_canonical_transcripts')
+        create_filters(genes_with_no_canonical, FilterReason.NO_CANONICAL_TRANSCRIPT.value)
+        + create_filters(genes_with_multiple_canonical, FilterReason.MULTIPLE_CANONICAL_TRANSCRIPTS.value)
     )
     
     # Filter out filtered genes and keep only canonical transcripts
@@ -94,7 +96,7 @@ def filter_canonical_transcripts(df: pd.DataFrame) -> tuple[pd.DataFrame, list[F
     
     return df_filtered, filters
 
-def filter_incomplete_features(df: pd.DataFrame) -> tuple[pd.DataFrame, list[Filter]]:
+def filter_incomplete_features(df: pd.DataFrame, apply_filters: bool = True) -> tuple[pd.DataFrame, list[Filter]]:
     """Filter the dataframe to only keep genes with fully annotated canonical transcripts. """
     # Get list of "base" features, meaning those at the lowest level (i.e. UTRs and CDS)
     base_features = GffFeatureType.get_values(level=2)
@@ -105,8 +107,8 @@ def filter_incomplete_features(df: pd.DataFrame) -> tuple[pd.DataFrame, list[Fil
         .pipe(lambda df: df[df['transcript_is_canonical']])
         # Filter to only chosen feature types
         .pipe(lambda df: df[df['feature_type'].isin(base_features)])
-        # Count distinct feature types per gene
-        .groupby(['species_id', 'chromosome_id', 'gene_id'])['feature_type']
+        # Count distinct feature types per gene (including strand)
+        .groupby(['species_id', 'chromosome_id', 'gene_id', 'strand'])['feature_type']
         .nunique().reset_index()
         .pipe(lambda df: df[df['feature_type'] < len(base_features)])
     )
@@ -114,8 +116,13 @@ def filter_incomplete_features(df: pd.DataFrame) -> tuple[pd.DataFrame, list[Fil
     logger.info(f"Found {len(genes_with_incomplete_features)} genes with incomplete canonical transcript annotations")
     
     # Create and apply filters
-    filters = create_filters(genes_with_incomplete_features, reason='incomplete_features')
-    df_filtered = apply_filters(df, filters)
+    filters = create_filters(genes_with_incomplete_features, reason=FilterReason.INCOMPLETE_FEATURES.value)
+    # If apply_filters is True, filter the underlying features;
+    # otherwise, just return the filters which can be used later to define masks
+    if apply_filters:
+        df_filtered = apply_filters(df, filters)
+    else:
+        df_filtered = df
     
     logger.info("Incomplete feature filters:")
     logger.info(f"  Original dataframe had {len(df)} rows")
@@ -129,11 +136,11 @@ def find_overlapping_genes(df: pd.DataFrame) -> list[Filter]:
     filters = []
     
     # Get unique genes with their positions
-    genes = df[['species_id', 'chromosome_id', 'gene_id', 'gene_start', 'gene_stop']].drop_duplicates()
+    genes = df[['species_id', 'chromosome_id', 'gene_id', 'strand', 'gene_start', 'gene_stop']].drop_duplicates()
     total_genes = _gene_count(df)
     
-    # Group by species and chromosome
-    for (species_id, chrom), group in genes.groupby(['species_id', 'chromosome_id']):
+    # Group by species, chromosome, and strand
+    for (species_id, chrom, strand), group in genes.groupby(['species_id', 'chromosome_id', 'strand']):
         
         # Find overlapping genes within this group
         has_overlap = find_overlapping_intervals(group['gene_start'], group['gene_stop'])
@@ -142,9 +149,9 @@ def find_overlapping_genes(df: pd.DataFrame) -> list[Filter]:
         overlapping_genes_df = group.loc[has_overlap]
         
         # Add to filters using utility function
-        filters.extend(create_filters(overlapping_genes_df, 'overlapping_gene'))
+        filters.extend(create_filters(overlapping_genes_df, FilterReason.OVERLAPPING_GENE.value))
         
-        logger.info(f"Found {len(overlapping_genes_df)} overlapping genes in {species_id}, chromosome {chrom}")
+        logger.info(f"Found {len(overlapping_genes_df)} overlapping genes in {species_id}, chromosome {chrom}, strand {strand}")
     
     logger.info(f"Found {len(filters)} genes with overlaps (out of {total_genes} total genes)")
     return filters
@@ -167,10 +174,10 @@ def find_overlapping_features(df: pd.DataFrame) -> list[Filter]:
     # Count total genes
     total_genes = _gene_count(df)
     
-    # Group by species, chromosome, gene, and transcript
+    # Group by species, chromosome, gene, strand, and transcript
     # (there should be only one transcript per gene after filter_canonical_transcripts)
-    for (species_id, chrom, gene_id, transcript_id), features_df in df.groupby(
-        ['species_id', 'chromosome_id', 'gene_id', 'transcript_id']
+    for (species_id, chrom, gene_id, strand, transcript_id), features_df in df.groupby(
+        ['species_id', 'chromosome_id', 'gene_id', 'strand', 'transcript_id']
     ):
         # Check for overlapping features
         has_overlap = find_overlapping_intervals(
@@ -184,11 +191,12 @@ def find_overlapping_features(df: pd.DataFrame) -> list[Filter]:
             gene_df = pd.DataFrame([{
                 'species_id': species_id,
                 'chromosome_id': chrom,
-                'gene_id': gene_id
+                'gene_id': gene_id,
+                'strand': strand
             }])
             
             # Add to filters using utility function
-            filters.extend(create_filters(gene_df, 'overlapping_features'))
+            filters.extend(create_filters(gene_df, FilterReason.OVERLAPPING_FEATURES.value))
     
     logger.info(f"Found {len(filters)} genes with overlapping features (out of {total_genes} total genes)")
     return filters
@@ -206,9 +214,9 @@ def filter_overlapping_features(df: pd.DataFrame) -> tuple[pd.DataFrame, list[Fi
 
 def _gene_count(df: pd.DataFrame) -> int:
     """Count the number of genes in the dataframe."""
-    return df[['species_id', 'chromosome_id', 'gene_id']].drop_duplicates().pipe(len)
+    return df[['species_id', 'chromosome_id', 'gene_id', 'strand']].drop_duplicates().pipe(len)
 
-def filter_features(input_path: str, features_output_path: str, filters_output_path: str, remove_incomplete_features: bool = False) -> None:
+def filter_features(input_path: str, features_output_path: str, filters_output_path: str, remove_incomplete_features: bool = True) -> None:
     """Process GFF features by filtering to canonical transcripts and removing overlapping features.
     
     Parameters
@@ -220,11 +228,19 @@ def filter_features(input_path: str, features_output_path: str, filters_output_p
     filters_output_path : str
         Path to output parquet file for filter definitions
     remove_incomplete_features : bool, optional
-        Whether to filter out genes with incomplete feature annotations, by default False
+        Whether to filter out genes with incomplete feature annotations, by default True;
+        note that the filter definitions will be saved regardless of whether or not the filters
+        are applied to the underlying features
     """
     # Read input dataframe
     logger.info(f"Reading input from {input_path}")
     features = pd.read_parquet(input_path)
+    
+    # Create unified strand column from gene_strand
+    features = features.assign(strand=lambda df: df["gene_strand"].map({-1: "negative", 1: "positive"}))
+    if features["strand"].isna().any():
+        invalid_strands = features[features["strand"].isna()]["gene_strand"].unique()
+        raise ValueError(f"Found unmapped strand values: {invalid_strands}")
     
     # Sort the dataframe
     features = features.sort_values(['species_id', 'chromosome_id', 'gene_start', 'transcript_start', 'feature_start'])
@@ -232,19 +248,19 @@ def filter_features(input_path: str, features_output_path: str, filters_output_p
     total_genes = _gene_count(features)
     
     # Filter to canonical transcripts
+    logger.info("Filtering to canonical transcripts")
     filtered_features, canonical_filters = filter_canonical_transcripts(features)
     
     # Find overlapping genes
+    logger.info("Filtering to non-overlapping genes")
     filtered_features, gene_overlap_filters = filter_overlapping_genes(filtered_features)
 
     # Filter to transcripts with complete features (conditional)
-    if remove_incomplete_features:
-        filtered_features, incomplete_features_filters = filter_incomplete_features(filtered_features)
-    else:
-        logger.info("Skipping incomplete features filter (--remove-incomplete-features=no)")
-        incomplete_features_filters = []
+    logger.info(f"Filtering to transcripts with complete features (apply_filters={remove_incomplete_features})")
+    filtered_features, incomplete_features_filters = filter_incomplete_features(filtered_features, apply_filters=remove_incomplete_features)
     
     # Find genes with overlapping features
+    logger.info("Filtering to non-overlapping features")
     filtered_features, feature_overlap_filters = filter_overlapping_features(filtered_features)
     
     # Create filters DataFrame for statistics
@@ -277,9 +293,9 @@ def filter_features(input_path: str, features_output_path: str, filters_output_p
     filters = (
         filters
         .merge(
-            features[['species_id', 'chromosome_id', 'gene_id', 'gene_start', 'gene_stop']]
-            .drop_duplicates(subset=['species_id', 'chromosome_id', 'gene_id']),
-            on=['species_id', 'chromosome_id', 'gene_id'],
+            features[['species_id', 'chromosome_id', 'gene_id', 'strand', 'gene_start', 'gene_stop']]
+            .drop_duplicates(subset=['species_id', 'chromosome_id', 'gene_id', 'strand']),
+            on=['species_id', 'chromosome_id', 'gene_id', 'strand'],
             how='inner',
             validate='m:1'
         )
@@ -287,11 +303,15 @@ def filter_features(input_path: str, features_output_path: str, filters_output_p
     assert len(filters) == n_filters
     
     # Save results
+    logger.info(f"Filtered features:\n{filtered_features.head()}")
+    logger.info(f"Filtered features info:\n{filtered_features.pipe(info_str)}")
     logger.info(f"Saving filtered features to {features_output_path}")
     # Create parent directory if it doesn't exist
     os.makedirs(os.path.dirname(features_output_path), exist_ok=True)
     filtered_features.to_parquet(features_output_path, index=False)
 
+    logger.info(f"Filter definitions:\n{filters.head()}")
+    logger.info(f"Filter definitions info:\n{filters.pipe(info_str)}")
     logger.info(f"Saving filter definitions to {filters_output_path}")
     # Create parent directory if it doesn't exist
     os.makedirs(os.path.dirname(filters_output_path), exist_ok=True)
@@ -305,14 +325,14 @@ def filter_features(input_path: str, features_output_path: str, filters_output_p
 
 def stack_gff_features(df: pd.DataFrame) -> pd.DataFrame:
     dfs = []
-    base_key = ["species_id", "chromosome_id"]
+    base_key = ["species_id", "chromosome_id", "strand"]
     base_cols = ["filename", "chromosome_length"]
     for prefix, type, key, level in [
         ("gene", GffFeatureType.GENE, ["gene_id"], FeatureLevel.GENE),
         ("transcript", GffFeatureType.MRNA, ["gene_id", "transcript_id"], FeatureLevel.TRANSCRIPT),
         ("feature", None, ["gene_id", "transcript_id", "feature_id"], FeatureLevel.ANNOTATION),
     ]:
-        cols = {f"{prefix}_{c}": c for c in ["id", "name", "strand", "start", "stop"]}
+        cols = {f"{prefix}_{c}": c for c in ["id", "name", "start", "stop"]}
         if type is None:
             cols["feature_type"] = "feature_type"
         group = (
@@ -343,11 +363,13 @@ def stack_features(input_path: str, output_path: str) -> None:
     """
     logger.info(f"Loading features from {input_path}")
     features = pd.read_parquet(input_path)
+
+    assert features["strand"].isin(["negative", "positive"]).all()
     
     logger.info("Stacking features")
     features = stack_gff_features(features)
     logger.info(f"Stacked features:\n{features.head()}")
-    features.info()
+    logger.info(f"Stacked features info:\n{features.pipe(info_str)}")
     
     # Create parent directory if it doesn't exist
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
@@ -362,31 +384,34 @@ def stack_features(input_path: str, output_path: str) -> None:
 # -------------------------------------------------------------------------------------------------
 
 
-def _create_feature_labels(df: pd.DataFrame, domain: tuple[int, int]) -> tuple[np.ndarray, list[str]]:
+def _create_feature_intervals(group: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
     # Filter to lowest level features like CDS, 5' UTR, 3' UTR, etc.
     annotation_features = [
         ft for ft in GffFeatureType 
         if GffFeatureType.value_to_level()[ft] == FeatureLevel.ANNOTATION
     ]
-    df = df[df["feature_type"].isin(annotation_features)]
+    group = group[group["feature_type"].isin(annotation_features)]
     
     feature_type_to_index = {ft: i for i, ft in enumerate(annotation_features)}
     feature_coords = [GffFeatureType.value_to_slug()[ft] for ft in annotation_features]
-    num_feature_types = len(feature_coords)
-    domain_size = domain[1] - domain[0]
 
     # Map feature types to 1-based label indices
-    labels = df["feature_type"].map(feature_type_to_index) + 1
+    labels = group["feature_type"].map(feature_type_to_index) + 1
     if labels.isna().any():
-        invalid_feature_types = df[labels.isna()]["feature_type"].unique()
+        invalid_feature_types = group[labels.isna()]["feature_type"].unique()
         raise ValueError(f"Found unmapped feature types: {invalid_feature_types}")
     
-    # Prepare intervals for vectorization
+    # Prepare intervals for conversion to arrays
     intervals = (
-        df.assign(label=labels)
+        group.assign(label=labels)
         .rename(columns={"feature_level": "level"})
         [["start", "stop", "label", "level"]]
     )
+    return intervals, feature_coords
+
+def _create_feature_labels(intervals: pd.DataFrame, feature_coords: list[str], domain: tuple[int, int]) -> tuple[np.ndarray, list[str]]:
+    domain_size = domain[1] - domain[0]
+    num_feature_types = len(feature_coords)
 
     # Generate labels at each level with errors raised for overlapping intervals
     feature_labels = convert_entity_intervals_to_labels(
@@ -434,7 +459,7 @@ def _create_region_labels(group: pd.DataFrame, domain: tuple[int, int]) -> tuple
         ),
         
         # Regions defined by min/max spans of consituent features
-        create_aggregated_region_df([GffFeatureType.CDS], RegionType.CODING_SEQUENCE.get_index()),
+        create_aggregated_region_df([GffFeatureType.CDS], RegionType.CDS.get_index()),
         create_aggregated_region_df([GffFeatureType.FIVE_PRIME_UTR], RegionType.FIVE_PRIME_UTR.get_index()),
         create_aggregated_region_df([GffFeatureType.THREE_PRIME_UTR], RegionType.THREE_PRIME_UTR.get_index()),
 
@@ -473,25 +498,113 @@ def _create_region_labels(group: pd.DataFrame, domain: tuple[int, int]) -> tuple
 
     return region_labels, region_coords
 
-def _generate_label_masks(group_filters: pd.DataFrame, domain: tuple) -> tuple[np.ndarray, list[str]]:
-    reasons = group_filters["reason"].drop_duplicates().sort_values().to_list()
+def _generate_label_masks(
+    intervals: pd.DataFrame, 
+    group_filters: pd.DataFrame, 
+    domain: tuple, 
+    strand: str,
+    boundary_filter_reasons: list[str] | None = None, 
+    boundary_mask_size: tuple[int, int] = (1, 1)
+) -> tuple[np.ndarray, list[str]]:
+    if strand not in ["positive", "negative"]:
+        raise ValueError(f"Strand must be 'positive' or 'negative', got {strand}")
+    if any(size < 1 for size in boundary_mask_size):
+        raise ValueError(f"Boundary mask sizes must be at least 1, got {boundary_mask_size}")
+    if boundary_filter_reasons is None:
+        boundary_filter_reasons = []
+    
+    # Assign buffers based on strand (upstream becomes downstream on negative strand)
+    up_buffer, down_buffer = boundary_mask_size if strand == "positive" else boundary_mask_size[::-1]
+    if up_buffer < 1 or down_buffer < 1:
+        raise ValueError(f"Boundary mask sizes must be at least 1, got {boundary_mask_size}")
+    
+    # Split filters into interior and boundary types
+    is_boundary = group_filters["reason"].isin(boundary_filter_reasons)
+    boundary_filters = group_filters[is_boundary]
+    interior_filters = group_filters[~is_boundary]
+    
+    intervals_list = []
+    
+    # Process interior filters (same as before)
+    if not interior_filters.empty:
+        logger.info(f"Adding {len(interior_filters)} interior filters (strand: {strand}, domain: {domain})")
+        interior_intervals = (
+            interior_filters[["gene_start", "gene_stop", "reason"]]
+            .drop_duplicates()
+            .rename(columns={"gene_start": "start", "gene_stop": "stop"})
+        )
+        intervals_list.append(interior_intervals)
+    
+    # Process boundary filters - create edge intervals constrained by existing features
+    if not boundary_filters.empty:
+        logger.info(f"Adding {len(boundary_filters)} boundary filters (strand: {strand}, domain: {domain}, buffer: {(up_buffer, down_buffer)})")
+        # Sort intervals for fast lookups
+        interval_starts = np.sort(intervals["start"].values)
+        interval_stops = np.sort(intervals["stop"].values)
+        
+        boundary_data = []
+        for _, row in boundary_filters[["gene_start", "gene_stop", "reason"]].drop_duplicates().iterrows():
+            gene_start, gene_stop, reason = row["gene_start"], row["gene_stop"], row["reason"]
+            
+            # Upstream mask: constrain by end of nearest upstream feature
+            upstream_start = gene_start - up_buffer
+            idx = np.searchsorted(interval_stops, gene_start, side='left') - 1
+            if idx >= 0:
+                upstream_start = max(upstream_start, interval_stops[idx])
+            upstream_start = max(domain[0], upstream_start)
+            upstream_stop = min(domain[1], gene_start)
+            
+            # Downstream mask: constrain by start of nearest downstream feature  
+            downstream_stop = gene_stop + down_buffer
+            idx = np.searchsorted(interval_starts, gene_stop, side='right')
+            if idx < len(interval_starts):
+                downstream_stop = min(downstream_stop, interval_starts[idx])
+            downstream_start = max(domain[0], gene_stop)
+            downstream_stop = min(domain[1], downstream_stop)
+            
+            # Add valid intervals
+            if upstream_start <= upstream_stop:
+                boundary_data.append({"start": upstream_start, "stop": upstream_stop, "reason": reason})
+            if downstream_start <= downstream_stop:
+                boundary_data.append({"start": downstream_start, "stop": downstream_stop, "reason": reason})
+        
+        if boundary_data:
+            intervals_list.append(pd.DataFrame(boundary_data))
+    
+    # Handle empty case
+    if not intervals_list:
+        reasons = []
+        label_masks = np.ones((domain[1] - domain[0], len(reasons)), dtype=np.int8)
+        return label_masks, reasons
+    
+    # Combine all intervals and generate masks
+    combined_intervals = pd.concat(intervals_list, ignore_index=True)
+    if not boundary_filters.empty:
+        # Drop duplicates that may result from downstream mask of one gene
+        # perfectly overlapping the upstream mask of another gene
+        combined_intervals = combined_intervals.drop_duplicates()
+    reasons = combined_intervals["reason"].drop_duplicates().sort_values().to_list()
     reason_to_index = {reason: i for i, reason in enumerate(reasons)}
+    
     label_masks = convert_entity_intervals_to_labels(
-        group_filters[["gene_start", "gene_stop", "reason"]]
-        .drop_duplicates()
-        .rename(columns={"gene_start": "start", "gene_stop": "stop"})
-        .assign(label=lambda df: df["reason"].map(reason_to_index) + 1),
+        combined_intervals.assign(label=lambda df: df["reason"].map(reason_to_index) + 1),
         domain,
         num_labels=len(reasons),
         on_overlap="ignore"
     )
+    
     # Labels indicate where filters are active, so invert this
     # representation to preserve positive mask convention
     label_masks = (~label_masks.astype(bool)).astype(label_masks.dtype)
     return label_masks, reasons
 
 
-def create_labels(features_path: str, filters_path: str, output_path: str, chunk_size: int = DEFAULT_SEQUENCE_CHUNK_SIZE) -> None:
+def create_labels(
+    features_path: str, filters_path: str, output_path: str, 
+    chunk_size: int = DEFAULT_SEQUENCE_CHUNK_SIZE, 
+    remove_incomplete_features: bool = True, 
+    boundary_mask_size: tuple[int, int] = (1, 1)
+) -> None:
     """Create labels from filtered features.
     
     Parameters
@@ -504,6 +617,10 @@ def create_labels(features_path: str, filters_path: str, output_path: str, chunk
         Path to output for Xarray dataset
     chunk_size : int, optional
         Size of chunks to write to Zarr
+    remove_incomplete_features : bool, optional
+        Whether incomplete features result in interior masks (yes) or upstream/downstream boundary masks (no)
+    boundary_mask_size : tuple[int, int], optional
+        Upstream and downstream mask sizes for boundary filters
     """
     # Load filtered features and filter definitions
     logger.info(f"Loading stacked features from {features_path}")
@@ -514,41 +631,55 @@ def create_labels(features_path: str, filters_path: str, output_path: str, chunk
     features["path"] = features["path"].apply(tuple)
     assert features["path"].apply(lambda x: isinstance(x, tuple)).all()
     logger.info(f"Loaded {len(features)} features:\n{features.head()}")
-    features.info()
+    logger.info(f"Stacked features info:\n{features.pipe(info_str)}")
     
     logger.info(f"Loading filter definitions from {filters_path}")
     filters = pd.read_parquet(filters_path)
     logger.info(f"Loaded {len(filters)} filters:\n{filters.head()}")
-    filters.info()
+    logger.info(f"Filter definitions info:\n{filters.pipe(info_str)}")
 
-    # Map strand values to string labels
-    features = features.assign(strand=lambda df: df["strand"].map({-1: "negative", 1: "positive"}))
-    if features["strand"].isna().any():
-        invalid_strands = features[features["strand"].isna()]["strand"].unique()
-        raise ValueError(f"Found unmapped strand values: {invalid_strands}")
+    assert features["strand"].isin(["negative", "positive"]).all()
+    assert filters["strand"].isin(["negative", "positive"]).all()
 
     # Group by species and chromosome
-    for (species_id, chrom_id), chrom in features.groupby(["species_id", "chromosome_id"]):
+    chrom_groups = features.groupby(["species_id", "chromosome_id"])
+    total_chroms = len(chrom_groups)
+    for chrom_idx, ((species_id, chrom_id), chrom) in enumerate(chrom_groups, start=1):
         # Get chromosome information
         chrom_length = chrom["chromosome_length"].iloc[0]
-        domain = (0, chrom_length)
+        domain = (0, int(chrom_length))
         filename = chrom["filename"].iloc[0]
 
         # Process each strand separately
         data = []
         for strand, group in chrom.groupby("strand"):
-            logger.info(f"Processing {species_id!r}, chromosome {chrom_id!r}, strand {strand!r}")
+            logger.info(f"Processing {species_id!r}, chromosome {chrom_id!r}, strand {strand!r} ({chrom_idx}/{total_chroms})")
 
+            # Extract feature intervals and names (for coordinate labels)
+            feature_intervals, feature_coords = _create_feature_intervals(group)
+            
             # Generate feature labels
-            feature_labels, feature_coords = _create_feature_labels(group, domain)
+            feature_labels, feature_coords = _create_feature_labels(feature_intervals, feature_coords, domain)
             assert np.isin(feature_labels, [0, 1]).all()
 
             region_labels, region_coords = _create_region_labels(group, domain)
             assert np.isin(region_labels, [0, 1]).all()
         
             # Generate sequence masks from filters
-            group_filters = filters[(filters["species_id"] == species_id) & (filters["chromosome_id"] == chrom_id)]
-            label_masks, reasons = _generate_label_masks(group_filters, domain)
+            group_filters = filters[
+                (filters["species_id"] == species_id) & 
+                (filters["chromosome_id"] == chrom_id) &
+                (filters["strand"] == strand)
+            ]
+            boundary_filter_reasons = None if remove_incomplete_features else [FilterReason.INCOMPLETE_FEATURES.value]
+            label_masks, reasons = _generate_label_masks(
+                intervals=feature_intervals, 
+                group_filters=group_filters, 
+                domain=domain, 
+                strand=strand, 
+                boundary_filter_reasons=boundary_filter_reasons, 
+                boundary_mask_size=boundary_mask_size
+            )
             
             # Create Xarray dataset
             ds = xr.Dataset(
@@ -898,7 +1029,7 @@ def main():
     filter_parser.add_argument("--input", required=True, help="Path to input parquet file")
     filter_parser.add_argument("--output-features", required=True, help="Path to output parquet file for filtered features")
     filter_parser.add_argument("--output-filters", required=True, help="Path to output parquet file for filter definitions")
-    filter_parser.add_argument("--remove-incomplete-features", choices=["yes", "no"], default="yes", help="Whether to filter out genes with incomplete feature annotations (default: no)")
+    filter_parser.add_argument("--remove-incomplete-features", choices=["yes", "no"], default="yes", help="Whether to filter out genes with incomplete feature annotations (default: yes)")
     
     # Stack features command
     stack_parser = subparsers.add_parser("stack_features", help="Convert features from wide to stacked format")
@@ -910,6 +1041,9 @@ def main():
     labels_parser.add_argument("--input-features", required=True, help="Path to stacked features parquet file")
     labels_parser.add_argument("--input-filters", required=True, help="Path to filters parquet file")
     labels_parser.add_argument("--output", required=True, help="Path to output zarr file")
+    labels_parser.add_argument("--remove-incomplete-features", choices=["yes", "no"], default="yes", help="Whether incomplete features result in interior masks (yes) or upstream/downstream boundary masks (no)")
+    labels_parser.add_argument("--upstream-mask-size", type=int, default=944, help="Upstream mask size for boundary filters (default: 944 [99th percentile of feature lengths])")
+    labels_parser.add_argument("--downstream-mask-size", type=int, default=1240, help="Downstream mask size for boundary filters (default: 1240 [99th percentile of feature lengths])")
 
     # Create sequence dataset command
     sequence_parser = subparsers.add_parser("create_sequence_dataset", help="Merge token and label datasets into a unified dataset")
@@ -938,7 +1072,8 @@ def main():
     elif args.command == "stack_features":
         stack_features(args.input, args.output)
     elif args.command == "create_labels":
-        create_labels(args.input_features, args.input_filters, args.output)
+        remove_incomplete = args.remove_incomplete_features == "yes"
+        create_labels(args.input_features, args.input_filters, args.output, remove_incomplete_features=remove_incomplete, boundary_mask_size=(args.upstream_mask_size, args.downstream_mask_size))
     elif args.command == "create_sequence_dataset":
         create_sequence_dataset(args.input_labels, args.input_tokens, args.output_path)
     elif args.command == "extract_npz_labels":

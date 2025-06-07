@@ -40,7 +40,7 @@ def get_feature_id(feature: SeqFeature) -> str | None:
     return feature.id if hasattr(feature, 'id') else None
 
 def get_position_info(feature: SeqFeature) -> PositionInfo:
-    """Extract position information from a SeqFeature."""
+    """Extract position information from a SeqFeature"""
     return PositionInfo(
         strand=1 if feature.location.strand > 0 else -1,
         start=int(feature.location.start.real),
@@ -48,8 +48,8 @@ def get_position_info(feature: SeqFeature) -> PositionInfo:
     )
 
 
-def is_canonical_transcript(feature: SeqFeature) -> bool:
-    """Check if a transcript is canonical (has longest=1)."""
+def is_longest_transcript(feature: SeqFeature) -> bool:
+    """Check if a transcript is the longest (has longest=1)."""
     if hasattr(feature, 'qualifiers') and 'longest' in feature.qualifiers:
         return feature.qualifiers['longest'][0] == '1'
     return False
@@ -61,6 +61,8 @@ def is_canonical_transcript(feature: SeqFeature) -> bool:
 
 def extract_gff_features(input_dir: str, species_ids: list[str], output_path: str) -> None:
     """Extract data from GFF file(s) into a structured DataFrame.
+
+    Note that position information is inclusive for start positions and exclusive for stop positions.
     
     Parameters
     ----------
@@ -92,9 +94,9 @@ def extract_gff_features(input_dir: str, species_ids: list[str], output_path: st
     if dfs:
         df = pd.concat(dfs, ignore_index=True, axis=0)
         del dfs
-        logger.info(f"Saving combined DataFrame with {df.shape[0]} rows to {output_path}; info:")
+        logger.info(f"Saving combined features with {df.shape[0]} rows to {output_path}")
         with pd.option_context('display.max_info_columns', 1_000, 'display.max_info_rows', int(1e8)):
-            df.info()
+            logger.info(f"Features info:\n{df.pipe(info_str)}")
         df.to_parquet(output_path, index=False)
         del df
         logger.info("Validating extracted features")
@@ -157,7 +159,8 @@ def _extract_gff_features(path: str, species_config: SpeciesConfig) -> pd.DataFr
                 transcript_id = get_feature_id(transcript)
                 transcript_info = get_position_info(transcript)
                 transcript_name = get_feature_name(transcript)
-                transcript_is_canonical = is_canonical_transcript(transcript)
+                # For now, we use the longest transcript as the canonical transcript
+                transcript_is_canonical = is_longest_transcript(transcript)
                 
                 # Process each feature
                 for feature in transcript.sub_features:
@@ -222,6 +225,29 @@ def validate_gff_features(df: pd.DataFrame) -> pd.DataFrame:
             f"Examples:\n{duplicated_keys.head()}"
         )
     
+    # Check that at least one transcript is canonical for each species
+    logger.info("Checking for existence of canonical transcripts per species")
+    if not df.empty:
+        # Compute canonical/non-canonical counts by species
+        canonical_counts = (
+            df.groupby(['species_id'])['transcript_is_canonical']
+            .value_counts()
+            .unstack(fill_value=0)
+            .rename(columns={True: 'canonical', False: 'non_canonical'})
+        )
+        
+        # Check for species with no canonical transcripts
+        species_without_canonical = canonical_counts[canonical_counts.get('canonical', 0) == 0]
+        
+        if len(species_without_canonical) > 0:
+            raise ValueError(
+                f"Found {len(species_without_canonical)} species with no canonical transcripts. "
+                f"Canonical/non-canonical counts by species:\n{canonical_counts}\n"
+                f"Species without canonical transcripts: {list(species_without_canonical.index)}"
+            )
+        
+        logger.info(f"Canonical transcript counts by species:\n{canonical_counts}")
+
     # Check canonical transcript indicator consistency
     logger.info("Checking for canonical transcript indicator consistency")
     bad_transcripts = (
@@ -234,7 +260,7 @@ def validate_gff_features(df: pd.DataFrame) -> pd.DataFrame:
             f"Found {len(bad_transcripts)} transcripts with multiple canonical status indicators; "
             f"Examples:\n{bad_transcripts.head()}"
         )
-    
+
     # Check for strand consistency
     logger.info("Checking for strand consistency")
     strand_combinations = set(

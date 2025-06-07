@@ -19,7 +19,7 @@ from src.sequence import (
     convert_to_entity_labels,
     get_evaluation_interval_metrics,
 )
-from src.schema import SEQUENCE_MODELING_FEATURES
+from src.schema import BILUO_TAG_CLASS_INFO, SEQUENCE_MODELING_FEATURES, ModelingFeatureType as MFT, RegionType, SentinelType as ST
 from src.visualization import (
     visualize_entities,
     visualize_tokens,
@@ -91,13 +91,15 @@ class Batch:
             return None
         return f"{self.source.split}[{self.source.index}]"
 
-TOKEN_ENTITY_NAMES = ["intron", "five_prime_utr", "cds", "three_prime_utr"]
-TOKEN_SENTINEL_NAMES = ("mask", "intergenic")
+
+TOKEN_ENTITY_NAMES = [MFT.INTRON.value, MFT.FIVE_PRIME_UTR.value, MFT.CDS.value, MFT.THREE_PRIME_UTR.value]
+TOKEN_SENTINEL_NAMES = (ST.MASK.value, ST.INTERGENIC.value)
 NUM_LABELS = len(TOKEN_ENTITY_NAMES) * N_BILUO_TAGS + 1
 TOKEN_CLASS_NAMES = [
     convert_biluo_index_to_class_name(i, entity_names=TOKEN_ENTITY_NAMES, sentinel_names=TOKEN_SENTINEL_NAMES)
     for i in range(NUM_LABELS)
 ]
+# TODO: Add BILUO tag enum to schema for use cases like this
 TOKEN_CLASS_FREQUENCIES: dict[str, float] = {
     "intergenic": 7.531898e-01, # [0]
     "B-intron": 3.422340e-04, # [1]
@@ -119,6 +121,7 @@ TOKEN_CLASS_FREQUENCIES: dict[str, float] = {
 }
 # Assert equality of pre-calculated frequency classes until support for dynamic configuration is necessary
 assert TOKEN_CLASS_NAMES == list(TOKEN_CLASS_FREQUENCIES.keys())
+assert len(set(TOKEN_CLASS_FREQUENCIES.keys()) - set(r["name"] for r in BILUO_TAG_CLASS_INFO)) == 0
 
 
 @dataclass
@@ -143,7 +146,7 @@ class GeneClassifierConfig:
     token_class_names: list[str] = field(default_factory=lambda: TOKEN_CLASS_NAMES)
     token_class_frequencies: list[float] | None = field(default_factory=lambda: TOKEN_CLASS_FREQUENCIES)
     interval_entity_classes: list[list[int]] = field(default_factory=lambda: [
-        # Map token entity classes to interval entity classes
+        # Map token entity classes (in TOKEN_ENTITY_NAMES) to interval entity classes
         [1, 2, 3, 4], # transcript
         [2, 3, 4], # exon
         [1], # intron
@@ -151,8 +154,8 @@ class GeneClassifierConfig:
         [3], # cds
         [4], # three_prime_utr
     ])
-    interval_entity_names: list[str] = field(default_factory=lambda: ["transcript", "exon"] + TOKEN_ENTITY_NAMES)
-    sentinel_names: tuple[str, str] = field(default_factory=lambda: ("mask", "intergenic"))
+    interval_entity_names: list[str] = field(default_factory=lambda: [RegionType.TRANSCRIPT.value, RegionType.EXON.value] + TOKEN_ENTITY_NAMES)
+    sentinel_names: tuple[str, str] = field(default_factory=lambda: TOKEN_SENTINEL_NAMES)
 
     @property
     def hidden_size(self) -> int:
@@ -364,9 +367,15 @@ class GeneClassifier(L.LightningModule):
                 # Linear warmup
                 return step / warmup_steps
             else:
-                # Cosine annealing
-                progress = (step - warmup_steps) / (expected_steps - warmup_steps)
-                return 0.5 * (1.0 + math.cos(progress * math.pi))
+                if self.learning_rate_decay == "cosine":
+                    # Cosine annealing
+                    progress = (step - warmup_steps) / (expected_steps - warmup_steps)
+                    return 0.5 * (1.0 + math.cos(progress * math.pi))
+                elif self.learning_rate_decay == "none":
+                    # No decay
+                    return 1.0
+                else:
+                    raise ValueError(f"Invalid learning rate decay: {self.learning_rate_decay}")
 
         scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
         scheduler_config = dict(scheduler=scheduler, interval="step", frequency=1)
@@ -434,7 +443,9 @@ class GeneClassifier(L.LightningModule):
     def _compute_loss(self, batch: Batch) -> Tensor:
         labels = torch.where(batch.masks, batch.labels, IGNORE_INDEX)
         logits, labels = batch.logits.view(-1, self.num_labels), labels.view(-1)
-        loss = self.criterion(logits, labels)
+        # Coerce to long to avoid this cross_entropy_loss error with int labels:
+        # RuntimeError: "nll_loss_forward_reduce_cuda_kernel_2d_index" not implemented for 'Int'
+        loss = self.criterion(logits, labels.long())
         return loss
 
     def _evaluate(self, batch: Batch, prefix: str, visualize: bool = False) -> None:
@@ -553,20 +564,22 @@ class GeneClassifier(L.LightningModule):
                 metrics[f"{prefix}__entity__overall/{k}"] = np.mean(v)
             self.log_dict(metrics, sync_dist=False)
 
-    def _prepare_batch(self, batch: dict[str, Tensor], source: Source | None = None) -> Batch:
+    def _prepare_batch(self, batch: dict[str, Tensor], source: Source) -> Batch:
         (B, S), C = batch["input_ids"].shape, self.num_labels
 
-        labels = batch["labels"]
+        labels = batch["tag_labels"]
         assert labels.shape == (B, S)
-        assert (labels >= -1).all() and (labels < C).all()
+        assert (labels >= 0).all() and (labels < C).all()
 
-        # label_mask and labels >= 0 are equivalent, but both are included here defensively
-        masks = batch["label_mask"] & (labels >= 0)
+        if source.split == "train":
+            # Use masked labels for training
+            masks = batch["label_mask"]
+        elif source.split == "valid":
+            # Use unmasked labels for validation
+            masks = torch.ones_like(batch["label_mask"])
+        else:
+            raise ValueError(f"Invalid source split: {source.split}")
         assert masks.shape == (B, S)
-
-        # After all informating about masking has been move to the masks,
-        # it can be removed from the labels from here on
-        labels = torch.clamp(labels, min=0)
 
         logits = self.forward(input_ids=batch["input_ids"], inputs_embeds=batch.get("inputs_embeds"))
         assert logits.shape == (B, S, C)
@@ -586,7 +599,8 @@ class GeneClassifier(L.LightningModule):
 # CRF
 # -------------------------------------------------------------------------
 
-TOKEN_TRANSITION_PROBS = [
+# Transition probabilities assuming all transcripts have both UTRs and CDS exons
+TOKEN_TRANSITION_PROBS_1 = [
     # intergenic              intron                  five_prime_utr          cds                     three_prime_utr
     [9.9995043940833084e-01, 0.0000000000000000e+00, 4.9560591669216442e-05, 0.0000000000000000e+00, 0.0000000000000000e+00],  # intergenic
     [0.0000000000000000e+00, 9.9669866350105285e-01, 1.4053978186751904e-04, 3.0901254015455425e-03, 7.0671315534084214e-05],  # intron
@@ -595,9 +609,20 @@ TOKEN_TRANSITION_PROBS = [
     [2.8711465041655749e-03, 2.6647086976677194e-04, 1.0282342852383601e-06, 0.0000000000000000e+00, 9.9686135439178236e-01],  # three_prime_utr
 ]
 
-def token_transition_probs() -> pd.DataFrame:
+# Transition probabilities allowing partial transcript annotations
+TOKEN_TRANSITION_PROBS_2 = [
+    # intergenic              intron                  five_prime_utr          cds                     three_prime_utr
+    [9.9991456305332926e-01, 0.0000000000000000e+00, 5.5072062791886075e-05, 3.0364883878810989e-05, 0.0000000000000000e+00],  # intergenic
+    [0.0000000000000000e+00, 9.9664525996386222e-01, 1.0966944004592222e-04, 3.1866712940318738e-03, 5.8399302060040908e-05],  # intron
+    [0.0000000000000000e+00, 9.0160615580967289e-04, 9.9447096031810234e-01, 4.6274335260879790e-03, 0.0000000000000000e+00],  # five_prime_utr
+    [2.9278358774311944e-04, 3.0940342516742247e-03, 1.2635776951496243e-08, 9.9603932835033049e-01, 5.7384117447525039e-04],  # cds
+    [2.8602482119673934e-03, 2.7769522276139527e-04, 1.2582474977861136e-06, 1.8873712466791704e-07, 9.9686060958064870e-01],  # three_prime_utr
+]
+
+def token_transition_probs(allow_partial_transcripts: bool = True) -> pd.DataFrame:
+    probs = TOKEN_TRANSITION_PROBS_2 if allow_partial_transcripts else TOKEN_TRANSITION_PROBS_1
     return pd.DataFrame(
-        data=TOKEN_TRANSITION_PROBS,
+        data=probs,
         index=SEQUENCE_MODELING_FEATURES,
         columns=SEQUENCE_MODELING_FEATURES,
     )
@@ -609,7 +634,7 @@ def create_crf(config: GeneClassifierConfig, initialize: bool = True, freeze: bo
     labels = config.token_entity_names_with_background()
     crf = CRF(num_tags=len(labels), batch_first=True)
     if initialize:
-        transition_probs = np.array(TOKEN_TRANSITION_PROBS, dtype=np.float32)
+        transition_probs = np.array(TOKEN_TRANSITION_PROBS_1, dtype=np.float32)
         log_transition_probs = np.log(transition_probs + np.finfo(transition_probs.dtype).eps)
         with torch.no_grad():
             crf.transitions.copy_(torch.tensor(log_transition_probs, dtype=torch.float))

@@ -509,13 +509,25 @@ def visualize_entity_interval_performance(
         })
     
     # Group by sample and entity to calculate per-sample metrics
-    sample_metrics = entity_intervals.groupby(['sample_index', 'entity']).apply(calc_metrics).reset_index()
+    sample_metrics = (
+        entity_intervals
+        .groupby(['sample_index', 'entity'], as_index=False)
+        .apply(calc_metrics, include_groups=False)
+        .reset_index(level=0, drop=True)  # Drop the extra level created by apply
+        .reset_index()  # Convert the remaining index to columns
+    )
     
     # Add entity names
     sample_metrics['entity_name'] = sample_metrics['entity'].apply(module.config.interval_entity_name)
     
     # Calculate overall metrics per entity
-    overall_metrics = entity_intervals.groupby('entity').apply(calc_metrics).reset_index()
+    overall_metrics = (
+        entity_intervals
+        .groupby('entity', as_index=False)
+        .apply(calc_metrics, include_groups=False)
+        .reset_index(level=0, drop=True)  # Drop the extra level created by apply
+        .reset_index()  # Convert the remaining index to columns
+    )
     overall_metrics['sample_index'] = 'All Samples'
     overall_metrics['entity_name'] = overall_metrics['entity'].apply(module.config.interval_entity_name)
     

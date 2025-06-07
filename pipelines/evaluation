@@ -2,7 +2,7 @@
 RAW_DIR ?= $(WORK)/data/dna/plant_caduceus_genome_annotation_task/data_share_20250326/testing_data
 PIPE_DIR ?= $(SCRATCH)/data/dna/plant_caduceus_genome_annotation_task/pipeline
 MODEL_PATH ?= kuleshov-group/compo-cad2-l24-dna-chtk-c8192-v2-b2-NpnkD-ba240000
-RUN_VERSION ?= v0.1
+RUN_VERSION ?= v0.0
 DECODING_METHOD ?= viterbi
 MODEL_CHECKPOINT ?= 
 

@@ -13,6 +13,18 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+def normalize_genomic_region_label(label: str, strict: bool = True) -> str | None:
+    label = label.lower()
+    if label in ["intergenic", "intron", "five_prime_utr", "cds", "three_prime_utr"]:
+        return label
+    if label == "mrna":
+        return "transcript"
+    if label == "coding_sequence":
+        return "cds"
+    if strict:
+        raise ValueError(f"Invalid label: {label}")
+    return None
+
 def get_viterbi_decoded_path(emissions: np.ndarray, transitions: np.ndarray) -> np.ndarray:
     return viterbi_decode(emissions, transitions, alpha=None)
     

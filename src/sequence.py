@@ -7,6 +7,7 @@ import logging
 import itertools
 
 N_BILUO_TAGS = 4
+BILUO_TAGS = "BILU"
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +27,8 @@ def convert_entity_intervals_to_labels(
     ----------
     intervals : pd.DataFrame
         DataFrame with columns 'start', 'stop', and 'label' defining the start and stop
-        positions for the intervals as well as the 1-based label index for each interval
+        positions for the intervals as well as the 1-based label index for each interval.
+        Intervals use inclusive start and exclusive stop boundaries (i.e., [start, stop)).
     domain : tuple[int, int]
         The start and end positions defining the domain to generate labels for;
         domain size D is defined as domain[1] - domain[0]
@@ -144,7 +146,7 @@ def convert_biluo_index_to_class_name(label: int, entity_names: list[str], senti
     if label < 1:
         return entity_name
     else:
-        tag = "BILU"[(label - 1) % N_BILUO_TAGS]
+        tag = BILUO_TAGS[(label - 1) % N_BILUO_TAGS]
         return f"{tag}-{entity_name}"
     
 
@@ -156,6 +158,18 @@ def _default_sentinels(sentinel_names: tuple[str, str] | None = None) -> tuple[s
     return ("mask", "background")
 
 def convert_biluo_entity_names(entity_names: list[str]) -> list[str]:
+    """Convert entity names to BILUO-tagged class names.
+    
+    Parameters
+    ----------
+    entity_names : list[str]
+        List of entity names to convert
+        
+    Returns
+    -------
+    list[str]
+        List of BILUO-tagged class names (B-, I-, L-, U- for each entity)
+    """
     return [
         convert_biluo_index_to_class_name(i + 1, entity_names) 
         for i in range(len(entity_names) * N_BILUO_TAGS)

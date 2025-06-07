@@ -2,7 +2,6 @@ from dataclasses import dataclass
 import re
 from typing import Sequence
 
-from src.schema import ModelingFeatureType as MFT
 
 WINDOW_SIZE = 8192
 

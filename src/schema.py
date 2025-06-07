@@ -1,6 +1,7 @@
 from enum import IntEnum, StrEnum
 from typing import Any
 from pydantic import BaseModel, Field, field_validator, ValidationInfo
+from src.sequence import BILUO_TAGS
 
 
 
@@ -8,6 +9,14 @@ from pydantic import BaseModel, Field, field_validator, ValidationInfo
 # Schema definitions
 # -------------------------------------------------------------------------------------------------
 
+class FilterReason(StrEnum):
+    """Reasons for GFF feature filtering typically used to generate training masks"""
+    INCOMPLETE_FEATURES = 'incomplete_features'
+    OVERLAPPING_GENE = 'overlapping_gene'
+    OVERLAPPING_FEATURES = 'overlapping_features'
+    NO_CANONICAL_TRANSCRIPT = 'no_canonical_transcript'
+    MULTIPLE_CANONICAL_TRANSCRIPTS = 'multiple_canonical_transcripts'
+    
 class SentinelType(StrEnum):
     INTERGENIC = 'intergenic'
     MASK = 'mask'
@@ -20,8 +29,14 @@ class SentinelType(StrEnum):
     def index_to_value(cls) -> dict[int, "SentinelType"]:
         return {i: ft for ft, i in cls.value_to_index().items()}
 
+SENTINEL_MASK = SentinelType.value_to_index()[SentinelType.MASK]
 
 class ModelingFeatureType(StrEnum):
+    """Modeling features represent the canonical feature set for sequence modeling.
+    
+    This are intended to represent a combination of GffFeatureType and RegionType
+    spans.  See `analysis.py` for more details on how this is often used.
+    """
     INTERGENIC = 'intergenic'
     INTRON = 'intron'
     FIVE_PRIME_UTR = 'five_prime_utr'
@@ -32,14 +47,44 @@ SEQUENCE_MODELING_FEATURES = [
     e.value for e in ModelingFeatureType
 ]
 
+BILUO_TAG_CLASS_INFO = [
+    {"name": SentinelType.MASK.value, "index": -1, "feature": None},
+    {"name": SentinelType.INTERGENIC.value, "index": 0, "feature": ModelingFeatureType.INTERGENIC},
+] + [
+    {"name": f"{tag}-{feature.value}", "index": i + 1, "feature": feature}
+    for i, (tag, feature) in enumerate(
+        (tag, feature) 
+        for feature in [ModelingFeatureType.INTRON, ModelingFeatureType.FIVE_PRIME_UTR, ModelingFeatureType.CDS, ModelingFeatureType.THREE_PRIME_UTR]
+        for tag in BILUO_TAGS
+    )
+]
+
+MODELING_FEATURE_CLASS_INFO = [
+    {"name": SentinelType.MASK.value, "index": -1, "feature": None},
+] + [
+    {"name": feature.value, "index": i, "feature": feature}
+    for i, feature in enumerate(ModelingFeatureType)
+]
+
 class RegionType(StrEnum):
+    """Regions generally comprise contiguous blocks of underlying features.
+    
+    For example, a CDS region spans all CDS exons (min start to max stop).
+    There is only one CDS region per transcript, and the same is true for
+    the FIVE_PRIME_UTR and THREE_PRIME_UTR regions.
+    
+    The INTRON and EXON regions are slighly different.  There can be multiple
+    per transcript where EXON regions are the union of CDS, THREE_PRIME_UTR, or
+    FIVE_PRIME_UTR regions.  INTRON regions are the regions between CDS, THREE_PRIME_UTR,
+    and FIVE_PRIME_UTR regions.
+    """
     GENE = 'gene'
     TRANSCRIPT = 'transcript'
     EXON = 'exon'
     INTRON = 'intron'
     FIVE_PRIME_UTR = 'five_prime_utr'
     THREE_PRIME_UTR = 'three_prime_utr'
-    CODING_SEQUENCE = 'coding_sequence'
+    CDS = 'cds'
 
     @classmethod
     def value_to_index(cls) -> dict["RegionType", int]:
@@ -55,7 +100,7 @@ class RegionType(StrEnum):
             RegionType.GENE: GffFeatureType.GENE,
             RegionType.TRANSCRIPT: GffFeatureType.MRNA,
             RegionType.FIVE_PRIME_UTR: GffFeatureType.FIVE_PRIME_UTR,
-            RegionType.CODING_SEQUENCE: GffFeatureType.CDS,
+            RegionType.CDS: GffFeatureType.CDS,
             RegionType.THREE_PRIME_UTR: GffFeatureType.THREE_PRIME_UTR,
         }
     

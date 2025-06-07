@@ -96,7 +96,6 @@ class TestSemiMarkovDecoding:
     
     def test_zero_duration_vs_epsilon_comparison(self):
         """Test that epsilon=0 vs epsilon>0 produces different results when zero durations exist."""
-        T, N = 8, 2
         
         # Strong emission evidence for alternating short segments
         emission_probs = np.array([
@@ -130,7 +129,7 @@ class TestSemiMarkovDecoding:
         
         # Extract segments for both paths
         segments_epsilon_0 = self._extract_segments(path_epsilon_0)
-        segments_epsilon_small = self._extract_segments(path_epsilon_small)
+        _ = self._extract_segments(path_epsilon_small)  # Used for comparison but not directly tested
         
         # With epsilon=0, no segments should have forbidden lengths
         forbidden_segments_0 = [seg for seg in segments_epsilon_0 if seg[3] <= 2]
@@ -190,7 +189,7 @@ class TestSemiMarkovDecoding:
     
     def test_brute_force_consistency_with_zero_durations(self):
         """Test that brute force and Viterbi agree when zero durations are involved."""
-        T, N = 6, 2  # Small enough for brute force
+        # Small enough for brute force
         
         # Emission probabilities favoring short alternating segments
         emission_probs = np.array([
@@ -227,7 +226,7 @@ class TestSemiMarkovDecoding:
     
     def test_duration_constraints_with_strong_evidence(self):
         """Test that duration constraints are respected when there's strong evidence for valid segmentations."""
-        T, N = 6, 2  # Use T=6 which allows exactly 2 segments of length 3
+        # Use T=6 which allows exactly 2 segments of length 3
         
         # Create emission probabilities that strongly favor alternating states every 3 positions
         emission_probs = np.array([
@@ -602,7 +601,6 @@ class TestSemiMarkovDecoding:
         ]
         
         for start, stop in complex_regions:
-            region_length = stop - start
             # Create alternating gene/regulatory patterns that challenge the decoder
             for i, pos in enumerate(range(start, stop)):
                 if i % 500 < 200:  # Gene-like regions (state 1)

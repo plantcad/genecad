@@ -97,7 +97,7 @@ def _validate_semi_markov_inputs(
         if np.any(initial_probs < 0) or np.any(initial_probs > 1):
             raise ValueError("Initial probabilities must be between 0 and 1")
         if not np.isclose(initial_probs.sum(), 1.0):
-            raise ValueError(f"Initial probabilities must sum to 1")
+            raise ValueError("Initial probabilities must sum to 1")
             
     return emission_probs, transition_matrix, initial_probs, log_duration, max_duration
 
@@ -150,7 +150,7 @@ def semi_markov_viterbi_decode(
         log_emission, log_transition, log_initial, log_duration, max_duration
     )
     
-    logger.info(f"Semi-Markov Viterbi decode completed")
+    logger.info("Semi-Markov Viterbi decode completed")
     return result
 
 

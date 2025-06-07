@@ -5,7 +5,6 @@ import xarray as xr
 import pandas as pd
 from src.schema import ModelingFeatureType as MFT, SEQUENCE_MODELING_FEATURES
 from typing import Optional
-from scipy.ndimage import gaussian_filter1d
 
 
 SEQUENCE_MODELING_ANNOTATIONS = [
@@ -107,6 +106,7 @@ def load_feature_length_distributions(
     dict[str, pd.Series]
         Dictionary mapping feature name to length probability Series with length values as index
     """
+    from scipy.ndimage import gaussian_filter1d
     df = pd.read_parquet(path)
     
     # Normalize min_length to dict format

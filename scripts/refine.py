@@ -13,6 +13,7 @@ import logging
 import os
 import sys
 import numpy as np
+from src.analysis import get_sequence_modeling_labels
 import xarray as xr
 import torch
 from torch.utils.data import DataLoader
@@ -54,33 +55,32 @@ def validate_coordinates(pred_coords: np.ndarray, label_coords: np.ndarray) -> N
 
 FEATURE_COORDS = ['intergenic', 'intron', 'five_prime_utr', 'cds', 'three_prime_utr']
 
-def transform_region_to_feature_labels(region_labels: xr.DataArray) -> xr.DataArray:
-    """
-    Transform region labels to feature labels compatible with predictions.
+# def transform_region_to_feature_labels(region_labels: xr.DataArray) -> xr.DataArray:
+#     """
+#     Transform region labels to feature labels compatible with predictions.
     
-    Parameters
-    ----------
-    region_labels : xr.DataArray
-        Region labels DataArray with dimensions (sequence, region) where region coordinates include:
-        ['intron', 'five_prime_utr', 'three_prime_utr', 'coding_sequence']
+#     Parameters
+#     ----------
+#     region_labels : xr.DataArray
+#         Region labels DataArray with dimensions (sequence, region) where region coordinates include:
+#         ['intron', 'five_prime_utr', 'three_prime_utr', 'cds']
         
-    Returns
-    -------
-    xr.DataArray
-        Feature labels DataArray with dimensions (sequence, feature) where feature coordinates are:
-        ['intergenic', 'intron', 'five_prime_utr', 'cds', 'three_prime_utr']
-    """
-    # Create intergenic label as background (where no other labels are 1)
-    values = region_labels.sel(region=['intron', 'five_prime_utr', 'coding_sequence', 'three_prime_utr'])
-    assert values.isin([0, 1]).all()
-    intergenic = (1 - values.max(dim='region')).expand_dims("region").assign_coords(region=["intergenic"])
-    feature_labels = xr.concat([intergenic, values], dim='region').rename(region="feature")
+#     Returns
+#     -------
+#     xr.DataArray
+#         Feature labels DataArray with dimensions (sequence, feature) where feature coordinates are:
+#         ['intergenic', 'intron', 'five_prime_utr', 'cds', 'three_prime_utr']
+#     """
+#     # Create intergenic label as background (where no other labels are 1)
+#     values = region_labels.sel(region=['intron', 'five_prime_utr', 'cds', 'three_prime_utr'])
+#     assert values.isin([0, 1]).all()
+#     intergenic = (1 - values.max(dim='region')).expand_dims("region").assign_coords(region=["intergenic"])
+#     feature_labels = xr.concat([intergenic, values], dim='region').rename(region="feature")
 
-    # Remap CDS coordinates and validate coord order
-    coords = ['cds' if v == 'coding_sequence' else str(v) for v in feature_labels.feature.values]
-    assert coords == FEATURE_COORDS
-    feature_labels = feature_labels.assign_coords(feature=coords)
-    return feature_labels
+#     # Remap CDS coordinates and validate coord order
+#     assert feature_labels.feature.values.tolist() == FEATURE_COORDS
+#     feature_labels = feature_labels.assign_coords(feature=coords)
+#     return feature_labels
 
 
 def prepare_command(args: Args) -> None:
@@ -115,7 +115,9 @@ def prepare_command(args: Args) -> None:
         
         # Extract feature logits and region labels for this strand
         feature_logits = pred_ds.sel(strand=strand).feature_logits
-        region_labels = labels_ds.sel(strand=strand).region_labels
+
+        # Gather feature labels for training
+        feature_labels = get_sequence_modeling_labels(labels_ds.sel(strand=strand))
         
         # Truncate feature logits to match region labels length if necessary
         min_length = min(len(feature_logits.sequence), len(region_labels.sequence))
@@ -133,9 +135,6 @@ def prepare_command(args: Args) -> None:
         )
         logger.info(f"Coordinate validation passed for {min_length} positions")
         
-        # Transform region labels to feature labels
-        feature_labels = transform_region_to_feature_labels(region_labels)
-        logger.info(f"Transformed region labels to feature labels: {feature_labels.shape}")
         
         # Validate that feature coordinates match between logits and labels
         logits_features = feature_logits.feature.values.tolist()

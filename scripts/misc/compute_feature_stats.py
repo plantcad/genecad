@@ -3,7 +3,7 @@ import numpy as np
 import tqdm
 import matplotlib.pyplot as plt
 from src.analysis import get_sequence_modeling_labels
-from src.schema import SEQUENCE_MODELING_FEATURES
+from src.schema import SEQUENCE_MODELING_FEATURES, FilterReason
 import xarray as xr
 from numba import njit
 from src.sequence import find_intervals
@@ -104,7 +104,15 @@ def compute_transition_stats(datasets: list[xr.Dataset], classes: list[str], lim
             assert labels.dims == ("sequence", "feature")
 
             # Extract masks
-            masks = strand_dataset.label_masks.all(dim="reason")
+            # Use only causes for masking that would lead to invalid transitions
+            mask_reasons = [
+                reason for reason in strand_dataset.reason.values 
+                if reason in [
+                    FilterReason.OVERLAPPING_GENE,
+                    FilterReason.OVERLAPPING_FEATURES,
+                ]
+            ]
+            masks = strand_dataset.label_masks.sel(reason=mask_reasons).all(dim="reason")
             assert masks.dims == ("sequence",)
             assert masks.shape == (sequence_length,)
 
@@ -630,41 +638,44 @@ def visualize_feature_lengths(lengths: pd.DataFrame, feature_names: list[str]):
     
     print()
 
-def save_transition_stats(datasets: list[xr.Dataset]) -> None:
+def save_transition_stats(datasets: list[xr.Dataset], run_version: str) -> None:
     logger.info(f"Computing transition counts for {len(datasets)} datasets")
     transition_counts, feature_lengths = compute_transition_stats(datasets, SEQUENCE_MODELING_FEATURES, limit=None)
 
-    path = TRANSITION_COUNTS_PATH
+    path = get_transition_counts_path(run_version)
     logger.info(f"Saving transition counts to {path}")
     transition_counts.to_parquet(path)
 
-    path = FEATURE_LENGTHS_PATH
+    path = get_feature_lengths_path(run_version)
     logger.info(f"Saving feature lengths to {path}")
     feature_lengths.to_parquet(path)
 
 
-def load_datasets() -> list[xr.Dataset]:
-    """Load datasets from the hard-coded zarr path."""
-    path = LABELS_ZARR_PATH
+def load_datasets(run_version: str) -> list[xr.Dataset]:
+    """Load datasets from the zarr path with specified version."""
+    path = get_labels_zarr_path(run_version)
     dt = open_datatree(path)
     return [dt.ds for dt in dt.subtree if dt.is_leaf]
 
 
-def load_and_visualize_stats() -> None:
+def load_and_visualize_stats(run_version: str) -> None:
     """Load saved transition stats and visualize them."""
-    logger.info(f"Loading transition counts from {TRANSITION_COUNTS_PATH}")
-    counts = pd.read_parquet(TRANSITION_COUNTS_PATH)
+    transition_counts_path = get_transition_counts_path(run_version)
+    logger.info(f"Loading transition counts from {transition_counts_path}")
+    counts = pd.read_parquet(transition_counts_path)
     visualize_transition_stats(counts, SEQUENCE_MODELING_FEATURES)
     
-    logger.info(f"Loading feature lengths from {FEATURE_LENGTHS_PATH}")
-    lengths = pd.read_parquet(FEATURE_LENGTHS_PATH)
+    feature_lengths_path = get_feature_lengths_path(run_version)
+    logger.info(f"Loading feature lengths from {feature_lengths_path}")
+    lengths = pd.read_parquet(feature_lengths_path)
     visualize_feature_lengths(lengths, SEQUENCE_MODELING_FEATURES)
 
 
-def load_and_format_stats() -> None:
+def load_and_format_stats(run_version: str) -> None:
     """Load saved transition stats and format them as numpy arrays."""
-    logger.info(f"Loading transition counts from {TRANSITION_COUNTS_PATH}")
-    counts = pd.read_parquet(TRANSITION_COUNTS_PATH)
+    transition_counts_path = get_transition_counts_path(run_version)
+    logger.info(f"Loading transition counts from {transition_counts_path}")
+    counts = pd.read_parquet(transition_counts_path)
     
     overall_stats = get_transition_stats(counts, groupby=[])
     probs = overall_stats.pivot(index="from_class", columns="to_class", values="probability")
@@ -680,8 +691,9 @@ def load_and_format_stats() -> None:
     print()
     
     # Feature length distributions
-    logger.info(f"Loading feature lengths from {FEATURE_LENGTHS_PATH}")
-    lengths = pd.read_parquet(FEATURE_LENGTHS_PATH)
+    feature_lengths_path = get_feature_lengths_path(run_version)
+    logger.info(f"Loading feature lengths from {feature_lengths_path}")
+    lengths = pd.read_parquet(feature_lengths_path)
     
     # Aggregate feature lengths across all strands, species, and chromosomes
     logger.info("Aggregating feature length distributions")
@@ -703,20 +715,30 @@ def load_and_format_stats() -> None:
     logger.info(f"Feature length distributions:\n{aggregated_lengths}")
     
     # Save aggregated feature length distributions
-    output_path = "local/data/feature_length_distributions.parquet"
+    output_path = f"local/data/feature_length_distributions_{run_version}.parquet"
     logger.info(f"Saving aggregated feature length distributions to {output_path}")
     aggregated_lengths.to_parquet(output_path, index=False)
 
 
+# Path helper functions
+def get_labels_zarr_path(run_version: str) -> str:
+    """Get the labels zarr path for the specified version."""
+    return f"/scratch/10459/eczech/data/dna/plant_caduceus_genome_annotation_task/pipeline/transform/{run_version}/labels.zarr"
 
-# Path constants
-LABELS_ZARR_PATH = "/scratch/10459/eczech/data/dna/plant_caduceus_genome_annotation_task/pipeline/transform/v0.4/labels.zarr"
-TRANSITION_COUNTS_PATH = "local/scratch/transition_counts.parquet"
-FEATURE_LENGTHS_PATH = "local/scratch/feature_lengths.parquet"
+def get_transition_counts_path(run_version: str) -> str:
+    """Get the transition counts output path for the specified version."""
+    return f"local/scratch/transition_counts_{run_version}.parquet"
+
+def get_feature_lengths_path(run_version: str) -> str:
+    """Get the feature lengths output path for the specified version."""
+    return f"local/scratch/feature_lengths_{run_version}.parquet"
 
 
 def main():
     parser = argparse.ArgumentParser(description="Compute and analyze feature transition statistics")
+    parser.add_argument("--run-version", type=str, required=True, 
+                       help="Version identifier for the data pipeline run (e.g., v0.6, v0.7)")
+    
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
     
     # Save command
@@ -733,12 +755,12 @@ def main():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     
     if args.command == "save":
-        datasets = load_datasets()
-        save_transition_stats(datasets)
+        datasets = load_datasets(args.run_version)
+        save_transition_stats(datasets, args.run_version)
     elif args.command == "visualize":
-        load_and_visualize_stats()
+        load_and_visualize_stats(args.run_version)
     elif args.command == "format":
-        load_and_format_stats()
+        load_and_format_stats(args.run_version)
     else:
         parser.print_help()
 

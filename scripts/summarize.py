@@ -5,7 +5,7 @@ import pandas as pd
 import numpy as np
 from src.config import SpeciesConfig
 from src.modeling import GeneClassifierConfig
-from src.sequence import convert_to_entity_labels, convert_entity_labels_to_intervals
+from src.sequence import convert_entity_labels_to_intervals
 
 # Set up logger
 logger = logging.getLogger(__name__)
@@ -36,7 +36,7 @@ def summarize_mask_rates(dataset: xr.Dataset) -> pd.DataFrame:
         .agg({"label_mask": "mean"})
         .unstack().T
         .pipe(lambda df: df[df.notnull().sum(axis=0).sort_values().index])
-        .applymap(lambda x: f"{x:.2%}" if not pd.isna(x) else "")
+        .map(lambda x: f"{x:.2%}" if not pd.isna(x) else "")
     )
     return formatted_rates
 
@@ -46,7 +46,7 @@ def summarize_class_frequencies(dataset: xr.Dataset) -> pd.DataFrame:
     Parameters
     ----------
     dataset : xr.Dataset
-        Input dataset containing labels, species, and chromosome variables
+        Input dataset containing feature_labels, species, and chromosome variables
         
     Returns
     -------
@@ -64,6 +64,7 @@ def summarize_class_frequencies(dataset: xr.Dataset) -> pd.DataFrame:
         'chromosome': dataset.chromosome.values
     }).drop_duplicates()
     
+    # Get token to entity name mapping from config
     token_entity_name_map = config.token_entity_name_map()
 
     # Process each combination
@@ -73,12 +74,11 @@ def summarize_class_frequencies(dataset: xr.Dataset) -> pd.DataFrame:
         # Get indices for this combination
         mask = (dataset.species.values == species) & (dataset.chromosome.values == chromosome)
         
-        # Get all labels for this combination 
-        token_labels = dataset.labels.values[mask].flatten()
-        entity_labels = convert_to_entity_labels(token_labels)
+        # Get all feature labels for this combination
+        feature_labels = dataset.feature_labels.values[mask].flatten()
             
         # Get frequencies
-        unique_labels, counts = np.unique(entity_labels, return_counts=True)
+        unique_labels, counts = np.unique(feature_labels, return_counts=True)
         frequencies = counts / counts.sum()
         
         # Add to results
@@ -102,7 +102,7 @@ def summarize_class_frequencies(dataset: xr.Dataset) -> pd.DataFrame:
                 columns=['label', 'label_name'], 
                 values='frequency',
             )
-            .applymap(lambda x: f"{x:.2%}"))
+            .map(lambda x: f"{x:.2%}"))
 
 def get_interval_codons(ds: xr.Dataset) -> pd.DataFrame:
     """Extract codon information from features.
@@ -110,7 +110,7 @@ def get_interval_codons(ds: xr.Dataset) -> pd.DataFrame:
     Parameters
     ----------
     ds : xr.Dataset
-        Dataset with labels and input_ids variables
+        Dataset with feature_labels and input_ids variables
         
     Returns
     -------
@@ -118,25 +118,15 @@ def get_interval_codons(ds: xr.Dataset) -> pd.DataFrame:
         DataFrame with features and their associated start/stop codons
     """
     config = GeneClassifierConfig()
-    
-    def _convert_to_entity_labels(x):
-        assert x.shape == (ds.sizes["sequence"],)
-        return convert_to_entity_labels(x)
-    
-    entity_labels = xr.DataArray(
-        np.apply_along_axis(_convert_to_entity_labels, axis=1, arr=ds["labels"].values),
-        dims=["sample", "sequence"],
-        coords={"sample": ds.coords["sample"], "sequence": ds.coords["sequence"]},
-    )
 
     # Tokenizer mapping, e.g.: https://huggingface.co/kuleshov-group/PlantCaduceus2-l24-c8192-Phyotozome-v2-proto/blob/main/tokenizer.json
     input_id_map = {3: "A", 4: "C", 5: "G", 6: "T"}
 
     def get_codon_summary(i: int) -> pd.DataFrame:
-        labels = entity_labels.isel(sample=i).values
+        # Use feature_labels directly (no conversion needed)
+        labels = ds["feature_labels"].isel(sample=i).values
         assert labels.shape == (ds.sizes["sequence"],)
-        mask = labels >= 0
-        labels = np.clip(labels, a_min=0, a_max=np.inf).astype(np.int8)
+        mask = ds["label_mask"].isel(sample=i).values
         
         input_ids = ds["input_ids"].isel(sample=i).values
         assert input_ids.shape == (ds.sizes["sequence"],)
@@ -168,29 +158,31 @@ def get_interval_codons(ds: xr.Dataset) -> pd.DataFrame:
     intervals = pd.concat([get_codon_summary(i) for i in range(ds.sizes["sample"])])
     return intervals
 
-def summarize_terminal_codons(dataset: xr.Dataset, sample_size: int = 25_000) -> tuple[pd.DataFrame, pd.DataFrame]:
+def summarize_terminal_codons(dataset: xr.Dataset, strand: str, sample_size: int = 16_000) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Summarize start and stop (terminal) codons across a random sample of sequences.
     
     Parameters
     ----------
     dataset : xr.Dataset
-        Input dataset with labels and input_ids variables
+        Input dataset with feature_labels and input_ids variables
+    strand : str
+        Strand to analyze ("positive" or "negative")
     sample_size : int, optional
-        Number of sequences to sample, by default 1000
+        Number of sequences to sample, by default 16000
         
     Returns
     -------
     tuple[pd.DataFrame, pd.DataFrame]
         Tuple of DataFrames with start and stop codon frequency tables
     """
-    logger.info(f"Analyzing terminal codons with {sample_size} random samples")
+    logger.info(f"Analyzing terminal codons for {strand} strand with {sample_size} random samples")
     
     # Take a random sample of training windows
     rs = np.random.RandomState(42)
     dataset_sample = (
-        # Only check positive strand
-        dataset.pipe(lambda ds: ds.sel(sample=ds.strand.values > 0))
-        .pipe(lambda ds: ds.isel(sample=rs.randint(0, ds.sizes["sample"], size=sample_size)))
+        # Filter to specified strand
+        dataset.pipe(lambda ds: ds.sel(sample=ds.strand.values == strand))
+        .pipe(lambda ds: ds.isel(sample=rs.randint(0, ds.sizes["sample"], size=min(sample_size, ds.sizes["sample"]))))
     )
 
     intervals = get_interval_codons(dataset_sample)
@@ -273,7 +265,7 @@ def summarize_dataset(dataset_path: str, limit: int | None = None) -> None:
         logger.info(f"Limiting dataset to {limit} samples")
         dataset = dataset.isel(sample=slice(0, limit))
         
-    logger.info(f"Dataset loaded with dimensions: {dict(dataset.dims)}")
+    logger.info(f"Dataset loaded with dimensions: {dict(dataset.sizes)}")
     
     # Print out the dataset
     logger.info(f"\n{dataset}")
@@ -310,13 +302,17 @@ def summarize_dataset(dataset_path: str, limit: int | None = None) -> None:
     # Terminal codons
     # ------------------------------------------------------------
     logger.info("Summarizing terminal codons")
-    start_codon_table, stop_codon_table = summarize_terminal_codons(dataset)
     
-    logger.info("Start codon frequency:")
-    logger.info("\n" + str(start_codon_table))
-    
-    logger.info("Stop codon frequency:")
-    logger.info("\n" + str(stop_codon_table))
+    # Analyze both strands separately
+    for strand in ["positive", "negative"]:
+        logger.info(f"Analyzing {strand} strand terminal codons")
+        start_codon_table, stop_codon_table = summarize_terminal_codons(dataset, strand=strand)
+        
+        logger.info(f"{strand.capitalize()} strand start codon frequency:")
+        logger.info("\n" + str(start_codon_table))
+        
+        logger.info(f"{strand.capitalize()} strand stop codon frequency:")
+        logger.info("\n" + str(stop_codon_table))
     
     logger.info("Summary complete")
 
@@ -331,12 +327,20 @@ def main() -> None:
     # Configure logging
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
     
-    parser = argparse.ArgumentParser(description="Summarize statistics from sequence datasets")
-    parser.add_argument("--input", required=True, help="Path to input dataset in Zarr format")
-    parser.add_argument("--limit", type=int, default=None, help="Limit number of samples (for debugging)")
+    parser = argparse.ArgumentParser(description="Dataset Summary and Analysis Tools")
+    subparsers = parser.add_subparsers(dest="command", required=True, help="Command to execute")
+    
+    # Summarize training dataset command
+    summarize_parser = subparsers.add_parser("summarize_training_dataset", help="Summarize key statistics for a training dataset")
+    summarize_parser.add_argument("--input", required=True, help="Path to input dataset in Zarr format (train.zarr or valid.zarr typically)")
+    summarize_parser.add_argument("--limit", type=int, default=None, help="Limit number of samples (for debugging)")
     
     args = parser.parse_args()
-    summarize_dataset(args.input, args.limit)
+    
+    if args.command == "summarize_training_dataset":
+        summarize_dataset(args.input, args.limit)
+    else:
+        parser.print_help()
 
 if __name__ == "__main__":
     main()
