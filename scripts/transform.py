@@ -4,12 +4,10 @@ import os
 import logging
 from dataclasses import dataclass, asdict
 from src.dataset import DEFAULT_SEQUENCE_CHUNK_SIZE, open_datatree, set_dimension_chunks, info_str
-from src.sequence import find_overlapping_intervals, convert_entity_intervals_to_labels, convert_to_biluo_labels, convert_biluo_entity_names
+from src.sequence import find_overlapping_intervals, convert_entity_intervals_to_labels
 import numpy as np
-from src.schema import FeatureLevel, FilterReason, RegionType, GffFeatureType, SentinelType
+from src.schema import FeatureLevel, FilterReason, RegionType, GffFeatureType
 import xarray as xr
-from src.config import get_species_config, get_species_configs
-
 logger = logging.getLogger(__name__)
 
 # -------------------------------------------------------------------------------------------------
@@ -96,7 +94,7 @@ def filter_canonical_transcripts(df: pd.DataFrame) -> tuple[pd.DataFrame, list[F
     
     return df_filtered, filters
 
-def filter_incomplete_features(df: pd.DataFrame, apply_filters: bool = True) -> tuple[pd.DataFrame, list[Filter]]:
+def filter_incomplete_features(df: pd.DataFrame, remove_incomplete_features: bool = True) -> tuple[pd.DataFrame, list[Filter]]:
     """Filter the dataframe to only keep genes with fully annotated canonical transcripts. """
     # Get list of "base" features, meaning those at the lowest level (i.e. UTRs and CDS)
     base_features = GffFeatureType.get_values(level=2)
@@ -119,7 +117,7 @@ def filter_incomplete_features(df: pd.DataFrame, apply_filters: bool = True) -> 
     filters = create_filters(genes_with_incomplete_features, reason=FilterReason.INCOMPLETE_FEATURES.value)
     # If apply_filters is True, filter the underlying features;
     # otherwise, just return the filters which can be used later to define masks
-    if apply_filters:
+    if remove_incomplete_features:
         df_filtered = apply_filters(df, filters)
     else:
         df_filtered = df
@@ -256,8 +254,8 @@ def filter_features(input_path: str, features_output_path: str, filters_output_p
     filtered_features, gene_overlap_filters = filter_overlapping_genes(filtered_features)
 
     # Filter to transcripts with complete features (conditional)
-    logger.info(f"Filtering to transcripts with complete features (apply_filters={remove_incomplete_features})")
-    filtered_features, incomplete_features_filters = filter_incomplete_features(filtered_features, apply_filters=remove_incomplete_features)
+    logger.info(f"Filtering to transcripts with complete features (remove_incomplete_features={remove_incomplete_features})")
+    filtered_features, incomplete_features_filters = filter_incomplete_features(filtered_features, remove_incomplete_features=remove_incomplete_features)
     
     # Find genes with overlapping features
     logger.info("Filtering to non-overlapping features")
@@ -498,78 +496,116 @@ def _create_region_labels(group: pd.DataFrame, domain: tuple[int, int]) -> tuple
 
     return region_labels, region_coords
 
+def _create_boundary_intervals(
+    filters_df: pd.DataFrame,
+    intervals: pd.DataFrame, 
+    domain: tuple[int, int], 
+    boundary_mask_size: tuple[int, int]
+) -> pd.DataFrame:
+    """Create boundary intervals for a set of filters."""
+    if filters_df.empty:
+        return pd.DataFrame(columns=["start", "stop", "reason"])
+    
+    up_buffer, down_buffer = boundary_mask_size
+    
+    # Sort intervals for fast lookups
+    interval_starts = np.sort(intervals["start"].values)
+    interval_stops = np.sort(intervals["stop"].values)
+    
+    boundary_data = []
+    for _, row in filters_df.iterrows():
+        gene_start, gene_stop, reason = row["start"], row["stop"], row["reason"]
+        
+        # Upstream mask: constrain by end of nearest upstream feature
+        upstream_start = gene_start - up_buffer
+        idx = np.searchsorted(interval_stops, gene_start, side='left') - 1
+        if idx >= 0:
+            upstream_start = max(upstream_start, interval_stops[idx])
+        upstream_start = max(domain[0], upstream_start)
+        upstream_stop = min(domain[1], gene_start)
+        
+        # Downstream mask: constrain by start of nearest downstream feature  
+        downstream_stop = gene_stop + down_buffer
+        idx = np.searchsorted(interval_starts, gene_stop, side='right')
+        if idx < len(interval_starts):
+            downstream_stop = min(downstream_stop, interval_starts[idx])
+        downstream_start = max(domain[0], gene_stop)
+        downstream_stop = min(domain[1], downstream_stop)
+        
+        # Add valid intervals
+        if upstream_start <= upstream_stop:
+            boundary_data.append({"start": upstream_start, "stop": upstream_stop, "reason": reason})
+        if downstream_start <= downstream_stop:
+            boundary_data.append({"start": downstream_start, "stop": downstream_stop, "reason": reason})
+    
+    return pd.DataFrame(boundary_data) if boundary_data else pd.DataFrame(columns=["start", "stop", "reason"])
+
 def _generate_label_masks(
     intervals: pd.DataFrame, 
     group_filters: pd.DataFrame, 
     domain: tuple, 
     strand: str,
-    boundary_filter_reasons: list[str] | None = None, 
+    remove_incomplete_features: bool = True,
     boundary_mask_size: tuple[int, int] = (1, 1)
 ) -> tuple[np.ndarray, list[str]]:
     if strand not in ["positive", "negative"]:
         raise ValueError(f"Strand must be 'positive' or 'negative', got {strand}")
     if any(size < 1 for size in boundary_mask_size):
         raise ValueError(f"Boundary mask sizes must be at least 1, got {boundary_mask_size}")
-    if boundary_filter_reasons is None:
-        boundary_filter_reasons = []
     
     # Assign buffers based on strand (upstream becomes downstream on negative strand)
-    up_buffer, down_buffer = boundary_mask_size if strand == "positive" else boundary_mask_size[::-1]
-    if up_buffer < 1 or down_buffer < 1:
-        raise ValueError(f"Boundary mask sizes must be at least 1, got {boundary_mask_size}")
+    boundary_mask_size = boundary_mask_size if strand == "positive" else boundary_mask_size[::-1]
     
-    # Split filters into interior and boundary types
-    is_boundary = group_filters["reason"].isin(boundary_filter_reasons)
-    boundary_filters = group_filters[is_boundary]
-    interior_filters = group_filters[~is_boundary]
+    # Standardize group_filters: rename columns and deduplicate early
+    standardized_filters = (
+        group_filters[["gene_start", "gene_stop", "reason"]]
+        .drop_duplicates()
+        .rename(columns={"gene_start": "start", "gene_stop": "stop"})
+    )
+    
+    # Configure filter reason handling based on remove_incomplete_features flag
+    if remove_incomplete_features:
+        # When removing incomplete features, they get both interior and boundary masks
+        boundary_filter_reasons = []
+        both_filter_reasons = [FilterReason.INCOMPLETE_FEATURES.value]
+    else:
+        # When not removing incomplete features, they get boundary masks only
+        boundary_filter_reasons = [FilterReason.INCOMPLETE_FEATURES.value]
+        both_filter_reasons = []
+    
+    # Split filters into three categories: boundary-only, both, and interior-only
+    is_boundary_only = standardized_filters["reason"].isin(boundary_filter_reasons)
+    is_both = standardized_filters["reason"].isin(both_filter_reasons)
+    is_interior_only = ~(is_boundary_only | is_both)
+    
+    boundary_only_filters = standardized_filters[is_boundary_only]
+    both_filters = standardized_filters[is_both]
+    interior_only_filters = standardized_filters[is_interior_only]
     
     intervals_list = []
     
-    # Process interior filters (same as before)
-    if not interior_filters.empty:
-        logger.info(f"Adding {len(interior_filters)} interior filters (strand: {strand}, domain: {domain})")
-        interior_intervals = (
-            interior_filters[["gene_start", "gene_stop", "reason"]]
-            .drop_duplicates()
-            .rename(columns={"gene_start": "start", "gene_stop": "stop"})
-        )
-        intervals_list.append(interior_intervals)
+    # Process interior-only filters
+    if not interior_only_filters.empty:
+        logger.info(f"Adding {len(interior_only_filters)} interior-only filters (strand: {strand}, domain: {domain})")
+        intervals_list.append(interior_only_filters)
     
-    # Process boundary filters - create edge intervals constrained by existing features
-    if not boundary_filters.empty:
-        logger.info(f"Adding {len(boundary_filters)} boundary filters (strand: {strand}, domain: {domain}, buffer: {(up_buffer, down_buffer)})")
-        # Sort intervals for fast lookups
-        interval_starts = np.sort(intervals["start"].values)
-        interval_stops = np.sort(intervals["stop"].values)
+    # Process both filters - add both interior and boundary intervals
+    if not both_filters.empty:
+        logger.info(f"Adding {len(both_filters)} both (interior + boundary) filters (strand: {strand}, domain: {domain})")
+        # Add interior intervals
+        intervals_list.append(both_filters)
         
-        boundary_data = []
-        for _, row in boundary_filters[["gene_start", "gene_stop", "reason"]].drop_duplicates().iterrows():
-            gene_start, gene_stop, reason = row["gene_start"], row["gene_stop"], row["reason"]
-            
-            # Upstream mask: constrain by end of nearest upstream feature
-            upstream_start = gene_start - up_buffer
-            idx = np.searchsorted(interval_stops, gene_start, side='left') - 1
-            if idx >= 0:
-                upstream_start = max(upstream_start, interval_stops[idx])
-            upstream_start = max(domain[0], upstream_start)
-            upstream_stop = min(domain[1], gene_start)
-            
-            # Downstream mask: constrain by start of nearest downstream feature  
-            downstream_stop = gene_stop + down_buffer
-            idx = np.searchsorted(interval_starts, gene_stop, side='right')
-            if idx < len(interval_starts):
-                downstream_stop = min(downstream_stop, interval_starts[idx])
-            downstream_start = max(domain[0], gene_stop)
-            downstream_stop = min(domain[1], downstream_stop)
-            
-            # Add valid intervals
-            if upstream_start <= upstream_stop:
-                boundary_data.append({"start": upstream_start, "stop": upstream_stop, "reason": reason})
-            if downstream_start <= downstream_stop:
-                boundary_data.append({"start": downstream_start, "stop": downstream_stop, "reason": reason})
-        
-        if boundary_data:
-            intervals_list.append(pd.DataFrame(boundary_data))
+        # Add boundary intervals using helper function
+        both_boundary_intervals = _create_boundary_intervals(both_filters, intervals, domain, boundary_mask_size)
+        if not both_boundary_intervals.empty:
+            intervals_list.append(both_boundary_intervals)
+    
+    # Process boundary-only filters
+    if not boundary_only_filters.empty:
+        logger.info(f"Adding {len(boundary_only_filters)} boundary-only filters (strand: {strand}, domain: {domain}, buffer: {boundary_mask_size})")
+        boundary_intervals = _create_boundary_intervals(boundary_only_filters, intervals, domain, boundary_mask_size)
+        if not boundary_intervals.empty:
+            intervals_list.append(boundary_intervals)
     
     # Handle empty case
     if not intervals_list:
@@ -579,10 +615,9 @@ def _generate_label_masks(
     
     # Combine all intervals and generate masks
     combined_intervals = pd.concat(intervals_list, ignore_index=True)
-    if not boundary_filters.empty:
-        # Drop duplicates that may result from downstream mask of one gene
-        # perfectly overlapping the upstream mask of another gene
-        combined_intervals = combined_intervals.drop_duplicates()
+    # Drop duplicates that may result from downstream mask of one gene
+    # perfectly overlapping the upstream mask of another gene
+    combined_intervals = combined_intervals.drop_duplicates()
     reasons = combined_intervals["reason"].drop_duplicates().sort_values().to_list()
     reason_to_index = {reason: i for i, reason in enumerate(reasons)}
     
@@ -671,13 +706,12 @@ def create_labels(
                 (filters["chromosome_id"] == chrom_id) &
                 (filters["strand"] == strand)
             ]
-            boundary_filter_reasons = None if remove_incomplete_features else [FilterReason.INCOMPLETE_FEATURES.value]
             label_masks, reasons = _generate_label_masks(
                 intervals=feature_intervals, 
                 group_filters=group_filters, 
                 domain=domain, 
                 strand=strand, 
-                boundary_filter_reasons=boundary_filter_reasons, 
+                remove_incomplete_features=remove_incomplete_features,
                 boundary_mask_size=boundary_mask_size
             )
             
@@ -789,234 +823,6 @@ def create_sequence_dataset(input_labels_path: str, input_tokens_path: str, outp
 
 
 # -------------------------------------------------------------------------------------------------
-# Write npz labels
-# -------------------------------------------------------------------------------------------------
-
-def get_npz_label_path(species_id: str, directory: str) -> str:
-    """Get the path to the NPZ labels file for a species.
-    
-    Parameters
-    ----------
-    species_id : str
-        Species ID
-    directory : str
-        Directory containing NPZ files
-        
-    Returns
-    -------
-    str
-        Path to NPZ labels file
-    """
-    return os.path.join(directory, f"{species_id}_biluo_4class_labels.npz")
-
-def extract_npz_labels(input_path: str, output_path: str, species_ids: list[str] = None) -> None:
-    """Extract npz labels from Xarray DataTree.
-    
-    Parameters
-    ----------
-    input_path : str
-        Path to input zarr file (output from create_labels)
-    output_path : str
-        Path to output npz file
-    species_ids : list[str], optional
-        List of species IDs to process. If None, all species will be processed
-    """
-    logger.info(f"Loading sequence datasets from {input_path}")
-    dt = open_datatree(input_path, consolidated=False)
-    datasets = [dt.ds for dt in dt.subtree if dt.is_leaf]
-    logger.info(f"Loaded {len(datasets)} sequence datasets")
-
-    # Group datasets by species to process one species at a time
-    species_datasets = {}
-    for ds in datasets:
-        species_id = ds.attrs["species_id"]
-        if species_ids and species_id not in species_ids:
-            continue
-        if species_id not in species_datasets:
-            species_datasets[species_id] = []
-        species_datasets[species_id].append(ds)
-    
-    # Create output directory
-    os.makedirs(output_path, exist_ok=True)
-    
-    # Process each species separately
-    for species_id, species_ds_list in species_datasets.items():
-        logger.info(f"Processing species: {species_id}")
-        species_config = get_species_config(species_id)
-        chromosomes = {}
-        
-        # Process all datasets for this species
-        for i, ds in enumerate(species_ds_list):
-            chrom_id = ds.attrs["chromosome_id"]
-            chrom_num = species_config.get_chromosome_number(chrom_id)
-            if chrom_num is None:
-                raise ValueError(f"Unable to determine chromosome number for id {chrom_id}")
-                
-            logger.info(f"[species={species_id}] Processing {chrom_id=} ({chrom_num=})")
-
-            # Extract non-overlapping, low-level features
-            intron_labels = ds.region_labels.sel(region='intron').rename(region="feature")
-            exonic_labels = ds.feature_labels.sel(feature=['five_prime_utr', 'cds', 'three_prime_utr'])
-            assert intron_labels.dtype == exonic_labels.dtype
-            labels = xr.concat([intron_labels, exonic_labels], dim='feature').astype(intron_labels.dtype)
-            if labels.sum(dim='feature').max().item() > 1:
-                raise ValueError("Found multiple features assigned to the same genomic coordinate")
-            
-            # Aggregate low-level features into masked, 1D labels
-            label_classes = labels.feature.values.tolist()
-            labels = xr.where(labels.any(dim='feature'), labels.argmax(dim='feature') + 1, 0)
-            # mask=True ==> keep label, so all must be True across multiple masks
-            mask = ds.label_masks.astype(bool).all(dim='reason') 
-            labels = xr.where(mask, labels, -1)
-            assert labels.dims == ('strand', 'sequence')
-
-            # Convert to biluo labels (flip negative strand for labelling)
-            tags_list = []
-            for strand_name in labels.strand.values:
-                values = labels.sel(strand=strand_name, drop=True).values
-                if strand_name == 'positive':
-                    tags = convert_to_biluo_labels(values)
-                else:
-                    tags = np.flip(convert_to_biluo_labels(np.flip(values)))
-                tags_list.append(tags)
-            tags = xr.DataArray(
-                np.stack(tags_list), 
-                dims=['strand', 'sequence'],
-                coords={'strand': labels.strand.values, 'sequence': labels.sequence.values}
-            )
-            assert tags.shape == labels.shape
-
-            # Show tag frequency
-            tag_classes = convert_biluo_entity_names(label_classes)
-            tag_class_map = {
-                **{i: str(v) for i, v in SentinelType.index_to_value().items()}, 
-                **pd.Series(tag_classes, index=np.arange(len(tag_classes)) + 1).to_dict()
-            }
-            if i == 0:
-                logger.info(f"  Tag class map:\n{tag_class_map}")
-            tag_frequency = tags.to_series().map(tag_class_map).fillna("Unknown").value_counts()
-            logger.info(f"  Tag frequency:\n{tag_frequency}")
-
-            # Store result
-            result = (
-                # Label npz convention is forward strand in first column
-                # with shape (chrom_length, 2)
-                tags.transpose("sequence", "strand")
-                .sel(strand=["positive", "negative"])
-                .to_numpy().astype(np.int8)
-            )
-            assert result.ndim == 2
-            assert result.shape[1] == 2
-            assert result.dtype == np.int8
-            chromosomes[chrom_id] = dict(chrom_num=chrom_num, result=result)
-        
-        # Save this species to disk and free memory
-        npz_path = get_npz_label_path(species_id, output_path)
-        logger.info(f"[species={species_id}] Saving {npz_path}")
-        # Sort chromosomes names by numerical order rather than lexical order;
-        # insertion order is an essential assumption of the current downstream data loader
-        chrom_ids = sorted(chromosomes.keys(), key=lambda x: chromosomes[x]["chrom_num"])
-        np.savez(npz_path, **{k: chromosomes[k]["result"] for k in chrom_ids})
-
-    logger.info("Done")
-
-
-# -------------------------------------------------------------------------------------------------
-# Extract npz keyfile
-# -------------------------------------------------------------------------------------------------
-
-def extract_npz_keyfile(output_path: str, species_ids: list[str], labels_dir: str, data_dir: str) -> None:
-    """Generate a keyfile mapping species to their label, fasta, and window files.
-    
-    Parameters
-    ----------
-    output_path : str
-        Path to save the output TSV keyfile
-    species_ids : list[str]
-        List of species IDs to include in the keyfile
-    labels_dir : str
-        Path to directory containing NPZ label files
-    data_dir : str
-        Path to raw data directory with subdirs like "fasta" and "windows"
-    """
-    # Get configurations for all specified species
-    all_configs = get_species_configs(species_ids)
-    
-    # Filter for training species only
-    training_configs = [
-        config for config in all_configs
-        if config.split.use_in_training
-    ]
-    
-    if not training_configs:
-        raise ValueError(f"No training species found among the {len(all_configs)} provided species.")
-    logger.info(f"Found {len(training_configs)} training species:")
-    for config in training_configs:
-        logger.info(f"  {config.id}")
-
-    # Collect data for each species
-    data = []
-    for config in training_configs:
-        species_id = config.id
-        
-        # Check if windows.filename exists
-        if not config.windows or not config.windows.filename:
-            raise ValueError(f"Species {species_id} is missing required windows.filename configuration")
-            
-        # Construct paths
-        labels_path = get_npz_label_path(species_id, labels_dir)
-        fasta_path = os.path.join(data_dir, "fasta", config.fasta.filename)
-        windows_path = os.path.join(data_dir, "windows", config.windows.filename)
-        
-        # Check if all paths exist
-        paths_exist = True
-        if not os.path.exists(labels_path):
-            logger.warning(f"Labels path does not exist for {species_id}: {labels_path}")
-            paths_exist = False
-        if not os.path.exists(fasta_path):
-            logger.warning(f"Fasta path does not exist for {species_id}: {fasta_path}")
-            paths_exist = False
-        if not os.path.exists(windows_path):
-            logger.warning(f"Windows path does not exist for {species_id}: {windows_path}")
-            paths_exist = False
-            
-        # Skip this config if any path doesn't exist
-        if not paths_exist:
-            logger.warning(f"Skipping {species_id} due to missing files")
-            continue
-            
-        data.append({
-            "name": species_id,
-            "labels": labels_path,
-            "fasta": fasta_path,
-            "windows": windows_path
-        })
-    
-    if not data:
-        raise ValueError("No valid species configurations found with all required files")
-    
-    # Create DataFrame and save as TSV
-    df = pd.DataFrame(data)
-    logger.info(f"Generated keyfile with {len(df)} entries")
-    
-    # Set pandas to display all rows and columns
-    with pd.option_context(
-        'display.max_rows', None, 
-        'display.max_columns', None, 
-        'display.expand_frame_repr', False,
-        'display.max_colwidth', None
-    ):
-        logger.info(f"Keyfile contents:\n{df}")
-    
-    # Create parent directory if it doesn't exist
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
-    
-    # Save as TSV
-    df.to_csv(output_path, sep="\t", index=False)
-    logger.info(f"Saved keyfile to {output_path}")
-
-
-# -------------------------------------------------------------------------------------------------
 # Main
 # -------------------------------------------------------------------------------------------------
 
@@ -1050,19 +856,6 @@ def main():
     sequence_parser.add_argument("--input-labels", required=True, help="Path to input zarr file containing labels")
     sequence_parser.add_argument("--input-tokens", required=True, help="Path to input zarr file containing tokenized sequences")
     sequence_parser.add_argument("--output-path", required=True, help="Path to output zarr file for the merged dataset")
-
-    # Extract npz labels command
-    extract_parser = subparsers.add_parser("extract_npz_labels", help="Extract npz labels from DataTree")
-    extract_parser.add_argument("--input", required=True, help="Path to input zarr file")
-    extract_parser.add_argument("--output", required=True, help="Path to output npz file")
-    extract_parser.add_argument("--species-id", nargs="+", help="List of species IDs to process (if not specified, all species are processed)")
-    
-    # Extract npz keyfile command
-    keyfile_parser = subparsers.add_parser("extract_npz_keyfile", help="Generate a keyfile mapping species to their label, fasta, and window files")
-    keyfile_parser.add_argument("--output", required=True, help="Path to output TSV keyfile")
-    keyfile_parser.add_argument("--species-id", nargs="+", required=True, help="List of species IDs to include in the keyfile")
-    keyfile_parser.add_argument("--labels-dir", required=True, help="Path to directory containing NPZ label files")
-    keyfile_parser.add_argument("--data-dir", required=True, help="Path to data directory with 'fasta' and 'windows' subdirs")
     
     args = parser.parse_args()
     
@@ -1076,10 +869,6 @@ def main():
         create_labels(args.input_features, args.input_filters, args.output, remove_incomplete_features=remove_incomplete, boundary_mask_size=(args.upstream_mask_size, args.downstream_mask_size))
     elif args.command == "create_sequence_dataset":
         create_sequence_dataset(args.input_labels, args.input_tokens, args.output_path)
-    elif args.command == "extract_npz_labels":
-        extract_npz_labels(args.input, args.output, args.species_id)
-    elif args.command == "extract_npz_keyfile":
-        extract_npz_keyfile(args.output, args.species_id, args.labels_dir, args.data_dir)
     else:
         parser.print_help()
 

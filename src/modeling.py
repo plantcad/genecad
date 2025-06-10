@@ -358,7 +358,8 @@ class GeneClassifier(L.LightningModule):
         self._evaluate(batch, "valid", visualize=visualize)
     
     def configure_optimizers(self):
-        optimizer = torch.optim.Adam(self.parameters(), lr=self.learning_rate)
+        optimizer = torch.optim.AdamW(self.parameters(), lr=self.learning_rate, weight_decay=1e-5) 
+
         expected_steps = self.trainer.estimated_stepping_batches
         warmup_steps = math.ceil(expected_steps * self.learning_rate_warmup_ratio)
 
@@ -619,8 +620,8 @@ TOKEN_TRANSITION_PROBS_2 = [
     [2.8602482119673934e-03, 2.7769522276139527e-04, 1.2582474977861136e-06, 1.8873712466791704e-07, 9.9686060958064870e-01],  # three_prime_utr
 ]
 
-def token_transition_probs(allow_partial_transcripts: bool = True) -> pd.DataFrame:
-    probs = TOKEN_TRANSITION_PROBS_2 if allow_partial_transcripts else TOKEN_TRANSITION_PROBS_1
+def token_transition_probs(remove_incomplete_features: bool = True) -> pd.DataFrame:
+    probs = TOKEN_TRANSITION_PROBS_1 if remove_incomplete_features else TOKEN_TRANSITION_PROBS_2
     return pd.DataFrame(
         data=probs,
         index=SEQUENCE_MODELING_FEATURES,

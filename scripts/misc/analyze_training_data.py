@@ -17,7 +17,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Set random seed for reproducibility
-np.random.seed(19)
+np.random.seed(333)
 
 def sample_random_window(ds: xr.Dataset) -> tuple[xr.Dataset, dict]:
     """Sample a single random window from the dataset."""

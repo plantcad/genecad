@@ -11,7 +11,7 @@ TRANSFORM_DIR ?= $(PIPE_DIR)/transform/$(RUN_VERSION)
 PREP_DIR ?= $(PIPE_DIR)/prep/$(RUN_VERSION)
 VALID_PROPORTION ?= .025
 TRAINING_WINDOW_NUM_WORKERS ?= 16
-REMOVE_INCOMPLETE_FEATURES ?= no
+REMOVE_INCOMPLETE_FEATURES ?= yes
 
 # Define all target to run the complete pipeline
 .PHONY: all clean extract-gff extract-fasta filter stack labels sequences windows splits help validate-configs summarize

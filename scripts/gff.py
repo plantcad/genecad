@@ -4,9 +4,10 @@ import pandas as pd
 import re
 import os
 import glob
+import shutil
 from src.gff_pandas import read_gff3, write_gff3
 from src.gff_compare import run_gffcompare, parse_gffcompare_stats
-from src.config import SPECIES_CONFIGS
+from src.config import SPECIES_CONFIGS, get_species_configs
 from src.schema import GffFeatureType, RegionType
 
 # Set up logging
@@ -125,6 +126,50 @@ def remove_features_by_id(features: pd.DataFrame, feature_ids_to_remove: set) ->
 # -------------------------------------------------------------------------------------------------
 # CLI functions
 # -------------------------------------------------------------------------------------------------
+
+def resolve_gff_file(input_dir: str, species_id: str, output_path: str) -> None:
+    """Resolve and copy a GFF file for a species using its configuration.
+    
+    Parameters
+    ----------
+    input_dir : str
+        Directory containing input GFF files
+    species_id : str
+        Species ID to resolve the GFF file for
+    output_path : str
+        Path to copy the resolved GFF file to
+    """
+    logger.info(f"Resolving GFF file for species {species_id} from {input_dir}")
+    
+    # Get the species configuration
+    species_configs = get_species_configs([species_id])
+    if not species_configs:
+        raise ValueError(f"No configuration found for species ID: {species_id}")
+    
+    config = species_configs[0]
+    
+    # Construct the input file path using the species config
+    gff_filename = config.gff.filename
+    input_path = os.path.join(input_dir, gff_filename)
+    
+    logger.info(f"Resolved GFF filename: {gff_filename}")
+    logger.info(f"Input path: {input_path}")
+    logger.info(f"Output path: {output_path}")
+    
+    # Check if input file exists
+    if not os.path.exists(input_path):
+        raise FileNotFoundError(f"GFF file not found: {input_path}")
+    
+    # Create output directory if it doesn't exist
+    output_dir = os.path.dirname(output_path)
+    if output_dir and not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+        logger.info(f"Created output directory: {output_dir}")
+    
+    # Copy the file
+    logger.info(f"Copying {input_path} to {output_path}")
+    shutil.copy2(input_path, output_path)
+    logger.info("GFF file resolved and copied successfully")
 
 def merge_gff_files(input_paths: list[str], output_path: str) -> None:
     """Merge multiple GFF files into a single file.
@@ -986,6 +1031,12 @@ def main() -> None:
     merge_parser.add_argument("--input", required=True, nargs='+', help="Input GFF files")
     merge_parser.add_argument("--output", required=True, help="Output GFF file")
     
+    # Resolve command
+    resolve_parser = subparsers.add_parser("resolve", help="Resolve and copy a GFF file for a species using its configuration")
+    resolve_parser.add_argument("--input-dir", required=True, help="Directory containing input GFF files")
+    resolve_parser.add_argument("--species-id", required=True, help="Species ID to resolve the GFF file for")
+    resolve_parser.add_argument("--output", required=True, help="Output path to copy the resolved GFF file to")
+    
     # Filter to chromosome command
     filter_parser = subparsers.add_parser("filter_to_chromosome", help="Filter GFF file to include only entries from a specific chromosome")
     filter_parser.add_argument("--input", required=True, help="Input GFF file")
@@ -1056,6 +1107,8 @@ def main() -> None:
     
     if args.command == "merge":
         merge_gff_files(args.input, args.output)
+    elif args.command == "resolve":
+        resolve_gff_file(args.input_dir, args.species_id, args.output)
     elif args.command == "filter_to_chromosome":
         filter_to_chromosome(args.input, args.output, args.chromosome_id, args.species_id)
     elif args.command == "filter_to_strand":

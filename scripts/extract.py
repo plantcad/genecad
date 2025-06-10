@@ -11,7 +11,7 @@ from Bio import SeqIO
 from Bio.SeqFeature import SeqFeature
 from src.gff_parser import parse as parse_gff
 from src.gff_pandas import read_gff3
-from src.dataset import DEFAULT_SEQUENCE_CHUNK_SIZE, open_datatree, set_dimension_chunks
+from src.dataset import DEFAULT_SEQUENCE_CHUNK_SIZE, info_str, open_datatree, set_dimension_chunks
 from src.schema import GffFeatureType, SequenceFeature, PositionInfo
 from src.config import SPECIES_CONFIGS, SpeciesConfig, get_species_configs
 
@@ -541,7 +541,6 @@ def validate_configs(data_dir: str) -> None:
         logger.info(f"[species={species_id}] Validating configuration")
         
         species_data_dir = get_species_data_dir(config)
-        logger.info(f"[species={species_id}] Using  data directory: {species_data_dir}")
         
         # Get expected chromosome map
         chrom_map = config.chromosome_map
@@ -549,7 +548,7 @@ def validate_configs(data_dir: str) -> None:
         logger.info(f"[species={species_id}] Expected sequence IDs: {expected_seq_ids}")
         
         # Get GFF file path and extract sequence IDs
-        gff_path = os.path.join(species_data_dir, "gff", config.gff.filename)
+        gff_path = os.path.join(data_dir, species_data_dir, "gff", config.gff.filename)
         if not os.path.exists(gff_path):
             raise ValueError(f"[species={species_id}] GFF file not found: {gff_path}")
             
@@ -557,7 +556,7 @@ def validate_configs(data_dir: str) -> None:
         gff_seq_ids = _extract_gff_seq_ids(gff_path)
         
         # Get FASTA file path and extract sequence IDs
-        fasta_path = os.path.join(species_data_dir, "fasta", config.fasta.filename)
+        fasta_path = os.path.join(data_dir, species_data_dir, "fasta", config.fasta.filename)
         if not os.path.exists(fasta_path):
             raise ValueError(f"[species={species_id}] FASTA file not found: {fasta_path}")
             

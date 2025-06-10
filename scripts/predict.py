@@ -29,23 +29,27 @@ def batched(input_list: list[Any], batch_size: int) -> list[list[Any]]:
     """Batches a list into sublists of a specified size."""
     return [input_list[i:i + batch_size] for i in range(0, len(input_list), batch_size)]
     
-def load_duration_probabilities(feature_labels: list[str]) -> dict[int, np.ndarray]:
+def load_duration_probabilities(feature_labels: list[str], path: str, sigma: float = 8.0, max_length: int = 8192) -> dict[int, np.ndarray]:
     """Load duration probabilities for semi-Markov decoding.
     
     Parameters
     ----------
     feature_labels : list[str]
         List of feature labels in the order they appear in the model
+    path : str
+        Path to the feature length distributions parquet file
+    sigma : float, default 8.0
+        Gaussian smoothing parameter
+    max_length : int, default 8192
+        Maximum sequence length for duration probabilities; this will be
+        used to truncate distributions if shorter than the max length
+        used to compute them in the first place (16384 at TOW)
         
     Returns
     -------
     dict[int, np.ndarray]
         Dictionary mapping state index to smoothed duration probability array
     """
-    path = 'local/data/feature_length_distributions.parquet'
-    sigma = 8.0
-    max_length = 8192
-
     min_lengths = {
         MFT.INTERGENIC: None,
         MFT.INTRON: None,
@@ -426,8 +430,8 @@ def _detect_intervals(
     strands = predictions.strand.values.tolist()
     assert set(strands) == {"positive", "negative"}
     
-    def _decode_intervals_viterbi(logits: npt.ArrayLike) -> np.ndarray:
-        transition_probs = token_transition_probs()
+    def _decode_intervals_viterbi(logits: npt.ArrayLike, remove_incomplete_features: bool) -> np.ndarray:
+        transition_probs = token_transition_probs(remove_incomplete_features=remove_incomplete_features)
         if transition_probs.columns.tolist() != config.token_entity_names_with_background():
             raise ValueError(f"Transition probability classes must match token entity names; expected: {config.token_entity_names_with_background()}, got: {transition_probs.columns.tolist()}")
         emissions = F.softmax(torch.from_numpy(logits), dim=-1).numpy()
@@ -447,8 +451,8 @@ def _detect_intervals(
         assert len(labels) == len(logits)
         return labels
 
-    def _decode_intervals_semi_markov(logits: npt.ArrayLike) -> np.ndarray:
-        transition_probs = token_transition_probs()
+    def _decode_intervals_semi_markov(logits: npt.ArrayLike, remove_incomplete_features: bool) -> np.ndarray:
+        transition_probs = token_transition_probs(remove_incomplete_features=remove_incomplete_features)
         if transition_probs.columns.tolist() != config.token_entity_names_with_background():
             raise ValueError(f"Transition probability classes must match token entity names; expected: {config.token_entity_names_with_background()}, got: {transition_probs.columns.tolist()}")
         emissions = F.softmax(torch.from_numpy(logits), dim=-1).numpy()
@@ -456,7 +460,7 @@ def _detect_intervals(
         assert transition_probs.index.tolist() == transition_probs.columns.tolist()
         
         feature_labels = transition_probs.columns.tolist()
-        duration_probs = load_duration_probabilities(feature_labels)
+        duration_probs = load_duration_probabilities(feature_labels, path=args.duration_probs_path)
         
         logger.info("Running semi-Markov viterbi decoding")
         labels = semi_markov_viterbi_segmentation(
@@ -466,7 +470,7 @@ def _detect_intervals(
             background_class=feature_labels.index(MFT.INTERGENIC.value),
             background_class_min_length=32_768,
             background_class_buffer=256,
-            num_workers=64
+            num_workers=args.num_workers
         )
         
         assert labels.ndim == 1
@@ -488,9 +492,9 @@ def _detect_intervals(
         if "viterbi" in decoding_methods:
             logger.info(f"Running viterbi decoding for {strand!r} strand")
             if strand == "positive":
-                viterbi_labels = _decode_intervals_viterbi(logits=logits)
+                viterbi_labels = _decode_intervals_viterbi(logits=logits, remove_incomplete_features=args.remove_incomplete_features)
             else:
-                viterbi_labels = flip(_decode_intervals_viterbi(logits=flip(logits).copy()))
+                viterbi_labels = flip(_decode_intervals_viterbi(logits=flip(logits).copy(), remove_incomplete_features=args.remove_incomplete_features))
             
             intervals = convert_entity_labels_to_intervals(
                 labels=viterbi_labels, 
@@ -502,9 +506,9 @@ def _detect_intervals(
         if "sm-viterbi" in decoding_methods:
             logger.info(f"Running semi-Markov decoding for {strand!r} strand")
             if strand == "positive":
-                sm_labels = _decode_intervals_semi_markov(logits=logits)
+                sm_labels = _decode_intervals_semi_markov(logits=logits, remove_incomplete_features=args.remove_incomplete_features)
             else:
-                sm_labels = flip(_decode_intervals_semi_markov(logits=flip(logits).copy()))
+                sm_labels = flip(_decode_intervals_semi_markov(logits=flip(logits).copy(), remove_incomplete_features=args.remove_incomplete_features))
             
             intervals = convert_entity_labels_to_intervals(
                 labels=sm_labels, 
@@ -551,6 +555,9 @@ def detect_intervals(args: Args):
         args.input_dir,
         drop_variables=["token_predictions", "token_logits"],
     )
+
+    # Convert remove_incomplete_features string to boolean
+    args.remove_incomplete_features = args.remove_incomplete_features == "yes"
 
     logger.info("Detecting intervals")
     interval_predictions = _detect_intervals(
@@ -862,6 +869,9 @@ def main():
     detect_parser.add_argument("--window-size", type=int, default=WINDOW_SIZE, help="Window size for sequence processing")
     detect_parser.add_argument("--viterbi-alpha", type=float, default=None, help="Alpha parameter for viterbi decoding (default: None)")
     detect_parser.add_argument("--decoding-methods", type=str, default="direct,viterbi,sm-viterbi", help="Comma-separated list of decoding methods to run (choices: direct, viterbi, sm-viterbi)")
+    detect_parser.add_argument("--remove-incomplete-features", type=str, choices=["yes", "no"], default="no", help="Whether to remove incomplete features from predictions (default: no)")
+    detect_parser.add_argument("--duration-probs-path", type=str, help="Path to duration probabilities parquet file for Semi-Markov (sm-viterbi) decoding")
+    detect_parser.add_argument("--num-workers", type=int, default=0, help="Number of workers for Semi-Markov (sm-viterbi) decoding (default: 0)")
     
     # Export GFF command
     gff_parser = subparsers.add_parser("export_gff", help="Export predictions to GFF format")
