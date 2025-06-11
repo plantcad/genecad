@@ -7,6 +7,7 @@ import glob
 import shutil
 from src.gff_pandas import read_gff3, write_gff3
 from src.gff_compare import run_gffcompare, parse_gffcompare_stats
+from src.gff_eval import run_gffeval
 from src.config import SPECIES_CONFIGS, get_species_configs
 from src.schema import GffFeatureType, RegionType
 
@@ -472,7 +473,7 @@ def filter_to_min_feature_length(input_path: str, output_path: str, feature_type
     removed_count = original_count - len(features_filtered)
     
     # Log statistics
-    logger.info(f"Boundary updates:")
+    logger.info("Boundary updates:")
     logger.info(f"  - Genes: {genes_updated}/{total_genes} ({genes_updated/total_genes*100:.1f}%) had boundaries updated")
     logger.info(f"  - Transcripts: {transcripts_updated}/{total_transcripts} ({transcripts_updated/total_transcripts*100:.1f}%) had boundaries updated")
     
@@ -785,6 +786,47 @@ def compare_gff_files(reference_path: str, input_path: str, output_dir: str, gff
     
     logger.info("Comparison complete")
 
+def evaluate_gff_files(reference_path: str, input_path: str, output_dir: str, edge_tolerance: int = 0, ignore_unmatched: bool = True, as_percentage: bool = True) -> None:
+    """Evaluate an input GFF file against a reference using internal evaluation functions.
+    
+    Parameters
+    ----------
+    reference_path : str
+        Path to reference GFF file
+    input_path : str
+        Path to input GFF file
+    output_dir : str
+        Directory to store evaluation results
+    edge_tolerance : int, default 0
+        Tolerance to allow for matching transcript ends
+    ignore_unmatched : bool, default True
+        Whether to ignore contigs that aren't present in both GFF files
+    as_percentage : bool, default True
+        Whether to display values as percentages (0-100) or decimals (0.0-1.0).
+        Defaults to True for consistency with gffcompare.
+    """
+    logger.info(f"Evaluating input GFF {input_path} against reference {reference_path}")
+    
+    # Create output directory if it doesn't exist
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # Run gffeval
+    output_prefix = run_gffeval(reference_path, input_path, output_dir, edge_tolerance, ignore_unmatched, as_percentage)
+    
+    # Check that the stats file was created
+    stats_file = f"{output_prefix}.stats.tsv"
+    
+    if not os.path.exists(stats_file):
+        logger.error(f"gffeval stats file not found: {stats_file}")
+        raise FileNotFoundError(f"gffeval did not produce a stats file at {stats_file}")
+    
+    # Show stats file content 
+    with open(stats_file, 'r') as f:
+        logger.info(f"Stats file content from gffeval at {stats_file}:")
+        logger.info("\n" + f.read())
+    
+    logger.info("Evaluation complete")
+
 def summarize_gff(input_path: str) -> None:
     """Summarize the distribution of source and type fields in a GFF file.
     
@@ -964,42 +1006,55 @@ def summarize_gff(input_path: str) -> None:
         print(f"{combo_str:<50} {count:<15} {percentage:.2f}%")
 
 def collect_results(input_dir: str, output_path: str = None) -> None:
-    """Collect and consolidate gffcompare.stats.csv files from subdirectories.
+    """Collect and consolidate gffcompare.stats.csv and gffeval.stats.tsv files from subdirectories.
     
     Parameters
     ----------
     input_dir : str
-        Path to the directory containing subdirectories with stats.csv files
+        Path to the directory containing subdirectories with stats files
     output_path : str, optional
         Path to save the consolidated results file. If None, defaults to
-        {input_dir}/gffcompare.stats.consolidated.csv
+        {input_dir}/consolidated.stats.csv
     """
-    logger.info(f"Collecting gffcompare results from subdirectories of {input_dir}")
+    logger.info(f"Collecting evaluation results from subdirectories of {input_dir}")
     
-    # Find all gffcompare.stats.csv files in subdirectories
+    # Find all stats files in subdirectories
     if output_path is None:
-        output_path = os.path.join(input_dir, "gffcompare.stats.consolidated.csv")
+        output_path = os.path.join(input_dir, "consolidated.stats.csv")
         
-    stats_files = glob.glob(os.path.join(input_dir, "*/gffcompare.stats.csv"))
+    gffcompare_files = glob.glob(os.path.join(input_dir, "*/gffcompare.stats.csv"))
+    gffeval_files = glob.glob(os.path.join(input_dir, "*/gffeval.stats.tsv"))
     
-    if not stats_files:
-        logger.error(f"No gffcompare.stats.csv files found in subdirectories of {input_dir}")
+    all_files = gffcompare_files + gffeval_files
+    
+    if not all_files:
+        logger.error(f"No gffcompare.stats.csv or gffeval.stats.tsv files found in subdirectories of {input_dir}")
         return
     
-    logger.info(f"Found {len(stats_files)} stats files")
+    logger.info(f"Found {len(gffcompare_files)} gffcompare stats files and {len(gffeval_files)} gffeval stats files")
     
     # Collect and process each file
     dfs = []
-    for file_path in stats_files:
-        # Extract the directory name as source
+    for file_path in all_files:
+        # Extract the directory name as source and determine tool
         source = os.path.basename(os.path.dirname(file_path))
-        logger.info(f"Processing {file_path} (source: {source})")
+        tool = "gffcompare" if "gffcompare" in os.path.basename(file_path) else "gffeval"
+        logger.info(f"Processing {file_path} (source: {source}, tool: {tool})")
         
-        # Read the CSV file
+        # Read the file
         df = pd.read_csv(file_path, sep='\t')
         
-        # Add source column
+        # Normalize column names for consistency between tools
+        if tool == "gffeval":
+            df = df.rename(columns={'recall': 'sensitivity', 'f1': 'f1_score'})
+        
+        # Add source and tool columns
         df['source'] = source
+        df['tool'] = tool
+        
+        # Ensure all dataframes have exactly the expected columns
+        expected_columns = ['level', 'sensitivity', 'precision', 'f1_score', 'source', 'tool']
+        df = df[expected_columns]
         
         dfs.append(df)
     
@@ -1010,8 +1065,8 @@ def collect_results(input_dir: str, output_path: str = None) -> None:
     
     consolidated_df = pd.concat(dfs, ignore_index=True)
     
-    # Sort by source and level
-    consolidated_df = consolidated_df.sort_values(['source', 'level'])
+    # Sort by tool, source, and level
+    consolidated_df = consolidated_df.sort_values(['tool', 'source', 'level'])
     
     # Print the consolidated dataframe
     print(consolidated_df.to_string(index=False))
@@ -1020,6 +1075,88 @@ def collect_results(input_dir: str, output_path: str = None) -> None:
     logger.info(f"Saving consolidated results to {output_path}")
     consolidated_df.to_csv(output_path, sep='\t', index=False)
     logger.info("Results saved successfully")
+
+def clean_gff(input_path: str, output_path: str, sort_by_start: bool = True, remove_invalid_interval: bool = True) -> None:
+    """Clean a GFF file by sorting and/or removing invalid intervals.
+    
+    Parameters
+    ----------
+    input_path : str
+        Path to input GFF file
+    output_path : str
+        Path to output GFF file
+    sort_by_start : bool, default True
+        Whether to sort records by [seq_id, start, end, type, strand] ascending
+    remove_invalid_interval : bool, default True
+        Whether to remove records where end < start
+    """
+    logger.info(f"Cleaning GFF file: {input_path}")
+    logger.info(f"Sort by start: {sort_by_start}")
+    logger.info(f"Remove invalid intervals: {remove_invalid_interval}")
+    
+    # Load the GFF file
+    df = load_gff(input_path)
+    original_count = df.shape[0]
+    logger.info(f"Original record count: {original_count}")
+    
+    # Track what we're doing
+    operations = []
+    if sort_by_start:
+        operations.append("sorting")
+    if remove_invalid_interval:
+        operations.append("removing invalid intervals")
+    
+    if operations:
+        logger.info(f"Operations to perform: {', '.join(operations)}")
+    else:
+        logger.info("No operations requested, copying file as-is")
+    
+    # Remove invalid intervals if requested
+    invalid_df = pd.DataFrame()  # Initialize empty dataframe
+    if remove_invalid_interval:
+        logger.info("Checking for invalid intervals (where end < start)...")
+        
+        # Find invalid intervals
+        invalid_mask = df['end'] < df['start']
+        invalid_df = df[invalid_mask]
+        
+        if invalid_df.shape[0] > 0:
+            # Display core fields for invalid records
+            with pd.option_context('display.max_rows', 100):
+                invalid_sample = invalid_df[['seq_id', 'type', 'start', 'end', 'strand', 'id', 'parent']]
+                logger.warning(
+                    f"Found {invalid_df.shape[0]} invalid interval(s) (first 100):\n{invalid_sample}"
+                )
+            
+            # Remove invalid records
+            df = df[~invalid_mask]
+            final_count = df.shape[0]
+            removed_count = original_count - final_count
+            removal_percentage = (removed_count / original_count) * 100
+            
+            logger.info(f"Removed {removed_count} invalid interval(s)")
+            logger.info(f"Remaining records: {final_count}")
+            logger.info(f"Removal percentage: {removal_percentage:.2f}%")
+        else:
+            logger.info("No invalid intervals found")
+    
+    # Sort if requested
+    if sort_by_start:
+        logger.info("Sorting records by [seq_id, start, end, type, strand] ascending...")
+        df = df.sort_values(['seq_id', 'start', 'end', 'type', 'strand'], ascending=True)
+        logger.info("Sorting complete")
+    
+    # Save the cleaned GFF
+    logger.info(f"Saving cleaned GFF to {output_path}")
+    save_gff(output_path, df)
+    
+    # Final summary
+    final_count = df.shape[0]
+    logger.info("Cleaning complete")
+    logger.info(f"Final record count: {final_count}")
+    if remove_invalid_interval and invalid_df.shape[0] > 0:
+        logger.info(f"Total records removed: {original_count - final_count}")
+        logger.info(f"Total removal percentage: {((original_count - final_count) / original_count) * 100:.2f}%")
 
 def main() -> None:
     """Parse command line arguments and execute the appropriate function."""
@@ -1094,14 +1231,30 @@ def main() -> None:
     compare_parser.add_argument("--output", required=True, help="Output directory for comparison results")
     compare_parser.add_argument("--gffcompare-path", required=True, help="Path to gffcompare executable")
     
+    # Evaluate command
+    evaluate_parser = subparsers.add_parser("evaluate", help="Evaluate an input GFF file against a reference using internal evaluation functions")
+    evaluate_parser.add_argument("--reference", required=True, help="Reference GFF file")
+    evaluate_parser.add_argument("--input", required=True, help="Input GFF file to evaluate")
+    evaluate_parser.add_argument("--output", required=True, help="Output directory for evaluation results")
+    evaluate_parser.add_argument("--edge-tolerance", type=int, default=0, help="Tolerance to allow for matching transcript ends (default: 0)")
+    evaluate_parser.add_argument("--ignore-unmatched", choices=["yes", "no"], default="yes", help="Ignore contigs that aren't present in both GFF files (default: yes)")
+    evaluate_parser.add_argument("--as-percentage", choices=["yes", "no"], default="yes", help="Display values as percentages (0-100) rather than decimals (0.0-1.0) for consistency with gffcompare (default: yes)")
+    
     # Summarize command
     summarize_parser = subparsers.add_parser("summarize", help="Summarize the distribution of source and type fields in a GFF file")
     summarize_parser.add_argument("--input", required=True, help="Input GFF file")
     
     # Collect results command
-    collect_parser = subparsers.add_parser("collect_results", help="Collect and consolidate gffcompare.stats.csv files from subdirectories")
+    collect_parser = subparsers.add_parser("collect_results", help="Collect and consolidate gffcompare.stats.csv and gffeval.stats.csv files from subdirectories")
     collect_parser.add_argument("--input", required=True, help="Input directory containing subdirectories with stats.csv files")
-    collect_parser.add_argument("--output", help="Output file path for consolidated results (default: {input}/gffcompare.stats.consolidated.csv)")
+    collect_parser.add_argument("--output", help="Output file path for consolidated results (default: {input}/consolidated.stats.csv)")
+    
+    # Clean command
+    clean_parser = subparsers.add_parser("clean", help="Clean a GFF file by sorting and/or removing invalid intervals")
+    clean_parser.add_argument("--input", required=True, help="Input GFF file")
+    clean_parser.add_argument("--output", required=True, help="Output GFF file")
+    clean_parser.add_argument("--sort-by-start", choices=["yes", "no"], default="yes", help="Sort records by [seq_id, start, end, type, strand] ascending")
+    clean_parser.add_argument("--remove-invalid-interval", choices=["yes", "no"], default="yes", help="Remove records where end < start")
     
     args = parser.parse_args()
     
@@ -1127,10 +1280,14 @@ def main() -> None:
         remove_exon_utrs(args.input, args.output)
     elif args.command == "compare":
         compare_gff_files(args.reference, args.input, args.output, args.gffcompare_path)
+    elif args.command == "evaluate":
+        evaluate_gff_files(args.reference, args.input, args.output, args.edge_tolerance, args.ignore_unmatched == "yes", args.as_percentage == "yes")
     elif args.command == "summarize":
         summarize_gff(args.input)
     elif args.command == "collect_results":
         collect_results(args.input, args.output)
+    elif args.command == "clean":
+        clean_gff(args.input, args.output, args.sort_by_start == "yes", args.remove_invalid_interval == "yes")
     else:
         parser.print_help()
 

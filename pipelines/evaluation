@@ -42,7 +42,7 @@ help:
 # Species-specific targets
 $(SPECIES): %: process-results-%
 
-# Define sequence file target with proper dependency checks
+# Define sequence file target containing DNA tokens
 $(PREDICT_DIR)/%/sequences.zarr:
 	python scripts/extract.py extract_fasta_sequences \
 	  --input-dir $(RAW_DIR)/fasta \
@@ -65,7 +65,7 @@ predict-%: $(PREDICT_DIR)/%/sequences.zarr
 	  --chromosome-id $(CHR_ID) \
 	  --batch-size 32
 
-# Process results (detect intervals, export GFF, filter)
+# Process results (detect intervals, export GFF, filter, compare, etc.)
 process-results-%: predict-%
 	# ------------------------------------------------------------
 	# Detect intervals and export GFF
@@ -129,7 +129,7 @@ process-results-%: predict-%
 	  --input $(SPECIES_DIR)/gff/labels.gff \
 	  --output $(SPECIES_DIR)/gff/labels__no_utrs.gff
 	# ------------------------------------------------------------
-	# Run comparisons
+	# Run comparisons (gffcompare)
 	# ------------------------------------------------------------
 	python scripts/gff.py compare \
 	  --reference $(SPECIES_DIR)/gff/labels.gff \
@@ -151,6 +151,28 @@ process-results-%: predict-%
 	  --input $(SPECIES_DIR)/gff/predictions__strand_both__feat_len_2__gene_len_30__has_cds__no_utrs.gff \
 	  --output $(SPECIES_DIR)/results/minlen_only__no_utrs \
 	  --gffcompare-path $(WORK)/repos/misc/gffcompare/gffcompare
+	# ------------------------------------------------------------
+	# Run comparisons (gffeval)
+	# ------------------------------------------------------------
+	python scripts/gff.py clean \
+	  --input $(SPECIES_DIR)/gff/labels.gff \
+	  --output /tmp/labels_cleaned.gff
+	python scripts/gff.py clean \
+	  --input $(SPECIES_DIR)/gff/predictions__strand_both__feat_len_2__gene_len_30__has_cds.gff \
+	  --output /tmp/predictions__minlen_only__with_utrs.gff
+	python scripts/gff.py clean \
+	  --input $(SPECIES_DIR)/gff/predictions__strand_both__feat_len_2__gene_len_30__has_all_feats.gff \
+	  --output /tmp/predictions__valid_only__with_utrs.gff
+	python scripts/gff.py evaluate \
+	  --reference /tmp/labels_cleaned.gff \
+	  --input /tmp/predictions__minlen_only__with_utrs.gff \
+	  --output $(SPECIES_DIR)/results/minlen_only__with_utrs \
+	  --edge-tolerance 0
+	python scripts/gff.py evaluate \
+	  --reference /tmp/labels_cleaned.gff \
+	  --input /tmp/predictions__valid_only__with_utrs.gff \
+	  --output $(SPECIES_DIR)/results/valid_only__with_utrs \
+	  --edge-tolerance 0
 	# ------------------------------------------------------------
 	# Consolidate results
 	# ------------------------------------------------------------
