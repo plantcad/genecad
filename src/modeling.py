@@ -94,10 +94,10 @@ class Batch:
 
 TOKEN_ENTITY_NAMES = [MFT.INTRON.value, MFT.FIVE_PRIME_UTR.value, MFT.CDS.value, MFT.THREE_PRIME_UTR.value]
 TOKEN_SENTINEL_NAMES = (ST.MASK.value, ST.INTERGENIC.value)
-NUM_LABELS = len(TOKEN_ENTITY_NAMES) * N_BILUO_TAGS + 1
+TOKEN_NUM_CLASSES = len(TOKEN_ENTITY_NAMES) * N_BILUO_TAGS + 1 # +1 for background (intergenic) class
 TOKEN_CLASS_NAMES = [
     convert_biluo_index_to_class_name(i, entity_names=TOKEN_ENTITY_NAMES, sentinel_names=TOKEN_SENTINEL_NAMES)
-    for i in range(NUM_LABELS)
+    for i in range(TOKEN_NUM_CLASSES)
 ]
 # TODO: Add BILUO tag enum to schema for use cases like this
 TOKEN_CLASS_FREQUENCIES: dict[str, float] = {
@@ -123,11 +123,12 @@ TOKEN_CLASS_FREQUENCIES: dict[str, float] = {
 assert TOKEN_CLASS_NAMES == list(TOKEN_CLASS_FREQUENCIES.keys())
 assert len(set(TOKEN_CLASS_FREQUENCIES.keys()) - set(r["name"] for r in BILUO_TAG_CLASS_INFO)) == 0
 
+TOKEN_REGION_NAMES = [RegionType.TRANSCRIPT.value, RegionType.EXON.value] + TOKEN_ENTITY_NAMES
 
 @dataclass
 class GeneClassifierConfig:
     vocab_size: int = 16
-    num_labels: int = NUM_LABELS
+    num_labels: int = TOKEN_NUM_CLASSES
     dropout: float = 0.1
     max_sequence_length: Optional[int] = None
 
@@ -154,7 +155,7 @@ class GeneClassifierConfig:
         [3], # cds
         [4], # three_prime_utr
     ])
-    interval_entity_names: list[str] = field(default_factory=lambda: [RegionType.TRANSCRIPT.value, RegionType.EXON.value] + TOKEN_ENTITY_NAMES)
+    interval_entity_names: list[str] = field(default_factory=lambda: TOKEN_REGION_NAMES)
     sentinel_names: tuple[str, str] = field(default_factory=lambda: TOKEN_SENTINEL_NAMES)
 
     @property
@@ -597,7 +598,7 @@ class GeneClassifier(L.LightningModule):
         )
     
 # -------------------------------------------------------------------------
-# CRF
+# CRF / Decoding
 # -------------------------------------------------------------------------
 
 # Transition probabilities assuming all transcripts have both UTRs and CDS exons
@@ -628,22 +629,4 @@ def token_transition_probs(remove_incomplete_features: bool = True) -> pd.DataFr
         columns=SEQUENCE_MODELING_FEATURES,
     )
 
-def create_crf(config: GeneClassifierConfig, initialize: bool = True, freeze: bool = True):
-    if (actual := config.token_entity_names_with_background()) != (expected := SEQUENCE_MODELING_FEATURES):
-        raise ValueError(f"Token entity names must match those used to create transition probabilities; expected labels: {expected}, got: {actual}")
-    from torchcrf import CRF
-    labels = config.token_entity_names_with_background()
-    crf = CRF(num_tags=len(labels), batch_first=True)
-    if initialize:
-        transition_probs = np.array(TOKEN_TRANSITION_PROBS_1, dtype=np.float32)
-        log_transition_probs = np.log(transition_probs + np.finfo(transition_probs.dtype).eps)
-        with torch.no_grad():
-            crf.transitions.copy_(torch.tensor(log_transition_probs, dtype=torch.float))
-            crf.start_transitions.zero_()
-            crf.end_transitions.zero_()
-        if freeze:
-            crf.transitions.requires_grad = False
-            crf.start_transitions.requires_grad = False
-            crf.end_transitions.requires_grad = False
-    return crf
 
