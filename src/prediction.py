@@ -9,10 +9,12 @@ from src.dataset import open_datatree
 logger = logging.getLogger(__name__)
 
 
-def merge_prediction_datasets(input_dir: str, glob_pattern: str = "predictions.*.zarr", **kwargs: Any) -> xr.Dataset:
+def merge_prediction_datasets(
+    input_dir: str, glob_pattern: str = "predictions.*.zarr", **kwargs: Any
+) -> xr.Dataset:
     """
     Merge prediction files from multiple ranks into a single dataset.
-    
+
     Parameters
     ----------
     input_dir : str
@@ -22,7 +24,7 @@ def merge_prediction_datasets(input_dir: str, glob_pattern: str = "predictions.*
     kwargs : Any
         Additional keyword arguments to pass to `open_datatree`; e.g. `drop_variables` can
         be useful to eliminate unused arrays (`drop_variables=["token_predictions", "token_logits"]`)
-        
+
     Returns
     -------
     xr.Dataset
@@ -36,8 +38,12 @@ def merge_prediction_datasets(input_dir: str, glob_pattern: str = "predictions.*
             key=lambda x: int(os.path.basename(x).split(".")[-2]),
         )
     if not rank_prediction_paths:
-        raise FileNotFoundError(f"No prediction files found matching '{glob_pattern}' in {input_dir}")
-    logger.info(f"Found {len(rank_prediction_paths)} rank prediction files: {rank_prediction_paths}")
+        raise FileNotFoundError(
+            f"No prediction files found matching '{glob_pattern}' in {input_dir}"
+        )
+    logger.info(
+        f"Found {len(rank_prediction_paths)} rank prediction files: {rank_prediction_paths}"
+    )
 
     strand_datasets = []
     for strand in ["positive", "negative"]:
@@ -46,24 +52,26 @@ def merge_prediction_datasets(input_dir: str, glob_pattern: str = "predictions.*
         for rank_path in rank_prediction_paths:
             logger.debug(f"Loading strand '{strand}' from {rank_path}")
             raw_predictions = open_datatree(
-                rank_path, 
+                rank_path,
                 consolidated=True,
                 **kwargs,
             )
             rank_strand_data.append(raw_predictions[f"/{strand}"].ds)
-        logger.info(f"Concatenating {len(rank_strand_data)} rank datasets for {strand!r} strand along the sequence dimension.")
+        logger.info(
+            f"Concatenating {len(rank_strand_data)} rank datasets for {strand!r} strand along the sequence dimension."
+        )
         dataset = xr.concat(rank_strand_data, dim="sequence")
         dataset = dataset.sortby("sequence")
         assert np.array_equal(
-            np.sort(dataset.sequence.values), 
-            np.arange(dataset.sizes["sequence"])
+            np.sort(dataset.sequence.values), np.arange(dataset.sizes["sequence"])
         )
         strand_datasets.append(dataset.expand_dims(strand=[strand]))
-    logger.info(f"Concatenating {len(strand_datasets)} datasets along the strand dimension.")
+    logger.info(
+        f"Concatenating {len(strand_datasets)} datasets along the strand dimension."
+    )
     sequence_predictions = xr.concat(
-        strand_datasets, dim="strand", 
-        join="exact", combine_attrs="drop_conflicts"
+        strand_datasets, dim="strand", join="exact", combine_attrs="drop_conflicts"
     )
     logger.info(f"Concatenated sequence predictions dataset:\n{sequence_predictions}")
-    
+
     return sequence_predictions

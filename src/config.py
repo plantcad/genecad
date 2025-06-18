@@ -5,14 +5,17 @@ from typing import Sequence
 
 WINDOW_SIZE = 8192
 
+
 @dataclass
 class SpeciesGffConfig:
     filename: str
     attributes_to_drop: list[str] | None = None
 
+
 @dataclass
 class SpeciesFastaConfig:
     filename: str
+
 
 @dataclass
 class DataSplitConfig:
@@ -20,14 +23,16 @@ class DataSplitConfig:
     use_in_validation: bool
     use_in_evaluation: bool
 
+
 @dataclass
 class SpeciesWindowsConfig:
     filename: str
 
+
 @dataclass
 class SpeciesConfig:
     """Configuration for a specific species genome and annotation data.
-    
+
     Parameters
     ----------
     id : str
@@ -45,6 +50,7 @@ class SpeciesConfig:
     windows : SpeciesWindowsConfig
         Configuration for windows file handling for this species
     """
+
     id: str
     name: str
     chromosome_map: dict[str, str]
@@ -56,7 +62,7 @@ class SpeciesConfig:
     @classmethod
     def parse_chromosome_number(cls, chrom_id: str) -> int | None:
         """Parse a chromosome number from a chromosome ID.
-        
+
         Parameters
         ----------
         chrom_id : str
@@ -72,7 +78,7 @@ class SpeciesConfig:
 
     def get_chromosome_number(self, chrom_id: str) -> int | None:
         """Get the chromosome number from a chromosome ID.
-        
+
         Parameters
         ----------
         chrom_id : str
@@ -86,15 +92,15 @@ class SpeciesConfig:
         if chrom_id in self.chromosome_map:
             chrom_id = self.chromosome_map[chrom_id]
         return self.parse_chromosome_number(chrom_id)
-    
+
     def sort_chromosome_ids_by_number(self, chrom_ids: Sequence[str]) -> list[str]:
         """Sort chromosome IDs by their numerical value.
-        
+
         Parameters
         ----------
         chrom_ids : Sequence[str]
             Sequence of chromosome IDs to sort
-            
+
         Returns
         -------
         list[str]
@@ -105,27 +111,33 @@ class SpeciesConfig:
         >>> config.sort_chromosome_ids_by_number(["chr1", "chr10", "chr2"])
         ['chr1', 'chr2', 'chr10']
         """
+
         def chrom_num(key):
             num = self.get_chromosome_number(key)
             if num is None:
-                raise ValueError(f"Unable to determine sort order for chromosome ID: {key}")
+                raise ValueError(
+                    f"Unable to determine sort order for chromosome ID: {key}"
+                )
             return num
-        return sorted(chrom_ids, key=chrom_num)
-        
 
-def get_species_configs(species_ids: Sequence[str] | None = None) -> list[SpeciesConfig]:
+        return sorted(chrom_ids, key=chrom_num)
+
+
+def get_species_configs(
+    species_ids: Sequence[str] | None = None,
+) -> list[SpeciesConfig]:
     """Get configurations for the specified species.
-    
+
     Parameters
     ----------
     species_ids : Sequence[str] | None, default=None
         Sequence of species IDs to get configurations for; if None, all species configs will be returned
-        
+
     Returns
     -------
     list[SpeciesConfig]
         List of species configurations
-        
+
     Raises
     ------
     ValueError
@@ -136,8 +148,11 @@ def get_species_configs(species_ids: Sequence[str] | None = None) -> list[Specie
     missing_ids = [sid for sid in species_ids if sid not in SPECIES_CONFIGS]
     if missing_ids:
         available_ids = list(SPECIES_CONFIGS.keys())
-        raise ValueError(f"Could not find configs for species IDs: {missing_ids}. Available IDs: {available_ids}")
+        raise ValueError(
+            f"Could not find configs for species IDs: {missing_ids}. Available IDs: {available_ids}"
+        )
     return [SPECIES_CONFIGS[sid] for sid in species_ids]
+
 
 def get_species_config(species_id: str) -> SpeciesConfig:
     return SPECIES_CONFIGS[species_id]
@@ -147,6 +162,7 @@ def get_species_config(species_id: str) -> SpeciesConfig:
 # Evaluation species configurations
 # -------------------------------------------------------------------------------------------------
 
+# fmt: off
 # Zmays configuration
 zmays_config = SpeciesConfig(
     id="Zmays",
@@ -346,6 +362,7 @@ cillinoinensis_config = SpeciesConfig(
     windows=SpeciesWindowsConfig(filename="Cillinoinensis_573_v1.0_windows.npy"),
     split=DataSplitConfig(use_in_training=True, use_in_validation=False, use_in_evaluation=False)
 )
+# fmt: on
 
 # Species configuration registry
 SPECIES_CONFIGS = {

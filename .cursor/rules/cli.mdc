@@ -1,6 +1,6 @@
 ---
 description: Rules for developing CLI scripts
-globs: 
+globs:
 alwaysApply: false
 ---
 ## CLI

@@ -1,6 +1,6 @@
 ---
 description: This rule should be used when asked to visualize information as styled tables
-globs: 
+globs:
 alwaysApply: false
 ---
 ## Table visualization

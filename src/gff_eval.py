@@ -1,4 +1,5 @@
 """GFF evaluation functions from https://github.com/maize-genetics/reelAnnote-dev/pull/2"""
+
 import os
 import logging
 import warnings
@@ -8,7 +9,10 @@ from Bio import SeqRecord, Seq
 
 logger = logging.getLogger(__name__)
 
-def write_stats(master_stats: evaluation.Stats, out_handle: str, as_percentage: bool = True):
+
+def write_stats(
+    master_stats: evaluation.Stats, out_handle: str, as_percentage: bool = True
+):
     """
     Write a set of statistics to the given file.
 
@@ -68,8 +72,12 @@ def write_stats(master_stats: evaluation.Stats, out_handle: str, as_percentage: 
         out_handle.write(master_stats.base_exon.to_score_string(as_percentage))
 
 
-def calc_stats_for_contig_and_strand(pred_contig: SeqRecord, true_contig: SeqRecord,
-                                     edge_tolerance: int = 0, strand: int = 1) -> evaluation.Stats:
+def calc_stats_for_contig_and_strand(
+    pred_contig: SeqRecord,
+    true_contig: SeqRecord,
+    edge_tolerance: int = 0,
+    strand: int = 1,
+) -> evaluation.Stats:
     """
     Walk through a given pair of contigs and calculate the F1 stats for all genes on those contigs and the given strand
 
@@ -89,15 +97,22 @@ def calc_stats_for_contig_and_strand(pred_contig: SeqRecord, true_contig: SeqRec
     next_tidx = 0
 
     while next_pidx < len(pred_contig) and next_tidx < len(true_contig):
-        pred_indices, true_indices, next_pidx, next_tidx = evaluation.get_next_overlap_set(pred_contig.features,
-                                                                                           true_contig.features,
-                                                                                           next_pidx, next_tidx, strand)
+        pred_indices, true_indices, next_pidx, next_tidx = (
+            evaluation.get_next_overlap_set(
+                pred_contig.features, true_contig.features, next_pidx, next_tidx, strand
+            )
+        )
 
         if len(pred_indices) == 0 and len(true_indices) == 0:
             break
 
-        temp = evaluation.overlap_stats(pred_contig.features, true_contig.features, pred_indices, true_indices,
-                                        edge_tolerance)
+        temp = evaluation.overlap_stats(
+            pred_contig.features,
+            true_contig.features,
+            pred_indices,
+            true_indices,
+            edge_tolerance,
+        )
 
         master_stats += temp
 
@@ -105,15 +120,19 @@ def calc_stats_for_contig_and_strand(pred_contig: SeqRecord, true_contig: SeqRec
 
 
 def test_sorted(contig: SeqRecord) -> bool:
-
     for idx in range(len(contig.features) - 1):
-        if contig.features[idx].location.start > contig.features[idx+1].location.start:
+        if (
+            contig.features[idx].location.start
+            > contig.features[idx + 1].location.start
+        ):
             return False
 
     return True
 
 
-def evaluate_gff(pred_handle, true_handle, edge_tolerance, ignore_unmatched=True) -> evaluation.Stats:
+def evaluate_gff(
+    pred_handle, true_handle, edge_tolerance, ignore_unmatched=True
+) -> evaluation.Stats:
     """
     Calculate precision, recall, and F1 scores on various levels for two GFF files.
 
@@ -162,7 +181,7 @@ def evaluate_gff(pred_handle, true_handle, edge_tolerance, ignore_unmatched=True
         contigs_only_in_reference = sorted(true_keys - pred_keys)
         contigs_only_in_predicted = sorted(pred_keys - true_keys)
         contigs_in_both = sorted(pred_keys.intersection(true_keys))
-        
+
         warning_msg = (
             "Warning: reference and predicted GFFs have different contig names. "
             "These will still be evaluated. "
@@ -181,33 +200,48 @@ def evaluate_gff(pred_handle, true_handle, edge_tolerance, ignore_unmatched=True
         if contig_id in pred_contigs:
             pred_contig = pred_contigs[contig_id]
         else:
-            pred_contig = SeqRecord.SeqRecord(seq=Seq.Seq("NNN"), id="None", features=[])
+            pred_contig = SeqRecord.SeqRecord(
+                seq=Seq.Seq("NNN"), id="None", features=[]
+            )
 
         if contig_id in true_contigs:
             true_contig = true_contigs[contig_id]
         else:
-            true_contig = SeqRecord.SeqRecord(seq=Seq.Seq("NNN"), id="None", features=[])
+            true_contig = SeqRecord.SeqRecord(
+                seq=Seq.Seq("NNN"), id="None", features=[]
+            )
 
-        master_stats += calc_stats_for_contig_and_strand(pred_contig, true_contig, edge_tolerance, 1)
+        master_stats += calc_stats_for_contig_and_strand(
+            pred_contig, true_contig, edge_tolerance, 1
+        )
 
-        master_stats += calc_stats_for_contig_and_strand(pred_contig, true_contig, edge_tolerance, -1)
+        master_stats += calc_stats_for_contig_and_strand(
+            pred_contig, true_contig, edge_tolerance, -1
+        )
 
     return master_stats
 
 
-def run_gffeval(reference_path: str, input_path: str, output_dir: str, edge_tolerance: int = 0, ignore_unmatched: bool = True, as_percentage: bool = True) -> str:
+def run_gffeval(
+    reference_path: str,
+    input_path: str,
+    output_dir: str,
+    edge_tolerance: int = 0,
+    ignore_unmatched: bool = True,
+    as_percentage: bool = True,
+) -> str:
     """Run GFF evaluation to compare input GFF against reference using internal evaluation functions.
-    
+
     Stats are written as precision, recall, and F1 scores. By default, these values
     are multiplied by 100 to display as percentages for consistency with gffcompare
     output format.
-    
+
     Parameters
     ----------
     reference_path : str
         Path to reference GFF file
     input_path : str
-        Path to input/query GFF file  
+        Path to input/query GFF file
     output_dir : str
         Directory to store evaluation results
     edge_tolerance : int, default 0
@@ -217,7 +251,7 @@ def run_gffeval(reference_path: str, input_path: str, output_dir: str, edge_tole
     as_percentage : bool, default True
         Whether to display values as percentages (0-100) or decimals (0.0-1.0).
         Defaults to True for consistency with gffcompare.
-    
+
     Returns
     -------
     str
@@ -225,25 +259,26 @@ def run_gffeval(reference_path: str, input_path: str, output_dir: str, edge_tole
     """
     # Create output directory if it doesn't exist
     os.makedirs(output_dir, exist_ok=True)
-    
+
     # Set up the output prefix for evaluation files
     output_prefix = os.path.join(output_dir, "gffeval")
-    
-    logger.info(f"Running GFF evaluation: {input_path} vs {reference_path} ({edge_tolerance=}, {ignore_unmatched=}, {as_percentage=})")
+
+    logger.info(
+        f"Running GFF evaluation: {input_path} vs {reference_path} ({edge_tolerance=}, {ignore_unmatched=}, {as_percentage=})"
+    )
 
     # Run the evaluation using the existing evaluate_gff function
     master_stats = evaluate_gff(
         pred_handle=input_path,
-        true_handle=reference_path, 
+        true_handle=reference_path,
         edge_tolerance=edge_tolerance,
-        ignore_unmatched=ignore_unmatched
+        ignore_unmatched=ignore_unmatched,
     )
-    
+
     # Write stats to output file
     stats_file = f"{output_prefix}.stats.tsv"
     write_stats(master_stats, stats_file, as_percentage)
-    
-    logger.info(f"Evaluation complete. Results written to {stats_file}")
-    
-    return output_prefix
 
+    logger.info(f"Evaluation complete. Results written to {stats_file}")
+
+    return output_prefix

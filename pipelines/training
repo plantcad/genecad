@@ -12,9 +12,10 @@ PREP_DIR ?= $(PIPE_DIR)/prep/$(RUN_VERSION)
 VALID_PROPORTION ?= .025
 TRAINING_WINDOW_NUM_WORKERS ?= 16
 REMOVE_INCOMPLETE_FEATURES ?= yes
+TRAIN_VERSION ?= $(RUN_VERSION)
 
 # Define all target to run the complete pipeline
-.PHONY: all clean extract-gff extract-fasta filter stack labels sequences windows splits help validate-configs summarize
+.PHONY: all clean extract-gff extract-fasta filter stack labels sequences windows splits help validate-configs summarize run-training
 
 all: $(TRANSFORM_DIR)/splits/train.zarr
 
@@ -24,7 +25,7 @@ help:
 	@echo "  extract-gff      - Extract GFF features from input files as Pandas/Parquet"
 	@echo "  extract-fasta    - Extract and tokenize FASTA sequences as Xarray/Zarr"
 	@echo "  filter           - Filter features based on a number of criteria (canonical transcripts, overlapping genes, incomplete annotations, etc.)"
-	@echo "  stack            - Convert features from hierarchical gene/transcript/feature format to a long, stacked format" 
+	@echo "  stack            - Convert features from hierarchical gene/transcript/feature format to a long, stacked format"
 	@echo "  labels           - Create labels from features"
 	@echo "  sequences        - Create sequence dataset by joining labels and tokens"
 	@echo "  windows          - Generate training windows from sequences"
@@ -33,9 +34,10 @@ help:
 	@echo "  summarize        - Generate summary statistics and visualizations of training data"
 	@echo "  all              - Run complete pipeline"
 	@echo "  clean            - Remove all generated files"
+	@echo "  run-training     - Run training with specified parameters"
 
 # Extract gff features
-$(EXTRACT_DIR)/raw_features.parquet: 
+$(EXTRACT_DIR)/raw_features.parquet:
 	@mkdir -p $(EXTRACT_DIR)
 	python scripts/extract.py extract_gff_features \
 	  --input-dir $(RAW_DIR)/gff \
@@ -43,7 +45,7 @@ $(EXTRACT_DIR)/raw_features.parquet:
 	  --output $@
 
 # Extract fasta sequences
-$(EXTRACT_DIR)/tokens.zarr: 
+$(EXTRACT_DIR)/tokens.zarr:
 	@mkdir -p $(EXTRACT_DIR)
 	python scripts/extract.py extract_fasta_sequences \
 	  --input-dir $(RAW_DIR)/fasta \
@@ -104,6 +106,23 @@ summarize: $(PREP_DIR)/splits/train.zarr
 	python scripts/summarize.py summarize_training_dataset \
 	  --input $(PREP_DIR)/splits/valid.zarr
 
+# Run training
+run-training:
+	@mkdir -p local/logs/exec
+	srun bin/tacc \
+	  python scripts/sweep.py run \
+	  --train-dataset $(PREP_DIR)/splits/train.zarr \
+	  --val-dataset $(PREP_DIR)/splits/valid.zarr \
+	  --output-dir $(PIPE_DIR)/sweep --configuration-index 13 \
+	  --num-workers 16 --prefetch-factor 3 \
+	  --batch-size 8 --accumulate-grad-batches 1 \
+	  --train-eval-frequency 200 --val-check-interval 200 --limit-val-batches 1.0 \
+	  --checkpoint-frequency 200 --log-frequency 1 --enable-visualization yes \
+	  --epochs 8 --learning-rate-decay none \
+	  --num-nodes $$SLURM_NNODES --strategy ddp \
+	  --base-encoder-path $(MODEL_PATH) --torch-compile no \
+	  --project-name pc-genome-annot --run-name sweep-$(TRAIN_VERSION) \
+	  2>&1 | tee local/logs/exec/training_$(TRAIN_VERSION).log
 
 # Clean target
 clean:
@@ -119,4 +138,4 @@ windows: $(TRANSFORM_DIR)/windows.zarr
 splits: $(TRANSFORM_DIR)/splits/train.zarr
 validate-configs:
 	python scripts/extract.py validate_configs \
-	  --data-dir $(DATA_DIR) 
+	  --data-dir $(DATA_DIR)

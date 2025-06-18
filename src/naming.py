@@ -1,20 +1,19 @@
-
 from src.config import SpeciesConfig
 
 
 def normalize_species_identifier(species_name: str) -> str:
     """Convert full species name to a normalized identifier format.
-    
+
     Parameters
     ----------
     species_name : str
         A species name, preferably in binomial format (genus + species)
-    
+
     Returns
     -------
     str
         Normalized species identifier
-    
+
     Examples
     --------
     >>> normalize_species_identifier("Arabidopsis thaliana")

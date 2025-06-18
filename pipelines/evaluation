@@ -7,7 +7,7 @@ RUN_VERSION ?= v0.0
 DECODING_METHOD ?= viterbi
 SM_VITERBI_NUM_WORKERS ?= 64
 REMOVE_INCOMPLETE_FEATURES ?= yes
-MODEL_CHECKPOINT ?= 
+MODEL_CHECKPOINT ?=
 
 # Define SPECIES and their chromosome IDs
 SPECIES = zmays carabica jregia pvulgaris ntabacum nsylvestris

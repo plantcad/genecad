@@ -32,9 +32,12 @@ GFF3_SPEC = [
 GFF3_COLUMNS = [col for col, _ in GFF3_SPEC]
 GFF3_DTYPES = dict(GFF3_SPEC)
 
-def read_gff3(path: PathLike, parse_attributes: bool = True, attributes_prefix: str | None = None) -> pd.DataFrame:
+
+def read_gff3(
+    path: PathLike, parse_attributes: bool = True, attributes_prefix: str | None = None
+) -> pd.DataFrame:
     """Read a GFF3 file into a DataFrame with optional attribute parsing.
-    
+
     Parameters
     ----------
     path : PathLike
@@ -43,7 +46,7 @@ def read_gff3(path: PathLike, parse_attributes: bool = True, attributes_prefix: 
         Whether to parse the attributes column into separate columns
     attributes_prefix : str | None, default=None
         Optional prefix to add to attribute column names
-        
+
     Returns
     -------
     pd.DataFrame
@@ -56,19 +59,22 @@ def read_gff3(path: PathLike, parse_attributes: bool = True, attributes_prefix: 
             attributes = attributes.add_prefix(attributes_prefix)
         for col in attributes:
             if col in features:
-                raise ValueError(f"Attributes in path {path} contain column {col!r} which conflicts with reserved GFF3 column by the same name.")
+                raise ValueError(
+                    f"Attributes in path {path} contain column {col!r} which conflicts with reserved GFF3 column by the same name."
+                )
             features[col] = attributes[col]
     features.attrs = {"path": str(path), "header": read_gff3_header(path)}
     return features
 
+
 def read_gff3_data(path: PathLike) -> pd.DataFrame:
     """Read raw GFF3 data into a DataFrame without parsing attributes.
-    
+
     Parameters
     ----------
     path : PathLike
         Path to the GFF3 file
-        
+
     Returns
     -------
     pd.DataFrame
@@ -83,19 +89,20 @@ def read_gff3_data(path: PathLike) -> pd.DataFrame:
         dtype=GFF3_DTYPES,
     )
 
+
 def read_gff3_header(path: PathLike) -> str:
     """Read comment lines from the start of a GFF3 file.
-    
+
     Parameters
     ----------
     path : PathLike
         Path to the GFF3 file (can be gzipped with .gz extension)
-        
+
     Returns
     -------
     str
         All comment lines from the file concatenated together
-        
+
     Examples
     --------
     >>> header = read_gff3_header("example.gff3")
@@ -105,22 +112,23 @@ def read_gff3_header(path: PathLike) -> str:
     # This is a test file
     """
     path = Path(path)
-    with (gzip.open(path, 'rt') if path.suffix == '.gz' else open(path)) as f:
-        return ''.join(line for line in f if line.startswith("#"))
-    
+    with gzip.open(path, "rt") if path.suffix == ".gz" else open(path) as f:
+        return "".join(line for line in f if line.startswith("#"))
+
+
 def parse_gff3_attributes(df: pd.DataFrame) -> pd.DataFrame:
     """Parse GFF3 attribute strings into a DataFrame of key-value pairs.
-    
+
     Parameters
     ----------
     df : pd.DataFrame
         DataFrame containing a column named 'attributes' with GFF3 attribute strings
-        
+
     Returns
     -------
     pd.DataFrame
         DataFrame with attribute key-value pairs as columns
-        
+
     Examples
     --------
     >>> df = pd.DataFrame({
@@ -137,6 +145,7 @@ def parse_gff3_attributes(df: pd.DataFrame) -> pd.DataFrame:
     Row 1: {'ID': 'exon1', 'Parent': 'gene1'}
     Row 2: {'Note': 'Complex value with spaces'}
     """
+
     def parse_attribute_string(attr_str: str) -> dict:
         if not attr_str:
             return {}
@@ -147,28 +156,31 @@ def parse_gff3_attributes(df: pd.DataFrame) -> pd.DataFrame:
             try:
                 key, value = pair.split("=", maxsplit=1)
             except ValueError as e:
-                raise ValueError(f"Invalid key-value pair in GFF3 attributes: {pair!r}") from e
+                raise ValueError(
+                    f"Invalid key-value pair in GFF3 attributes: {pair!r}"
+                ) from e
             result[key] = value
         return result
-    
+
     return pd.DataFrame(
         [parse_attribute_string(attr_str) for attr_str in df["attributes"]],
         index=df.index,
     )
 
+
 def validate_gff3(df: pd.DataFrame) -> pd.DataFrame:
     """Validate that a DataFrame contains no missing values in GFF3 columns.
-    
+
     Parameters
     ----------
     df : pd.DataFrame
         DataFrame to validate
-        
+
     Returns
     -------
     pd.DataFrame
         The input DataFrame if validation passes
-        
+
     Raises
     ------
     ValueError
@@ -184,9 +196,15 @@ def validate_gff3(df: pd.DataFrame) -> pd.DataFrame:
         raise ValueError(error_msg)
     return df
 
-def write_gff3(df: pd.DataFrame, path: PathLike, require_header: bool = True, fill_missing: bool = True) -> None:
+
+def write_gff3(
+    df: pd.DataFrame,
+    path: PathLike,
+    require_header: bool = True,
+    fill_missing: bool = True,
+) -> None:
     """Write a DataFrame to a GFF3 file with optional header and missing value handling.
-    
+
     Parameters
     ----------
     df : pd.DataFrame
@@ -197,14 +215,16 @@ def write_gff3(df: pd.DataFrame, path: PathLike, require_header: bool = True, fi
         Whether to require a header in df.attrs
     fill_missing : bool, default=True
         Whether to fill missing values with '.'
-        
+
     Raises
     ------
     ValueError
         If require_header=True and df.attrs['header'] is missing
     """
     if require_header and "header" not in df.attrs:
-        raise ValueError(f"DataFrame does not contain required 'header' attribute; {df.attrs=}")
+        raise ValueError(
+            f"DataFrame does not contain required 'header' attribute; {df.attrs=}"
+        )
     header = df.attrs.get("header", "")
     df = df[GFF3_COLUMNS].copy()
     if fill_missing:

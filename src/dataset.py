@@ -3,6 +3,7 @@ Module containing subclasses of torch Dataset for use with training and inferenc
 
 Most subclasses require fasta sequence and a tokenizer as input, though some take pre-tokenized data
 """
+
 import io
 import torch
 from torch.utils.data import Dataset
@@ -13,14 +14,16 @@ import pandas as pd
 import glob
 from typing import Any, Callable
 import logging
+
 logger = logging.getLogger(__name__)
 
 
 DEFAULT_SEQUENCE_CHUNK_SIZE = 10_000_000
 
+
 def set_dimension_chunks(ds: xr.Dataset, dim: str, chunk_size: int) -> xr.Dataset:
     """Set chunking in one dimension of an Xarray Dataset
-    
+
     This function will set the chunk size for a given dimension, while
     using the full size for all other dimensions.
 
@@ -53,25 +56,25 @@ def open_datatree(zarr_path: str, **kwargs: Any) -> xr.DataTree:
 
     This is a temporary solution for https://github.com/pydata/xarray/issues/9960, which should
     have been fixed by https://github.com/pydata/xarray/pull/10020 but has not been released yet.
-    
+
     Parameters
     ----------
     zarr_path : str
         Path to the zarr store
     kwargs : Any
         Additional keyword arguments to pass to `xr.open_zarr`
-        
+
     Returns
     -------
     xr.DataTree
         DataTree containing all datasets in the zarr store with matching hierarchy
     """
     # Get all groups recursively using zarr API
-    store = zarr.open(zarr_path, mode='r')
-    
+    store = zarr.open(zarr_path, mode="r")
+
     # Build nested dictionary of datasets
     datasets_dict = {}
-    
+
     def _get_datasets(group, current_path=""):
         # Check if this group has array keys (making it a dataset)
         if len(list(group.array_keys())) > 0:
@@ -83,16 +86,18 @@ def open_datatree(zarr_path: str, **kwargs: Any) -> xr.DataTree:
                 datasets_dict[current_path] = xr.open_zarr(
                     zarr_path, group=current_path, **kwargs
                 )
-                
+
         # Process subgroups recursively
         for subgroup_name in group.group_keys():
             subgroup = group[subgroup_name]
-            new_path = f"{current_path}/{subgroup_name}" if current_path else subgroup_name
+            new_path = (
+                f"{current_path}/{subgroup_name}" if current_path else subgroup_name
+            )
             _get_datasets(subgroup, new_path)
-    
+
     # Start recursive discovery from the root
     _get_datasets(store)
-    
+
     # Convert dictionary to DataTree
     return xr.DataTree.from_dict(datasets_dict)
 
@@ -104,98 +109,130 @@ def info_str(df: pd.DataFrame) -> str:
     info_string = buf.getvalue()
     return info_string
 
+
 def default_transform(ds: xr.Dataset) -> dict[str, Any]:
     sample_dict = {k: ds[k].values for k in ds.data_vars}
     return sample_dict
 
+
 class XarrayDataset(Dataset):
     """Dataset for loading data from xarray"""
 
-    def __init__(self, 
-        path: str, 
-        sample_transform: Callable[[xr.Dataset], dict[str, Any]] = None, 
-        max_sample_count: int | None = None, 
-        max_sequence_length: int | None = None, 
+    def __init__(
+        self,
+        path: str,
+        sample_transform: Callable[[xr.Dataset], dict[str, Any]] = None,
+        max_sample_count: int | None = None,
+        max_sequence_length: int | None = None,
         chunk_size: int = 1,
-        **backend_kwargs: Any
+        **backend_kwargs: Any,
     ):
         self.paths = sorted(glob.glob(path))
         if not self.paths:
-            raise ValueError(f"No datasets found at {path}")  
+            raise ValueError(f"No datasets found at {path}")
         self.chunk_size = chunk_size
         self.current_chunk_id = -1
         self.current_chunk = None
         self.current_dataset_idx = -1
         self.sample_transform = sample_transform or default_transform
         self._load_datasets(max_sample_count, max_sequence_length, **backend_kwargs)
-    
+
     def __len__(self):
         return self.cumulative_samples[-1] if self.cumulative_samples.size > 0 else 0
-    
+
     def __getitem__(self, idx):
         if idx >= len(self):
-            raise IndexError(f"Index {idx} out of bounds for dataset of length {len(self)}")
+            raise IndexError(
+                f"Index {idx} out of bounds for dataset of length {len(self)}"
+            )
         dataset_idx, local_dataset_idx = self._locate_sample(idx)
         sample = self._get_sample(dataset_idx, local_dataset_idx)
         return self.sample_transform(sample)
-    
-    def _load_datasets(self, max_sample_count: int | None, max_sequence_length: int | None, **backend_kwargs: Any) -> None:
+
+    def _load_datasets(
+        self,
+        max_sample_count: int | None,
+        max_sequence_length: int | None,
+        **backend_kwargs: Any,
+    ) -> None:
         """Load datasets from paths with constraints on sample count and sequence length"""
         self.datasets = []
         self.sample_counts = []
         total_samples = 0
-        
+
         for p in self.paths:
             ds = xr.open_zarr(p, **backend_kwargs)
-            if max_sequence_length is not None and ds.sizes["sequence"] > max_sequence_length:
+            if (
+                max_sequence_length is not None
+                and ds.sizes["sequence"] > max_sequence_length
+            ):
                 ds = ds.isel(sequence=slice(max_sequence_length))
-            
+
             sample_count = ds.sizes["sample"]
-            if max_sample_count is not None and total_samples + sample_count > max_sample_count:
+            if (
+                max_sample_count is not None
+                and total_samples + sample_count > max_sample_count
+            ):
                 remaining = max_sample_count - total_samples
                 if remaining > 0:
                     ds = ds.isel(sample=slice(remaining))
                     sample_count = remaining
                 else:
                     break
-            
+
             if sample_count > 0:
                 self.datasets.append(ds)
                 self.sample_counts.append(sample_count)
                 total_samples += sample_count
-            
+
             if max_sample_count is not None and total_samples >= max_sample_count:
                 break
-        
+
         self.cumulative_samples = np.cumsum(self.sample_counts)
 
     def _locate_sample(self, idx: int) -> tuple[int, int]:
         """Find which dataset and local index a global index corresponds to"""
-        dataset_idx = np.searchsorted(self.cumulative_samples, idx, side='right')
-        local_dataset_idx = idx - (0 if dataset_idx == 0 else self.cumulative_samples[dataset_idx-1])
+        dataset_idx = np.searchsorted(self.cumulative_samples, idx, side="right")
+        local_dataset_idx = idx - (
+            0 if dataset_idx == 0 else self.cumulative_samples[dataset_idx - 1]
+        )
         return dataset_idx, local_dataset_idx
-    
+
     def _get_sample(self, dataset_idx: int, local_dataset_idx: int) -> xr.Dataset:
         """Get a sample from the appropriate chunk, loading it if necessary"""
         chunk_id = (dataset_idx, local_dataset_idx // self.chunk_size)
         if chunk_id != (self.current_dataset_idx, self.current_chunk_id):
             self._load_chunk(dataset_idx, local_dataset_idx)
-        
+
         local_idx = local_dataset_idx % self.chunk_size
         return self.current_chunk.isel(sample=local_idx)
-    
+
     def _load_chunk(self, dataset_idx: int, local_dataset_idx: int) -> None:
         """Load a chunk from the dataset at the specified index"""
         start = (local_dataset_idx // self.chunk_size) * self.chunk_size
         end = min(start + self.chunk_size, self.sample_counts[dataset_idx])
-        self.current_chunk = self.datasets[dataset_idx].isel(sample=slice(start, end)).compute()
-        self.current_dataset_idx, self.current_chunk_id = dataset_idx, local_dataset_idx // self.chunk_size
+        self.current_chunk = (
+            self.datasets[dataset_idx].isel(sample=slice(start, end)).compute()
+        )
+        self.current_dataset_idx, self.current_chunk_id = (
+            dataset_idx,
+            local_dataset_idx // self.chunk_size,
+        )
 
 
 class MultisampleSequenceDatasetLabeled(Dataset):
-    """ DataSet class with for multiple genomes, with labels """
+    """DataSet class with for multiple genomes, with labels"""
 
-    def __init__(self, sequences, label_files, windows, species, contig_indices, tokenizer, window_size):
+    def __init__(
+        self,
+        sequences,
+        label_files,
+        windows,
+        species,
+        contig_indices,
+        tokenizer,
+        window_size,
+    ):
         self.species = species  # list of species names
         self.sequences = sequences  # list of lists of SeqRecords
         self.label_files = label_files  # list of file names for labels
@@ -204,7 +241,7 @@ class MultisampleSequenceDatasetLabeled(Dataset):
         self.tokenizer = tokenizer  # model tokenizer
         self.window_size = window_size  # standard length of context windows
         self.labels = None  # We will lazy-load these arrays
- 
+
     # Each worker thread needs its own file handle for processing
     # Unfortunately I can't find a good way to close them programmatically
     # Though they should all be closed when the subprocess exits
@@ -223,13 +260,19 @@ class MultisampleSequenceDatasetLabeled(Dataset):
         species_id = self.species[window_species]
 
         if window_chrom >= len(self.contig_indices[window_species]):
-            raise ValueError(f"Contig index {window_chrom} out of range for species {species_id}")
+            raise ValueError(
+                f"Contig index {window_chrom} out of range for species {species_id}"
+            )
         chrom_name = self.contig_indices[window_species][window_chrom]
 
         if window_chrom >= len(self.sequences[window_species]):
-            raise ValueError(f"Contig index {window_chrom} out of range for species {species_id}")
+            raise ValueError(
+                f"Contig index {window_chrom} out of range for species {species_id}"
+            )
         max_sequence_len = len(self.sequences[window_species][window_chrom].seq)
-        sequence = self.sequences[window_species][window_chrom][window_pos:window_pos + self.window_size].seq
+        sequence = self.sequences[window_species][window_chrom][
+            window_pos : window_pos + self.window_size
+        ].seq
 
         # Ensure the window does not extend beyond the end of the sequence
         if window_pos + self.window_size > max_sequence_len:
@@ -238,14 +281,18 @@ class MultisampleSequenceDatasetLabeled(Dataset):
                 f"species={species_id}, chrom={chrom_name}, pos={window_pos}, "
                 f"strand={window_strand}, window_size={self.window_size}, max_sequence_len={max_sequence_len}"
             )
-        
+
         # Get the reverse complement if the strand is 1
         # for labels, [:, 1] are the labels for the reverse strand
-        if (window_strand == 1):
+        if window_strand == 1:
             sequence = sequence.reverse_complement()
-            label = self.labels[window_species][chrom_name][window_pos:window_pos + self.window_size, 1][::-1].copy()
+            label = self.labels[window_species][chrom_name][
+                window_pos : window_pos + self.window_size, 1
+            ][::-1].copy()
         else:
-            label = self.labels[window_species][chrom_name][window_pos:window_pos + self.window_size, 0].copy()
+            label = self.labels[window_species][chrom_name][
+                window_pos : window_pos + self.window_size, 0
+            ].copy()
         assert label.ndim == 1
 
         # If label is less than length of sequence, pad with 0.
@@ -253,13 +300,22 @@ class MultisampleSequenceDatasetLabeled(Dataset):
         # and label vectors based on those annotations are often only as long as the maximum annotation position.
         # Therefore, it can safely be assumed that any positions requiring padding are intergenic (class = 0)
         if len(label) < (sequence_len := len(sequence)):
-            label = np.pad(label, (0, sequence_len - len(label)), mode='constant', constant_values=0)
+            label = np.pad(
+                label,
+                (0, sequence_len - len(label)),
+                mode="constant",
+                constant_values=0,
+            )
             assert label.ndim == 1
 
         if len(sequence) != len(label):
-            raise ValueError(f"Sequence and label lengths do not match for {chrom_name} at {window_pos}: {len(sequence)=} != {len(label)=}")
+            raise ValueError(
+                f"Sequence and label lengths do not match for {chrom_name} at {window_pos}: {len(sequence)=} != {len(label)=}"
+            )
         if len(sequence) != self.window_size:
-            raise ValueError(f"Sequence length does not match window size for {chrom_name} at {window_pos}: {len(sequence)=} != {self.window_size=}")
+            raise ValueError(
+                f"Sequence length does not match window size for {chrom_name} at {window_pos}: {len(sequence)=} != {self.window_size=}"
+            )
 
         # Mask out labels where label == -1 (ambiguous)
         label_mask = label >= 0
@@ -269,27 +325,23 @@ class MultisampleSequenceDatasetLabeled(Dataset):
         encoding = self.tokenizer.encode_plus(
             str(sequence),
             return_tensors="pt",
-            padding='max_length',
+            padding="max_length",
             truncation=True,
             max_length=self.window_size,
             return_attention_mask=True,
-            return_token_type_ids=False
+            return_token_type_ids=False,
         )
         label = torch.tensor(label, dtype=torch.long)
 
         return {
-            'sample_index': idx,
-            'input_ids': encoding['input_ids'].squeeze(0),
-            'attention_mask': encoding['attention_mask'].squeeze(0),
-            'soft_mask': soft_mask,
-            'label_mask': label_mask,
-            'labels': label,
-            'species': self.species[window_species],
-            'chromosome': chrom_name,
-            'position': window_pos,
-            'strand': window_strand,
+            "sample_index": idx,
+            "input_ids": encoding["input_ids"].squeeze(0),
+            "attention_mask": encoding["attention_mask"].squeeze(0),
+            "soft_mask": soft_mask,
+            "label_mask": label_mask,
+            "labels": label,
+            "species": self.species[window_species],
+            "chromosome": chrom_name,
+            "position": window_pos,
+            "strand": window_strand,
         }
-
-
-
-

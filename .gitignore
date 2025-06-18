@@ -1,4 +1,6 @@
 __pycache__/
+venv/
+.venv/
 wandb/
 local/
 .cursorrules

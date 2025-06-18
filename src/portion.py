@@ -1,3 +1,4 @@
+# fmt: off
 # Vendoring from https://github.com/AlexandreDecan/portion
 import warnings
 from collections import namedtuple
@@ -944,3 +945,5 @@ def iterate(interval, step, *, base=None, reverse=False):
         while include(value, i):
             yield value
             value = step(value)
+
+# fmt: on
