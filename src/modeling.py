@@ -128,6 +128,7 @@ TOKEN_CLASS_NAMES = [
 # fmt: off
 # TODO: Add BILUO tag enum to schema for use cases like this
 TOKEN_CLASS_FREQUENCIES: dict[str, float] = {
+    # Computed from https://github.com/Open-Athena/oa-cornell-dna/issues/50#issuecomment-2986102331
     "intergenic": 7.531898e-01, # [0]
     "B-intron": 3.422340e-04, # [1]
     "I-intron": 1.071083e-01, # [2]
