@@ -20,9 +20,7 @@ from transformers import AutoModel, AutoConfig, AutoTokenizer
 from src.dataset import open_datatree, set_dimension_chunks
 from src.prediction import merge_prediction_datasets
 from src.modeling import GeneClassifier, GeneClassifierConfig, token_transition_probs
-from src.decoding import semi_markov_viterbi_segmentation
-from src.analysis import load_feature_length_distributions
-from src.schema import GffFeatureType, ModelingFeatureType as MFT
+from src.schema import GffFeatureType
 import pandas as pd
 from src.dist import process_group
 import torch._dynamo
@@ -35,68 +33,6 @@ def batched(input_list: list[Any], batch_size: int) -> list[list[Any]]:
     return [
         input_list[i : i + batch_size] for i in range(0, len(input_list), batch_size)
     ]
-
-
-def load_duration_probabilities(
-    feature_labels: list[str], path: str, sigma: float = 8.0, max_length: int = 8192
-) -> dict[int, np.ndarray]:
-    """Load duration probabilities for semi-Markov decoding.
-
-    Parameters
-    ----------
-    feature_labels : list[str]
-        List of feature labels in the order they appear in the model
-    path : str
-        Path to the feature length distributions parquet file
-    sigma : float, default 8.0
-        Gaussian smoothing parameter
-    max_length : int, default 8192
-        Maximum sequence length for duration probabilities; this will be
-        used to truncate distributions if shorter than the max length
-        used to compute them in the first place (16384 at TOW)
-
-    Returns
-    -------
-    dict[int, np.ndarray]
-        Dictionary mapping state index to smoothed duration probability array
-    """
-    min_lengths = {
-        MFT.INTERGENIC: None,
-        MFT.INTRON: None,
-        MFT.FIVE_PRIME_UTR: None,
-        MFT.THREE_PRIME_UTR: None,
-        MFT.CDS: None,
-    }
-
-    # Load smoothed distributions
-    smoothed_distributions = load_feature_length_distributions(
-        path=path,
-        feature_labels=feature_labels,
-        min_length=min_lengths,
-        max_length=max_length,
-        sigma=sigma,
-    )
-
-    # Convert to the format expected by semi-Markov decoder
-    duration_probs = {}
-    for i, feature in enumerate(feature_labels):
-        duration_probs[i] = smoothed_distributions[feature].values
-
-    # Log information
-    logger.info(
-        f"Loaded duration probabilities for {len(duration_probs)} features (Gaussian smoothing σ={sigma})"
-    )
-    for i, feature in enumerate(feature_labels):
-        max_length = len(duration_probs[i])
-        tail_mass = duration_probs[i][-1]
-        # Calculate mean length from probabilities
-        durations = np.arange(1, max_length + 1)
-        mean_length = np.sum(durations * duration_probs[i])
-        logger.info(
-            f"  {feature}: {max_length} duration bins, tail mass: {tail_mass:.3f}, mean length: {mean_length:.1f}"
-        )
-
-    return duration_probs
 
 
 def load_classifier(args: Args) -> GeneClassifier:
@@ -462,7 +398,7 @@ def _detect_intervals(
     logger.info("Inferring regions from predicted labels")
 
     # Parse and validate decoding methods
-    valid_methods = {"direct", "viterbi", "sm-viterbi"}
+    valid_methods = {"direct", "viterbi"}
     decoding_methods = [method.strip() for method in args.decoding_methods.split(",")]
 
     # Validate that at least one method is provided
@@ -515,43 +451,6 @@ def _detect_intervals(
         assert len(labels) == len(logits)
         return labels
 
-    def _decode_intervals_semi_markov(
-        logits: npt.ArrayLike, remove_incomplete_features: bool
-    ) -> np.ndarray:
-        transition_probs = token_transition_probs(
-            remove_incomplete_features=remove_incomplete_features
-        )
-        if (
-            transition_probs.columns.tolist()
-            != config.token_entity_names_with_background()
-        ):
-            raise ValueError(
-                f"Transition probability classes must match token entity names; expected: {config.token_entity_names_with_background()}, got: {transition_probs.columns.tolist()}"
-            )
-        emissions = F.softmax(torch.from_numpy(logits), dim=-1).numpy()
-        assert emissions.min() >= 0 and emissions.max() <= 1
-        assert transition_probs.index.tolist() == transition_probs.columns.tolist()
-
-        feature_labels = transition_probs.columns.tolist()
-        duration_probs = load_duration_probabilities(
-            feature_labels, path=args.duration_probs_path
-        )
-
-        logger.info("Running semi-Markov viterbi decoding")
-        labels = semi_markov_viterbi_segmentation(
-            emission_probs=emissions,
-            transition_matrix=transition_probs.values,
-            duration_probs=duration_probs,
-            background_class=feature_labels.index(MFT.INTERGENIC.value),
-            background_class_min_length=32_768,
-            background_class_buffer=256,
-            num_workers=args.num_workers,
-        )
-
-        assert labels.ndim == 1
-        assert len(labels) == len(logits)
-        return labels
-
     for strand in strands:
         # Direct label inference
         if "direct" in decoding_methods:
@@ -562,7 +461,7 @@ def _detect_intervals(
             )
             region_intervals.append(intervals.assign(strand=strand, decoding="direct"))
 
-        # CRF/Semi-Markov label decoding
+        # CRF/Viterbi label decoding
         logits = predictions.sel(strand=strand).feature_logits.values
 
         # Viterbi decoding
@@ -585,29 +484,6 @@ def _detect_intervals(
                 labels=viterbi_labels, class_groups=config.interval_entity_classes
             )
             region_intervals.append(intervals.assign(strand=strand, decoding="viterbi"))
-
-        # Semi-Markov decoding
-        if "sm-viterbi" in decoding_methods:
-            logger.info(f"Running semi-Markov decoding for {strand!r} strand")
-            if strand == "positive":
-                sm_labels = _decode_intervals_semi_markov(
-                    logits=logits,
-                    remove_incomplete_features=args.remove_incomplete_features,
-                )
-            else:
-                sm_labels = flip(
-                    _decode_intervals_semi_markov(
-                        logits=flip(logits).copy(),
-                        remove_incomplete_features=args.remove_incomplete_features,
-                    )
-                )
-
-            intervals = convert_entity_labels_to_intervals(
-                labels=sm_labels, class_groups=config.interval_entity_classes
-            )
-            region_intervals.append(
-                intervals.assign(strand=strand, decoding="sm-viterbi")
-            )
 
     region_intervals = pd.concat(region_intervals, ignore_index=True, axis=0)
     region_name_map = {
@@ -1104,8 +980,8 @@ def main():
     detect_parser.add_argument(
         "--decoding-methods",
         type=str,
-        default="direct,viterbi,sm-viterbi",
-        help="Comma-separated list of decoding methods to run (choices: direct, viterbi, sm-viterbi)",
+        default="direct,viterbi",
+        help="Comma-separated list of decoding methods to run (choices: direct, viterbi)",
     )
     detect_parser.add_argument(
         "--remove-incomplete-features",
@@ -1113,17 +989,6 @@ def main():
         choices=["yes", "no"],
         default="no",
         help="Whether to remove incomplete features from predictions (default: no)",
-    )
-    detect_parser.add_argument(
-        "--duration-probs-path",
-        type=str,
-        help="Path to duration probabilities parquet file for Semi-Markov (sm-viterbi) decoding",
-    )
-    detect_parser.add_argument(
-        "--num-workers",
-        type=int,
-        default=0,
-        help="Number of workers for Semi-Markov (sm-viterbi) decoding (default: 0)",
     )
 
     # Export GFF command
@@ -1143,7 +1008,7 @@ def main():
     gff_parser.add_argument(
         "--decoding-method",
         type=str,
-        choices=["direct", "viterbi", "sm-viterbi"],
+        choices=["direct", "viterbi"],
         default="direct",
         help="Decoding method to use (default: direct)",
     )
