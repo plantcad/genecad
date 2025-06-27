@@ -17,7 +17,7 @@ TRAIN_VERSION ?= $(RUN_VERSION)
 # Define all target to run the complete pipeline
 .PHONY: all clean extract-gff extract-fasta filter stack labels sequences windows splits help validate-configs summarize run-training
 
-all: $(TRANSFORM_DIR)/splits/train.zarr
+all: $(PREP_DIR)/splits/train.zarr
 
 # Help target
 help:
@@ -38,7 +38,6 @@ help:
 
 # Extract gff features
 $(EXTRACT_DIR)/raw_features.parquet:
-	@mkdir -p $(EXTRACT_DIR)
 	python scripts/extract.py extract_gff_features \
 	  --input-dir $(RAW_DIR)/gff \
 	  --species-id $(SPECIES_IDS) \
@@ -46,7 +45,6 @@ $(EXTRACT_DIR)/raw_features.parquet:
 
 # Extract fasta sequences
 $(EXTRACT_DIR)/tokens.zarr:
-	@mkdir -p $(EXTRACT_DIR)
 	python scripts/extract.py extract_fasta_sequences \
 	  --input-dir $(RAW_DIR)/fasta \
 	  --species-id $(SPECIES_IDS) \
@@ -55,7 +53,6 @@ $(EXTRACT_DIR)/tokens.zarr:
 
 # Filter gff features
 $(TRANSFORM_DIR)/features.parquet $(TRANSFORM_DIR)/filters.parquet: $(EXTRACT_DIR)/raw_features.parquet
-	@mkdir -p $(TRANSFORM_DIR)
 	python scripts/transform.py filter_features \
 	  --input $< \
 	  --output-features $(TRANSFORM_DIR)/features.parquet \
@@ -91,8 +88,7 @@ $(TRANSFORM_DIR)/windows.zarr: $(TRANSFORM_DIR)/sequences.zarr
 	  --num-workers $(TRAINING_WINDOW_NUM_WORKERS)
 
 # Generate training and validation splits
-$(TRANSFORM_DIR)/splits/train.zarr: $(TRANSFORM_DIR)/windows.zarr
-	@mkdir -p $(TRANSFORM_DIR)/splits
+$(PREP_DIR)/splits/train.zarr: $(TRANSFORM_DIR)/windows.zarr
 	python scripts/sample.py generate_training_splits \
 	  --input $< \
 	  --train-output $(PREP_DIR)/splits/train.zarr \
@@ -107,7 +103,7 @@ summarize: $(PREP_DIR)/splits/train.zarr
 	  --input $(PREP_DIR)/splits/valid.zarr
 
 # Run training
-run-training:
+run-training: $(PREP_DIR)/splits/train.zarr
 	@mkdir -p local/logs/exec
 	srun bin/tacc \
 	  python scripts/sweep.py run \
@@ -135,7 +131,7 @@ stack: $(TRANSFORM_DIR)/intervals.parquet
 labels: $(TRANSFORM_DIR)/labels.zarr
 sequences: $(TRANSFORM_DIR)/sequences.zarr
 windows: $(TRANSFORM_DIR)/windows.zarr
-splits: $(TRANSFORM_DIR)/splits/train.zarr
+splits: $(PREP_DIR)/splits/train.zarr
 validate-configs:
 	python scripts/extract.py validate_configs \
 	  --data-dir $(DATA_DIR)
