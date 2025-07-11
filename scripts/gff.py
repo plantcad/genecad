@@ -1347,6 +1347,213 @@ def clean_gff(
         )
 
 
+def filter_to_pc_quality_score_pass(
+    input_path: str | None = None,
+    output_path: str | None = None,
+    input_dir: str | None = None,
+    output_dir: str | None = None,
+    species_ids: list[str] | None = None,
+) -> None:
+    """Filter GFF file to remove genes and transcripts with passPlantCADFilter=0.
+
+    This function supports two interfaces:
+    1. Direct file paths (for evaluation scripts)
+    2. Directory + species_ids (for data preparation scripts)
+
+    Parameters
+    ----------
+    input_path : str, optional
+        Direct path to input GFF file
+    output_path : str, optional
+        Direct path to output GFF file
+    input_dir : str, optional
+        Directory containing input GFF files
+    output_dir : str, optional
+        Directory to write filtered GFF files
+    species_ids : list[str], optional
+        List of species IDs to determine filenames using species configuration
+    """
+    import os
+
+    # Determine which interface is being used
+    if input_path is not None and output_path is not None:
+        # Direct file path interface
+        logger.info("Using direct file path interface")
+        _apply_pc_quality_filter_to_file(input_path, output_path)
+
+    elif input_dir is not None and output_dir is not None and species_ids is not None:
+        # Species configuration interface
+        from src.config import get_species_config
+
+        logger.info(
+            f"Using species configuration interface for {len(species_ids)} species: {species_ids}"
+        )
+
+        # Create output directory if it doesn't exist
+        os.makedirs(output_dir, exist_ok=True)
+
+        # Process each species
+        for species_id in species_ids:
+            logger.info(f"Processing species: {species_id}")
+
+            # Get species configuration
+            config = get_species_config(species_id)
+
+            # Determine input and output paths using species configuration
+            # Input: from gff_tagged directory using species config filename
+            input_filename = config.gff.filename
+            final_input_path = os.path.join(input_dir, input_filename)
+
+            # Output: to gff_filtered directory using species config filename
+            output_filename = config.gff.filename
+            final_output_path = os.path.join(output_dir, output_filename)
+
+            logger.info(f"  Input: {final_input_path}")
+            logger.info(f"  Output: {final_output_path}")
+
+            # Apply PC quality filter to this species
+            _apply_pc_quality_filter_to_file(final_input_path, final_output_path)
+
+        logger.info(
+            f"Completed PC quality filtering for all {len(species_ids)} species"
+        )
+
+    else:
+        raise ValueError(
+            "Must provide either (input_path, output_path) for direct file interface "
+            "or (input_dir, output_dir, species_ids) for species configuration interface"
+        )
+
+
+def _apply_pc_quality_filter_to_file(input_path: str, output_path: str) -> None:
+    """Apply PC quality filter to a single GFF file.
+
+    Parameters
+    ----------
+    input_path : str
+        Path to input GFF file
+    output_path : str
+        Path to output GFF file
+    """
+    logger.info(
+        f"Filtering {input_path} to keep only features with passPlantCADFilter=1"
+    )
+    logger.info(f"Output will be saved to {output_path}")
+
+    # Read GFF file
+    features = load_gff(input_path)
+    original_count = features.shape[0]
+
+    # Check if passPlantCADFilter column exists
+    if "passplantcadfilter" not in features.columns:
+        raise ValueError(
+            "passPlantCADFilter column not found in GFF file. "
+            "Expected column name 'passplantcadfilter' (case-insensitive)."
+        )
+
+    # Log initial statistics
+    pc_filter_values = features["passplantcadfilter"].value_counts()
+    logger.info("Initial passPlantCADFilter distribution:")
+    for value, count in pc_filter_values.items():
+        percentage = (count / original_count) * 100
+        logger.info(f"  - passPlantCADFilter={value}: {count} ({percentage:.2f}%)")
+
+    # Step 1: Remove genes where passPlantCADFilter=0
+    genes = features[features["type"] == GffFeatureType.GENE.value]
+    genes_with_filter = genes[genes["passplantcadfilter"].notna()]
+
+    if genes_with_filter.empty:
+        logger.warning("No gene features found with passPlantCADFilter annotations")
+        genes_to_remove = set()
+    else:
+        bad_genes = genes_with_filter[genes_with_filter["passplantcadfilter"] == "0"]
+        genes_to_remove = set(bad_genes["id"].dropna())
+        logger.info(f"Found {len(genes_to_remove)} genes with passPlantCADFilter=0")
+
+    # Step 2: Remove transcripts where passPlantCADFilter=0
+    mrnas = features[features["type"] == GffFeatureType.MRNA.value]
+    mrnas_with_filter = mrnas[mrnas["passplantcadfilter"].notna()]
+
+    if mrnas_with_filter.empty:
+        logger.warning("No mRNA features found with passPlantCADFilter annotations")
+        transcripts_to_remove = set()
+    else:
+        bad_transcripts = mrnas_with_filter[
+            mrnas_with_filter["passplantcadfilter"] == "0"
+        ]
+        transcripts_to_remove = set(bad_transcripts["id"].dropna())
+        logger.info(
+            f"Found {len(transcripts_to_remove)} transcripts with passPlantCADFilter=0"
+        )
+
+    # Combine all features to remove initially
+    features_to_remove = genes_to_remove | transcripts_to_remove
+
+    # Step 3: Remove features and handle cascading removals
+    if features_to_remove:
+        features, removed_count, indirect_count = remove_features_by_id(
+            features, features_to_remove
+        )
+
+        logger.info(
+            f"Removed {len(genes_to_remove)} genes directly (passPlantCADFilter=0)"
+        )
+        logger.info(
+            f"Removed {len(transcripts_to_remove)} transcripts directly (passPlantCADFilter=0)"
+        )
+        logger.info(f"Removed {indirect_count} features indirectly (cascading removal)")
+        logger.info(f"Total features removed: {removed_count}")
+    else:
+        logger.info("No features to remove based on passPlantCADFilter")
+
+    # Step 4: Additional cascading cleanup for orphaned genes
+    # Check for genes that now have no mRNA children
+    remaining_genes = features[features["type"] == GffFeatureType.GENE.value]
+    remaining_mrnas = features[features["type"] == GffFeatureType.MRNA.value]
+
+    # Get gene IDs that have mRNA children
+    genes_with_mrnas = set(remaining_mrnas["parent"].dropna())
+
+    # Find genes without any mRNA children
+    all_gene_ids = set(remaining_genes["id"].dropna())
+    orphaned_genes = all_gene_ids - genes_with_mrnas
+
+    if orphaned_genes:
+        logger.info(
+            f"Found {len(orphaned_genes)} orphaned genes (no valid transcripts)"
+        )
+
+        # Remove orphaned genes
+        features, orphan_removed_count, orphan_indirect_count = remove_features_by_id(
+            features, orphaned_genes
+        )
+
+        logger.info(f"Removed {len(orphaned_genes)} orphaned genes")
+        logger.info(
+            f"Removed {orphan_indirect_count} features indirectly (orphaned gene cleanup)"
+        )
+        logger.info(f"Additional features removed: {orphan_removed_count}")
+
+    # Write filtered GFF
+    save_gff(output_path, features)
+
+    final_count = features.shape[0]
+    total_removed = original_count - final_count
+    removal_percentage = (total_removed / original_count) * 100
+
+    logger.info("PC quality filter complete:")
+    logger.info(f"  - Original features: {original_count}")
+    logger.info(f"  - Final features: {final_count}")
+    logger.info(f"  - Total removed: {total_removed} ({removal_percentage:.2f}%)")
+
+    # Log final feature type distribution
+    final_type_counts = features["type"].value_counts()
+    logger.info("Final feature type distribution:")
+    for feature_type, count in final_type_counts.items():
+        percentage = (count / final_count) * 100 if final_count > 0 else 0
+        logger.info(f"  - {feature_type}: {count} ({percentage:.2f}%)")
+
+
 def main() -> None:
     """Parse command line arguments and execute the appropriate function."""
     logging.basicConfig(
@@ -1572,6 +1779,32 @@ def main() -> None:
         help="Remove records where end < start",
     )
 
+    # PC quality filter command
+    pc_filter_parser = subparsers.add_parser(
+        "filter_to_pc_quality_score_pass",
+        help="Filter GFF file to remove genes and transcripts with passPlantCADFilter=0",
+    )
+    # Support both direct file paths and species configuration interfaces
+    pc_filter_parser.add_argument(
+        "--input", help="Input GFF file (direct file interface)"
+    )
+    pc_filter_parser.add_argument(
+        "--output", help="Output GFF file (direct file interface)"
+    )
+    pc_filter_parser.add_argument(
+        "--input-dir",
+        help="Directory containing input GFF files (species config interface)",
+    )
+    pc_filter_parser.add_argument(
+        "--output-dir",
+        help="Directory to write filtered GFF files (species config interface)",
+    )
+    pc_filter_parser.add_argument(
+        "--species-ids",
+        nargs="+",
+        help="List of species IDs to determine filenames (species config interface)",
+    )
+
     args = parser.parse_args()
 
     if args.command == "merge":
@@ -1619,6 +1852,14 @@ def main() -> None:
             args.output,
             args.sort_by_start == "yes",
             args.remove_invalid_interval == "yes",
+        )
+    elif args.command == "filter_to_pc_quality_score_pass":
+        filter_to_pc_quality_score_pass(
+            input_path=args.input,
+            output_path=args.output,
+            input_dir=args.input_dir,
+            output_dir=args.output_dir,
+            species_ids=args.species_ids,
         )
     else:
         parser.print_help()

@@ -918,7 +918,10 @@ def create_labels(
 
 
 def create_sequence_dataset(
-    input_labels_path: str, input_tokens_path: str, output_path: str
+    input_labels_path: str,
+    input_tokens_path: str,
+    output_path: str,
+    chunk_size: int = 100_000_000,
 ) -> None:
     """Merge token and label datasets into a unified dataset.
 
@@ -930,6 +933,8 @@ def create_sequence_dataset(
         Path to input zarr file containing tokenized sequences
     output_path : str
         Path to output zarr file for the merged dataset
+    chunk_size : int, optional
+        Number of sequences to process at a time for memory efficiency (default: 100M)
     """
     # Load both datasets using DataTree
     logger.info(f"Loading labels from {input_labels_path}")
@@ -981,18 +986,44 @@ def create_sequence_dataset(
                 f"Group {group}: More labels ({label_ds.sizes['sequence']}) than tokens ({token_ds.sizes['sequence']})"
             )
 
-        # Left join labels to tokens
-        merged_ds = xr.merge(
-            [label_ds, token_ds], combine_attrs="drop_conflicts", join="left"
-        )
-        assert merged_ds.sizes["sequence"] == label_ds.sizes["sequence"]
-
-        # Write the merged dataset to its group
+        # Process in chunks for memory efficiency
         output_group = f"{species_id}/{chrom_id}"
-        logger.info(f"  Saving to {output_path}/{output_group}")
-        merged_ds.to_zarr(
-            output_path, group=output_group, zarr_format=2, consolidated=True, mode="w"
-        )
+        seq_size = label_ds.sizes["sequence"]
+        logger.info(f"  Processing {seq_size:,} sequences in chunks of {chunk_size:,}")
+
+        for chunk_idx, start_idx in enumerate(range(0, seq_size, chunk_size)):
+            end_idx = min(start_idx + chunk_size, seq_size)
+            logger.info(f"    Processing chunk {start_idx:,} to {end_idx:,}")
+
+            # Extract chunk from both datasets
+            label_chunk = label_ds.isel(sequence=slice(start_idx, end_idx))
+            token_chunk = token_ds.isel(sequence=slice(start_idx, end_idx))
+
+            # Left join labels to tokens
+            merged_chunk = xr.merge(
+                [label_chunk, token_chunk], combine_attrs="drop_conflicts", join="left"
+            )
+            assert merged_chunk.sizes["sequence"] == label_chunk.sizes["sequence"]
+
+            # Write chunk to zarr
+            # Only use append_dim for chunks after the first chunk of each group
+            if chunk_idx == 0:
+                # First chunk of this group - create new group
+                merged_chunk.to_zarr(
+                    output_path, group=output_group, zarr_format=2, consolidated=True
+                )
+            else:
+                # Subsequent chunks of this group - append to existing group
+                merged_chunk.to_zarr(
+                    output_path,
+                    group=output_group,
+                    zarr_format=2,
+                    append_dim="sequence",
+                    consolidated=True,
+                )
+
+            # Clean up memory
+            del label_chunk, token_chunk, merged_chunk
 
     # Load and print the full datatree
     dt = open_datatree(output_path)
@@ -1105,6 +1136,12 @@ def main():
         required=True,
         help="Path to output zarr file for the merged dataset",
     )
+    sequence_parser.add_argument(
+        "--chunk-size",
+        type=int,
+        default=100_000_000,
+        help="Number of sequences to process at a time for memory efficiency (default: 100M)",
+    )
 
     args = parser.parse_args()
 
@@ -1125,7 +1162,9 @@ def main():
             boundary_mask_size=(args.upstream_mask_size, args.downstream_mask_size),
         )
     elif args.command == "create_sequence_dataset":
-        create_sequence_dataset(args.input_labels, args.input_tokens, args.output_path)
+        create_sequence_dataset(
+            args.input_labels, args.input_tokens, args.output_path, args.chunk_size
+        )
     else:
         parser.print_help()
 

@@ -5,7 +5,7 @@ import logging
 import os
 from argparse import Namespace as Args
 import xarray as xr
-from multiprocessing import Pool
+from concurrent.futures import ProcessPoolExecutor
 from src.dataset import open_datatree, set_dimension_chunks
 from src.sampling import (
     get_feature_class_map,
@@ -381,8 +381,8 @@ def generate_training_windows(args: Args) -> None:
         results = map(_generate_training_windows, task_args)
     else:
         # Parallel processing
-        with Pool(processes=n_processes) as pool:
-            results = pool.map(_generate_training_windows, task_args)
+        with ProcessPoolExecutor(max_workers=n_processes) as executor:
+            results = executor.map(_generate_training_windows, task_args)
 
     # Collect results
     for stats in results:

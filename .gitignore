@@ -7,3 +7,4 @@ local/
 .vscode/
 logs/train*
 .ruff_cache
+.specstory/

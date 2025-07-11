@@ -420,4 +420,7 @@ SPECIES_CONFIGS = {
     "Bplatyphylla": bplatyphylla_config,
     "Bvulgaris": bvulgaris_config,
     "Cillinoinensis": cillinoinensis_config,
+    "Gmax": gmax_config,
+    "Hvulgare": hvulgare_config,
+    "Ptrichocarpa": ptrichocarpa_config,
 }
