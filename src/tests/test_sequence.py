@@ -15,6 +15,7 @@ from src.sequence import (
     create_sequence_windows,
     viterbi_decode,
     brute_force_decode,
+    partition_sequence,
 )
 
 
@@ -835,3 +836,67 @@ def test_viterbi_decode():
     strongest_emission_path = np.argmax(observations_smoothed, axis=1)
     assert not np.array_equal(viterbi_path_smoothed, strongest_emission_path), \
         "Viterbi should not simply pick the highest emission probability at each step"
+
+
+# fmt: off
+@pytest.mark.parametrize("separators, min_partition_length, min_separator_length, expected", [
+    # Test case 1: No separators - single partition
+    (
+        np.array([0, 0, 0, 0, 0, 0]),
+        2, 1,
+        [slice(0, 6)]
+    ),
+    # Test case 2: Single valid separator region - breaks at center (index 3)
+    (
+        np.array([0, 0, 1, 1, 1, 0, 0]),
+        2, 3,
+        [slice(0, 3), slice(3, 7)]
+    ),
+    # Test case 3: Empty array - single empty slice
+    (
+        np.array([]),
+        2, 1,
+        [slice(0, 0)]
+    ),
+    # Test case 4: Separator too short - ignored
+    (
+        np.array([0, 0, 1, 1, 0, 0]),
+        2, 3,
+        [slice(0, 6)]
+    ),
+    # Test case 5: Multiple valid separators - breaks at centers
+    (
+        np.array([0, 0, 1, 1, 1, 0, 0, 1, 1, 1, 0, 0]),
+        2, 3,
+        [slice(0, 3), slice(3, 8), slice(8, 12)]
+    ),
+    # Test case 6: min_partition_length merges small partitions
+    (
+        np.array([0, 0, 1, 1, 1, 0, 1, 1, 1, 0, 0]),
+        4, 3,
+        [slice(0, 7), slice(7, 11)]
+    ),
+    # Test case 7: float inputs with 0.0 and 1.0 values
+    (
+        np.array([0.0, 0.0, 1.0, 1.0, 1.0, 0.0, 0.0]),
+        2, 3,
+        [slice(0, 3), slice(3, 7)]
+    ),
+])
+# fmt: on
+def test_partition_sequence(separators, min_partition_length, min_separator_length, expected):
+    result = partition_sequence(separators, min_partition_length, min_separator_length)
+    assert result == expected
+
+
+def test_partition_sequence_invalid_inputs():
+    # Test with non-binary values
+    with pytest.raises(ValueError, match="must contain only 0 or 1"):
+        partition_sequence(np.array([0, 1, 2]), 2, 1)
+
+    # Test with non-1D array
+    with pytest.raises(ValueError, match="must be 1D array"):
+        partition_sequence(np.array([[0, 1], [1, 0]]), 2, 1)
+
+
+# fmt: off

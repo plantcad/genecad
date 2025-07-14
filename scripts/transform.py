@@ -9,9 +9,10 @@ from src.dataset import (
     set_dimension_chunks,
     info_str,
 )
-from src.sequence import find_overlapping_intervals, convert_entity_intervals_to_labels
 import numpy as np
 from src.schema import FeatureLevel, FilterReason, RegionType, GffFeatureType
+from src.sampling import extract_label_dataset
+from src.sequence import find_overlapping_intervals, convert_entity_intervals_to_labels
 import xarray as xr
 
 logger = logging.getLogger(__name__)
@@ -996,13 +997,40 @@ def create_sequence_dataset(
             logger.info(f"    Processing chunk {start_idx:,} to {end_idx:,}")
 
             # Extract chunk from both datasets
-            label_chunk = label_ds.isel(sequence=slice(start_idx, end_idx))
+            raw_label_chunk = label_ds.isel(sequence=slice(start_idx, end_idx))
             token_chunk = token_ds.isel(sequence=slice(start_idx, end_idx))
 
-            # Left join labels to tokens
+            # Extract labels with padding for BILUO context, then trim back
+            padded_start = max(0, start_idx - 1)
+            padded_end = min(seq_size, end_idx + 1)
+            padded_labels = extract_label_dataset(label_ds.isel(sequence=slice(padded_start, padded_end)))
+
+            # Trim to original window (account for any padding we added)
+            trim_start = start_idx - padded_start
+            trim_end = trim_start + (end_idx - start_idx)
+            label_chunk = padded_labels.isel(sequence=slice(trim_start, trim_end))
+
+            # Ensure trimmed chunk has same size as original window
+            assert label_chunk.sizes["sequence"] == raw_label_chunk.sizes["sequence"], \
+                f"Label chunk size {label_chunk.sizes['sequence']} != raw chunk size {raw_label_chunk.sizes['sequence']}"
+
+            # Extract labels
+            label_chunk = xr.merge([
+                raw_label_chunk[["feature_labels", "label_masks"]].rename({
+                    "feature_labels": "feature_labels_raw",
+                    "label_masks": "label_mask_reasons",
+                }),
+                label_chunk
+            ], combine_attrs="drop_conflicts")
+
+            import ipdb; ipdb.set_trace()
+
+            # Left join labels to tokens, implicitly dropping unannotated regions
+            # of contigs past the last known annotation
             merged_chunk = xr.merge(
                 [label_chunk, token_chunk], combine_attrs="drop_conflicts", join="left"
             )
+            # Ensure that the join was complete on both sides
             assert merged_chunk.sizes["sequence"] == label_chunk.sizes["sequence"]
 
             # Write chunk to zarr
@@ -1021,9 +1049,6 @@ def create_sequence_dataset(
                     append_dim="sequence",
                     consolidated=True,
                 )
-
-            # Clean up memory
-            del label_chunk, token_chunk, merged_chunk
 
     # Load and print the full datatree
     dt = open_datatree(output_path)

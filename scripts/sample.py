@@ -14,6 +14,7 @@ from src.sampling import (
     select_windows,
     get_tag_class_map,
 )
+from src.sequence import partition_sequence
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +22,129 @@ logger = logging.getLogger(__name__)
 # -------------------------------------------------------------------------------------------------
 # Generate training windows
 # -------------------------------------------------------------------------------------------------
+
+
+def _write_training_window_batch(
+    samples: list[dict],
+    output_path: str,
+    species_id: str,
+    chrom_id: str,
+    feature_class_map: dict,
+    tag_class_map: dict,
+    chunk_size: int,
+    total_samples_written: int,
+) -> None:
+    """Write a batch of training windows to zarr format."""
+    if not samples:
+        return
+
+    # Convert to xarray Dataset
+    data_vars = {}
+    for key in samples[0].keys():
+        values_list = [sample[key] for sample in samples]
+
+        # Handle string fields with fixed dtypes
+        if key == "species":
+            values = np.array(values_list, dtype="<U64")
+        elif key == "chromosome":
+            values = np.array(values_list, dtype="<U64")
+        elif key == "strand":
+            values = np.array(values_list, dtype="<U8")
+        else:
+            values = np.stack(values_list)
+
+        if values.ndim == 1:
+            data_vars[key] = (["sample"], values)
+        elif values.ndim == 2:
+            data_vars[key] = (["sample", "sequence"], values)
+        else:
+            raise ValueError(
+                f"Unexpected number of dimensions for key '{key}': {values.ndim}. Expected 1 or 2 dimensions."
+            )
+
+    batch_ds = xr.Dataset(data_vars=data_vars)
+    batch_ds = set_dimension_chunks(batch_ds, "sample", chunk_size)
+
+    # Add attributes to every batch
+    batch_ds.attrs.update(
+        {
+            "species_id": species_id,
+            "chromosome_id": chrom_id,
+            "feature_labels_classes": feature_class_map,
+            "label_classes": tag_class_map,
+        }
+    )
+
+    # Create output directory if it doesn't exist
+    output_group = f"{species_id}/{chrom_id}"
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+
+    # Write to zarr (append if exists, create if not)
+    batch_ds.to_zarr(
+        output_path,
+        group=output_group,
+        zarr_format=2,
+        consolidated=True,
+        mode="w" if total_samples_written == 0 else "a",
+        append_dim="sample" if total_samples_written > 0 else None,
+    )
+
+
+def _create_sequence_partitions(
+    strand_data: xr.Dataset,
+    min_partition_length: int,
+    min_separator_length: int,
+) -> list[slice]:
+    """Create sequence partitions based on intergenic regions."""
+    # Create separator array: 1 where intergenic regions are present
+    # Compute and convert to int8, then immediately extract values for partition_sequence
+    separators = strand_data.feature_labels.sel(feature="intergenic").compute().astype(np.int8).values
+
+    # Partition the sequence based on long intergenic regions
+    partitions = partition_sequence(
+        separators,
+        min_partition_length=min_partition_length,
+        min_separator_length=min_separator_length
+    )
+
+    return partitions
+
+
+def _log_partition_window_stats(
+    species_id: str,
+    chrom_id: str,
+    strand_name: str,
+    partition_idx: int,
+    total_partitions: int,
+    window_stats: dict,
+) -> None:
+    """Log window selection statistics for a single partition."""
+    logger.info(
+        f"[{species_id}/{chrom_id}] {strand_name} partition {partition_idx + 1}/{total_partitions}: "
+        f"{window_stats['available_intergenic_windows']}/{window_stats['available_genic_windows']} available (intergenic/genic), "
+        f"{window_stats['selected_intergenic_windows']}/{window_stats['selected_genic_windows']} selected"
+    )
+
+
+def _log_final_processing_stats(
+    species_id: str,
+    chrom_id: str,
+    total_windows_processed: int,
+    total_windows_kept: int,
+    total_windows_skipped: int,
+    total_samples_generated: int,
+) -> None:
+    """Log final processing statistics for a dataset."""
+    if total_windows_processed > 0:
+        kept_pct = (total_windows_kept / total_windows_processed) * 100
+        skipped_pct = (total_windows_skipped / total_windows_processed) * 100
+        logger.info(f"[{species_id}/{chrom_id}] Completed:")
+        logger.info(f"[{species_id}/{chrom_id}]   Windows processed: {total_windows_processed}")
+        logger.info(f"[{species_id}/{chrom_id}]   Windows kept: {total_windows_kept} ({kept_pct:.1f}%)")
+        logger.info(f"[{species_id}/{chrom_id}]   Windows skipped: {total_windows_skipped} ({skipped_pct:.1f}%)")
+        logger.info(f"[{species_id}/{chrom_id}]   Samples generated: {total_samples_generated}")
+    else:
+        logger.info(f"[{species_id}/{chrom_id}] Completed: No windows processed")
 
 
 def _generate_training_windows(task):
@@ -54,180 +178,188 @@ def _generate_training_windows(task):
     logger.info(f"[{species_id}/{chrom_id}] Sequence length: {seq_length} bp")
 
     # Extract BILUO labels once for this dataset
-    ds_labels = extract_label_dataset(ds).compute()
-    ds_data = ds[["sequence_input_ids", "sequence_masks"]].compute()
+    ds_data = ds[[
+        "sequence_input_ids", "sequence_masks", "feature_labels",
+        "tag_labels_masked", "tag_labels", "label_masks",
+    ]]
 
     # Get tag class mapping and stats data
-    tag_class_map = get_tag_class_map(ds_labels.feature_labels)
-    feature_class_map = get_feature_class_map(ds_labels.feature_labels)
-    tag_stats = get_tag_stats(ds_labels.tag_labels_masked, tag_class_map)
+    tag_class_map = get_tag_class_map(ds.feature_labels)
+    feature_class_map = get_feature_class_map(ds.feature_labels)
+    tag_stats = get_tag_stats(ds.tag_labels_masked, tag_class_map)
 
-    # Select windows based on intergenic proportion
-    selected_windows, window_stats = select_windows(
-        ds_labels.feature_labels,
-        seq_length,
-        window_size=args.window_size,
-        intergenic_proportion=args.intergenic_proportion,
-        seed=args.seed,
-        intergenic_threshold=args.intergenic_threshold,
-    )
-
-    # Log window selection stats
-    logger.info(
-        f"[{species_id}/{chrom_id}] Windows: {window_stats['available_intergenic_windows']}/{window_stats['available_genic_windows']} available (intergenic/genic), "
-        f"{window_stats['selected_intergenic_windows']}/{window_stats['selected_genic_windows']} selected, actual intergenic prop: {window_stats['actual_intergenic_proportion']:.3f} "
-        f"(target: {window_stats['target_intergenic_proportion']:.3f})"
-    )
-
-    # Collect samples for this dataset
-    dataset_samples = []
-    local_window_counter = 0
-    local_windows_processed = 0
-    local_windows_kept = 0
-    local_windows_skipped = 0
-
-    # Process both strands
+    # Validate strands
     if (actual := set(ds.strand.values)) != (expected := {"positive", "negative"}):
         raise ValueError(f"Expected strand values {expected}, got {actual}")
 
+    # Setup batched processing
+    batch_samples = []
+    total_samples_generated = 0
+    total_windows_processed = 0
+    total_windows_kept = 0
+    total_windows_skipped = 0
+    all_window_stats = []
+
+    # Process both strands
     for strand_name in ds.strand.values:
-        # Extract strand data once and compute to load into memory
+        # Extract strand data once (keep as lazy arrays)
         strand_data = ds_data.sel(strand=strand_name)
-        strand_labels = ds_labels.sel(strand=strand_name)
 
-        for w_start, w_end in selected_windows:
-            local_window_counter += 1
-            local_windows_processed += 1
-
-            # Extract window data
-            window_data = strand_data.isel(sequence=slice(w_start, w_end))
-            window_labels = strand_labels.isel(sequence=slice(w_start, w_end))
-
-            # Reverse sequence dimension for negative strand
-            if strand_name == "negative":
-                window_data = window_data.isel(sequence=slice(None, None, -1))
-                window_labels = window_labels.isel(sequence=slice(None, None, -1))
-
-            # Check mask proportion
-            window_valid_mask = window_labels.label_masks.values
-            masked_count = (~window_valid_mask).sum()
-            if masked_count > args.window_size * args.mask_prop:
-                local_windows_skipped += 1
-                continue
-
-            local_windows_kept += 1
-
-            # Create sample
-            # Extract BILUO labels for this window
-            window_tag_labels_masked = window_labels.tag_labels_masked.values
-            window_tag_labels = window_labels.tag_labels.values
-            # Make feature_labels 2D with argmax; check that at least one
-            # feature is present at each position first to avoid ambiguity
-            # w/ argmax of 0 when all features 0 vs 0 when the first feature is present
-            assert (window_labels.feature_labels.sum(dim="feature") > 0).all().item()
-            window_feature_labels = window_labels.feature_labels.argmax(
-                dim="feature"
-            ).values
-
-            # Ensure that the mask is consistent with sentinel values in the masked labels
-            assert ((window_tag_labels_masked >= 0) == window_valid_mask).all()
-            sample = {
-                "input_ids": window_data.sequence_input_ids.values,
-                "tag_labels_masked": window_tag_labels_masked,
-                "tag_labels": window_tag_labels,
-                "feature_labels": window_feature_labels,
-                "soft_mask": window_data.sequence_masks.values,
-                "label_mask": window_valid_mask,
-                "species": species_id,
-                "chromosome": chrom_id,
-                "strand": strand_name,
-                "position": w_start,
-            }
-
-            dataset_samples.append(sample)
-
-    # Build and save dataset if we have samples
-    if dataset_samples:
-        # Convert to xarray Dataset
-        logger.info(
-            f"[{species_id}/{chrom_id}] Creating dataset with {len(dataset_samples)} samples"
-        )
-        data_vars = {}
-        for key in dataset_samples[0].keys():
-            values_list = [sample[key] for sample in dataset_samples]
-
-            # Handle string fields with fixed dtypes to ensure consistency across datasets
-            if key == "species":
-                values = np.array(values_list, dtype="<U64")
-            elif key == "chromosome":
-                values = np.array(values_list, dtype="<U64")
-            elif key == "strand":
-                values = np.array(values_list, dtype="<U8")
-            else:
-                values = np.stack(values_list)
-
-            if values.ndim == 1:
-                data_vars[key] = (["sample"], values)
-            elif values.ndim == 2:
-                data_vars[key] = (["sample", "sequence"], values)
-            else:
-                raise ValueError(
-                    f"Unexpected number of dimensions for key '{key}': {values.ndim}. Expected 1 or 2 dimensions."
-                )
-
-        ds_out = xr.Dataset(data_vars=data_vars)
-        ds_out = set_dimension_chunks(ds_out, "sample", args.chunk_size)
-
-        # Add attributes including class mappings
-        ds_out.attrs.update(
-            {
-                "species_id": species_id,
-                "chromosome_id": chrom_id,
-                "feature_labels_classes": feature_class_map,
-                "label_classes": tag_class_map,
-            }
+        # Create sequence partitions based on intergenic regions
+        partitions = _create_sequence_partitions(
+            strand_data=strand_data,
+            min_partition_length=args.min_partition_length,
+            min_separator_length=args.min_separator_length,
         )
 
-        # Create output directory if it doesn't exist
-        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+        logger.info(f"[{species_id}/{chrom_id}] {strand_name} strand: Created {len(partitions)} partitions")
 
-        # Save to zarr
-        output_group = f"{species_id}/{chrom_id}"
-        logger.info(f"[{species_id}/{chrom_id}] Saving to {output_path}/{output_group}")
-        ds_out.to_zarr(
-            output_path, group=output_group, zarr_format=2, consolidated=True, mode="w"
-        )
+        # Process each partition
+        for partition_idx, partition_slice in enumerate(partitions):
+            partition_seq_length = partition_slice.stop - partition_slice.start
+            partition_start = partition_slice.start
+
+            logger.info(f"[{species_id}/{chrom_id}] {strand_name} strand, partition {partition_idx + 1}/{len(partitions)}: "
+                       f"Processing {partition_seq_length} bp (positions {partition_start}-{partition_slice.stop})")
+
+            # Extract partition data and compute it
+            partition_data = strand_data.isel(sequence=partition_slice).compute()
+
+            # Select windows based on intergenic proportion for this partition
+            selected_windows, window_stats = select_windows(
+                partition_data.feature_labels,
+                partition_seq_length,
+                window_size=args.window_size,
+                intergenic_proportion=args.intergenic_proportion,
+                seed=args.seed + partition_idx,  # Different seed per partition
+                intergenic_threshold=args.intergenic_threshold,
+            )
+
+            all_window_stats.append(window_stats)
+
+            # Log window selection stats for this partition
+            _log_partition_window_stats(
+                species_id=species_id,
+                chrom_id=chrom_id,
+                strand_name=strand_name,
+                partition_idx=partition_idx,
+                total_partitions=len(partitions),
+                window_stats=window_stats,
+            )
+
+            # Process windows in this partition
+            for w_start, w_end in selected_windows:
+                total_windows_processed += 1
+
+                # Extract window data from the partition
+                window_data = partition_data.isel(sequence=slice(w_start, w_end))
+
+                # Reverse sequence dimension for negative strand
+                if strand_name == "negative":
+                    window_data = window_data.isel(sequence=slice(None, None, -1))
+
+                # Check mask proportion
+                window_valid_mask = window_data.label_masks.values
+                masked_count = (~window_valid_mask).sum()
+                if masked_count > args.window_size * args.mask_prop:
+                    total_windows_skipped += 1
+                    continue
+
+                total_windows_kept += 1
+
+                # Create sample
+                # Extract BILUO labels for this window
+                window_tag_labels_masked = window_data.tag_labels_masked.values
+                window_tag_labels = window_data.tag_labels.values
+                # Make feature_labels 2D with argmax; check that at least one
+                # feature is present at each position first to avoid ambiguity
+                # w/ argmax of 0 when all features 0 vs 0 when the first feature is present
+                assert (window_data.feature_labels.sum(dim="feature") > 0).all().item()
+                window_feature_labels = window_data.feature_labels.argmax(
+                    dim="feature"
+                ).values
+
+                # Ensure that the mask is consistent with sentinel values in the masked labels
+                assert ((window_tag_labels_masked >= 0) == window_valid_mask).all()
+                sample = {
+                    "input_ids": window_data.sequence_input_ids.values,
+                    "tag_labels_masked": window_tag_labels_masked,
+                    "tag_labels": window_tag_labels,
+                    "feature_labels": window_feature_labels,
+                    "soft_mask": window_data.sequence_masks.values,
+                    "label_mask": window_valid_mask,
+                    "species": species_id,
+                    "chromosome": chrom_id,
+                    "strand": strand_name,
+                    "position": partition_start + w_start,  # Adjust position to global coordinates
+                }
+
+                batch_samples.append(sample)
+
+                # Write batch when full
+                if len(batch_samples) >= args.chunk_size:
+                    _write_training_window_batch(
+                        samples=batch_samples,
+                        output_path=args.output,
+                        species_id=species_id,
+                        chrom_id=chrom_id,
+                        feature_class_map=feature_class_map,
+                        tag_class_map=tag_class_map,
+                        chunk_size=args.chunk_size,
+                        total_samples_written=total_samples_generated,
+                    )
+                    total_samples_generated += len(batch_samples)
+                    batch_samples.clear()
+
+    # Write final batch
+    _write_training_window_batch(
+        samples=batch_samples,
+        output_path=args.output,
+        species_id=species_id,
+        chrom_id=chrom_id,
+        feature_class_map=feature_class_map,
+        tag_class_map=tag_class_map,
+        chunk_size=args.chunk_size,
+        total_samples_written=total_samples_generated,
+    )
+    total_samples_generated += len(batch_samples)
+
+    if total_samples_generated > 0:
+        logger.info(f"[{species_id}/{chrom_id}] Saved {total_samples_generated} samples to {output_path}/{species_id}/{chrom_id}")
+
+    # Aggregate window stats across all partitions
+    aggregated_window_stats = {
+        "available_intergenic_windows": sum(ws["available_intergenic_windows"] for ws in all_window_stats),
+        "available_genic_windows": sum(ws["available_genic_windows"] for ws in all_window_stats),
+        "selected_intergenic_windows": sum(ws["selected_intergenic_windows"] for ws in all_window_stats),
+        "selected_genic_windows": sum(ws["selected_genic_windows"] for ws in all_window_stats),
+        "target_intergenic_proportion": args.intergenic_proportion,
+        "actual_intergenic_proportion": (
+            sum(ws["selected_intergenic_windows"] for ws in all_window_stats) /
+            max(1, sum(ws["selected_intergenic_windows"] + ws["selected_genic_windows"] for ws in all_window_stats))
+        ) if all_window_stats else 0,
+    }
 
     stats = {
-        "windows_processed": local_windows_processed,
-        "windows_kept": local_windows_kept,
-        "windows_skipped": local_windows_skipped,
+        "windows_processed": total_windows_processed,
+        "windows_kept": total_windows_kept,
+        "windows_skipped": total_windows_skipped,
         "species_id": species_id,
         "chrom_id": chrom_id,
-        "samples_generated": len(dataset_samples),
+        "samples_generated": total_samples_generated,
         "tag_stats": tag_stats,
-        "window_stats": window_stats,
+        "window_stats": aggregated_window_stats,
     }
 
     # Print readable statistics for this dataset
-    if local_windows_processed > 0:
-        kept_pct = (local_windows_kept / local_windows_processed) * 100
-        skipped_pct = (local_windows_skipped / local_windows_processed) * 100
-        logger.info(f"[{species_id}/{chrom_id}] Completed:")
-        logger.info(
-            f"[{species_id}/{chrom_id}]   Windows processed: {local_windows_processed}"
-        )
-        logger.info(
-            f"[{species_id}/{chrom_id}]   Windows kept: {local_windows_kept} ({kept_pct:.1f}%)"
-        )
-        logger.info(
-            f"[{species_id}/{chrom_id}]   Windows skipped: {local_windows_skipped} ({skipped_pct:.1f}%)"
-        )
-        logger.info(
-            f"[{species_id}/{chrom_id}]   Samples generated: {len(dataset_samples)}"
-        )
-    else:
-        logger.info(f"[{species_id}/{chrom_id}] Completed: No windows processed")
+    _log_final_processing_stats(
+        species_id=species_id,
+        chrom_id=chrom_id,
+        total_windows_processed=total_windows_processed,
+        total_windows_kept=total_windows_kept,
+        total_windows_skipped=total_windows_skipped,
+        total_samples_generated=total_samples_generated,
+    )
 
     return stats
 
@@ -544,6 +676,18 @@ def main():
         type=int,
         default=None,
         help="Number of processes to use for parallel processing (each worker uses ~5-6G RAM; default: sequential processing)",
+    )
+    windows_parser.add_argument(
+        "--min-partition-length",
+        type=int,
+        default=2**25,
+        help="Minimum length for sequence partitions in base pairs (default: 33554432 = 2^25, ~33M bp)",
+    )
+    windows_parser.add_argument(
+        "--min-separator-length",
+        type=int,
+        default=16384,
+        help="Minimum length of consecutive intergenic regions required to create a partition boundary (default: 16384 bp)",
     )
 
     # Generate training splits command

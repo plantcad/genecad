@@ -742,6 +742,119 @@ def create_prediction_windows(
 
 
 # -------------------------------------------------------------------------------------------------
+# Partitioning utilities
+# -------------------------------------------------------------------------------------------------
+
+
+def partition_sequence(
+    separators: np.ndarray,
+    min_partition_length: int,
+    min_separator_length: int,
+) -> list[slice]:
+    """Partition a sequence based on separator regions.
+
+    Parameters
+    ----------
+    separators : np.ndarray
+        1D array containing only 0 or 1 values, where 1 indicates a position
+        that can be used to break the sequence apart (e.g. intergenic regions).
+    min_partition_length : int
+        Minimum length that a resulting partition can be.
+    min_separator_length : int
+        Minimum length of consecutive separators required to create a partition boundary.
+
+    Returns
+    -------
+    list[slice]
+        List of slice objects defining the partitions of the original sequence.
+
+    Examples
+    --------
+    >>> separators = np.array([0, 0, 1, 1, 1, 0, 0, 0, 1, 1, 0, 0])
+    >>> partition_sequence(separators, min_partition_length=4, min_separator_length=2)
+    [slice(0, 4, None), slice(4, 12, None)]
+    """
+    # Validate inputs
+    if separators.ndim != 1:
+        raise ValueError(f"separators must be 1D array, got shape {separators.shape}")
+
+    if not np.isin(separators, [0, 1]).all():
+        raise ValueError("separators must contain only 0 or 1 values")
+
+    if min_partition_length <= 0:
+        raise ValueError(f"min_partition_length must be positive, got {min_partition_length}")
+
+    if min_separator_length <= 0:
+        raise ValueError(f"min_separator_length must be positive, got {min_separator_length}")
+
+    sequence_length = len(separators)
+
+    # Find separator intervals and filter by minimum length
+    intervals = find_intervals(separators)
+    if intervals.size == 0:
+        return [slice(0, sequence_length)]
+
+    starts, ends = intervals
+    valid_separators = (ends - starts + 1) >= min_separator_length
+
+    if not valid_separators.any():
+        return [slice(0, sequence_length)]
+
+    # Get center points of valid separators as break points
+    valid_starts = starts[valid_separators]
+    valid_ends = ends[valid_separators]
+    break_points = (valid_starts + valid_ends + 1) // 2
+
+    # Create boundaries and ensure minimum partition lengths
+    boundaries = np.concatenate([[0], break_points, [sequence_length]])
+    boundaries = np.sort(np.unique(boundaries))
+
+    # Generate partitions using numba-accelerated function
+    partition_bounds = _merge_small_partitions(boundaries, min_partition_length)
+
+    # Convert to slices and validate
+    partitions = [slice(start, end) for start, end in partition_bounds]
+
+    # Ensure partitions are mutually exclusive and collectively exhaustive
+    if partitions:
+        assert partitions[0].start == 0, f"First partition must start at 0, got {partitions[0].start}"
+        assert partitions[-1].stop == sequence_length, f"Last partition must end at {sequence_length}, got {partitions[-1].stop}"
+
+        for i in range(1, len(partitions)):
+            assert partitions[i-1].stop == partitions[i].start, (
+                f"Partitions must be contiguous: partition {i-1} ends at {partitions[i-1].stop}, "
+                f"partition {i} starts at {partitions[i].start}"
+            )
+
+    return partitions
+
+
+@njit
+def _merge_small_partitions(boundaries: np.ndarray, min_partition_length: int) -> np.ndarray:
+    """Merge partitions that are too small using numba acceleration."""
+    partitions = []
+    start = 0
+
+    for i in range(1, len(boundaries)):
+        end = boundaries[i]
+        # Create partition if it's the last one or meets minimum length
+        if i == len(boundaries) - 1 or end - start >= min_partition_length:
+            partitions.append((start, end))
+            start = end
+
+    # Convert to numpy array
+    if len(partitions) == 0:
+        return np.empty((0, 2), dtype=np.int64)
+
+    result = np.empty((len(partitions), 2), dtype=np.int64)
+    for i, (start, end) in enumerate(partitions):
+        result[i, 0] = start
+        result[i, 1] = end
+
+    return result
+
+
+# -------------------------------------------------------------------------------------------------
 # Decoding utilities
 # -------------------------------------------------------------------------------------------------
 

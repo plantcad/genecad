@@ -80,7 +80,7 @@ echo "$(date): Step 8 - Generating training windows"
 python scripts/sample.py generate_training_windows \
   --input "$TRANSFORM_DIR/sequences.zarr" \
   --output "$TRANSFORM_DIR/windows.zarr" \
-  --num-workers 4
+  --num-workers 0
 
 # Step 9: Generate training splits
 echo "$(date): Step 9 - Generating training splits"
