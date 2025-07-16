@@ -10,7 +10,8 @@ EXTRACT_DIR ?= $(PIPE_DIR)/extract/$(RUN_VERSION)
 TRANSFORM_DIR ?= $(PIPE_DIR)/transform/$(RUN_VERSION)
 PREP_DIR ?= $(PIPE_DIR)/prep/$(RUN_VERSION)
 VALID_PROPORTION ?= .025
-TRAINING_WINDOW_NUM_WORKERS ?= 0
+# At TOW, peak utilization per worker is ~12GB in `create_sequence_dataset`; 16 workers => 192GB peak usage
+STEP_NUM_WORKERS ?= 16
 REMOVE_INCOMPLETE_FEATURES ?= yes
 TRAIN_VERSION ?= $(RUN_VERSION)
 
@@ -78,14 +79,15 @@ $(TRANSFORM_DIR)/sequences.zarr: $(TRANSFORM_DIR)/labels.zarr $(EXTRACT_DIR)/tok
 	python scripts/transform.py create_sequence_dataset \
 	  --input-labels $(TRANSFORM_DIR)/labels.zarr \
 	  --input-tokens $(EXTRACT_DIR)/tokens.zarr \
-	  --output-path $@
+	  --output-path $@ \
+	  --num-workers $(STEP_NUM_WORKERS)
 
 # Generate training windows
 $(TRANSFORM_DIR)/windows.zarr: $(TRANSFORM_DIR)/sequences.zarr
 	python scripts/sample.py generate_training_windows \
 	  --input $< \
 	  --output $@ \
-	  --num-workers $(TRAINING_WINDOW_NUM_WORKERS)
+	  --num-workers $(STEP_NUM_WORKERS)
 
 # Generate training and validation splits
 $(PREP_DIR)/splits/train.zarr: $(TRANSFORM_DIR)/windows.zarr

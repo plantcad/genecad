@@ -50,6 +50,98 @@ def set_dimension_chunks(ds: xr.Dataset, dim: str, chunk_size: int) -> xr.Datase
     return ds
 
 
+def list_species_contig_datatree(zarr_path: str) -> list[dict[str, str]]:
+    """
+    Convenience function to list all species/chromosome groups in a 2-level Zarr store.
+
+    Parameters
+    ----------
+    zarr_path : str
+        Path to the zarr store
+
+    Returns
+    -------
+    list[dict[str, str]]
+        List of dictionaries containing:
+        - species_id: parsed species identifier
+        - chrom_id: parsed chromosome identifier
+        - group_path: zarr group path
+        - dataset_path: full filesystem path to the dataset
+    """
+    # Get the raw group mappings at depth 2
+    group_mappings = list_datatree(zarr_path, depth=2)
+
+    # Parse each group path and create structured results
+    results = []
+    for group_path, dataset_path in group_mappings.items():
+        # Parse species_id and chrom_id from group path
+        parts = group_path.strip("/").split("/")
+        if len(parts) != 2:
+            # Skip invalid group paths (shouldn't happen at depth 2, but be defensive)
+            continue
+        species_id, chrom_id = parts
+
+        results.append(
+            {
+                "species_id": species_id,
+                "chrom_id": chrom_id,
+                "group_path": group_path,
+                "dataset_path": dataset_path,
+            }
+        )
+
+    return results
+
+
+def list_datatree(zarr_path: str, depth: int | None = None) -> dict[str, str]:
+    """
+    List all groups in a zarr store without loading the datasets.
+
+    Parameters
+    ----------
+    zarr_path : str
+        Path to the zarr store
+    depth : int | None, optional
+        Only include groups at this depth level (root=0, first level=1, etc.).
+        If None, include all groups.
+
+    Returns
+    -------
+    dict[str, str]
+        Dictionary mapping group paths to filesystem paths
+    """
+    # Get all groups recursively using zarr API
+    store = zarr.open(zarr_path, mode="r")
+
+    # Build nested dictionary of dataset paths
+    datasets_dict = {}
+
+    def _get_dataset_paths(group, current_path="", current_depth=0):
+        # Check if this group has array keys (making it a dataset)
+        if len(list(group.array_keys())) > 0:
+            # Only add to results if depth filter matches
+            if depth is None or current_depth == depth:
+                # This is a dataset, store the full path to this group
+                if current_path == "":
+                    # Root group
+                    datasets_dict["/"] = zarr_path
+                else:
+                    datasets_dict[current_path] = f"{zarr_path}/{current_path}"
+
+        # Process subgroups recursively
+        for subgroup_name in group.group_keys():
+            subgroup = group[subgroup_name]
+            new_path = (
+                f"{current_path}/{subgroup_name}" if current_path else subgroup_name
+            )
+            _get_dataset_paths(subgroup, new_path, current_depth + 1)
+
+    # Start recursive discovery from the root
+    _get_dataset_paths(store)
+
+    return datasets_dict
+
+
 def open_datatree(zarr_path: str, **kwargs: Any) -> xr.DataTree:
     """
     Open a zarr store as an xarray DataTree by recursively finding and loading all groups.
@@ -69,36 +161,21 @@ def open_datatree(zarr_path: str, **kwargs: Any) -> xr.DataTree:
     xr.DataTree
         DataTree containing all datasets in the zarr store with matching hierarchy
     """
-    # Get all groups recursively using zarr API
-    store = zarr.open(zarr_path, mode="r")
+    # Get the structure without loading datasets
+    dataset_paths = list_datatree(zarr_path)
 
-    # Build nested dictionary of datasets
+    # Build nested dictionary of datasets by loading each one
     datasets_dict = {}
-
-    def _get_datasets(group, current_path=""):
-        # Check if this group has array keys (making it a dataset)
-        if len(list(group.array_keys())) > 0:
-            # This is a dataset, open it with xarray
-            if current_path == "":
-                # Root group
-                datasets_dict["/"] = xr.open_zarr(zarr_path, **kwargs)
-            else:
-                datasets_dict[current_path] = xr.open_zarr(
-                    zarr_path, group=current_path, **kwargs
-                )
-
-        # Process subgroups recursively
-        for subgroup_name in group.group_keys():
-            subgroup = group[subgroup_name]
-            new_path = (
-                f"{current_path}/{subgroup_name}" if current_path else subgroup_name
+    for group_path, full_path in dataset_paths.items():
+        if group_path == "/":
+            # Root group - use the zarr path directly
+            datasets_dict[group_path] = xr.open_zarr(full_path, **kwargs)
+        else:
+            # Sub-group - extract base path and group
+            datasets_dict[group_path] = xr.open_zarr(
+                zarr_path, group=group_path, **kwargs
             )
-            _get_datasets(subgroup, new_path)
 
-    # Start recursive discovery from the root
-    _get_datasets(store)
-
-    # Convert dictionary to DataTree
     return xr.DataTree.from_dict(datasets_dict)
 
 

@@ -2,7 +2,6 @@ import pandas as pd
 import numpy as np
 import tqdm
 import matplotlib.pyplot as plt
-from src.analysis import get_sequence_modeling_labels
 from src.schema import SEQUENCE_MODELING_FEATURES, FilterReason
 import xarray as xr
 from numba import njit
@@ -99,7 +98,7 @@ def compute_transition_stats(datasets: list[xr.Dataset], classes: list[str], lim
             sequence_length = strand_dataset.sizes["sequence"]
 
             # Extract labels
-            labels = get_sequence_modeling_labels(strand_dataset)
+            labels = strand_dataset.feature_labels
             assert labels.feature.values.tolist() == classes, f"{labels.feature.values.tolist()} != {classes}"
             assert labels.dims == ("sequence", "feature")
 

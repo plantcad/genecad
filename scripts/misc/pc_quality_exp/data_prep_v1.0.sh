@@ -73,7 +73,8 @@ echo "$(date): Step 7 - Creating sequence dataset"
 python scripts/transform.py create_sequence_dataset \
   --input-labels "$TRANSFORM_DIR/labels.zarr" \
   --input-tokens "$EXTRACT_DIR/tokens.zarr" \
-  --output-path "$TRANSFORM_DIR/sequences.zarr"
+  --output-path "$TRANSFORM_DIR/sequences.zarr" \
+  --num-workers 16
 
 # Step 8: Generate training windows
 echo "$(date): Step 8 - Generating training windows"

@@ -24,7 +24,10 @@ echo "Validation data: $PIPE_DIR/prep/v1.0/splits/valid.zarr"
 echo "Output directory: $PIPE_DIR/sweep"
 
 # Run training with proper resource allocation and run-id
-srun -p gh -N 16 -n 16 --tasks-per-node 1 -t 2:00:00 bin/tacc \
+srun -p gh -N 16 -n 16 --tasks-per-node 1 -t 2:00:00 \
+  --output local/logs/exec/training_v1.0.log \
+  --error local/logs/exec/training_v1.0.log \
+  bin/tacc \
   python scripts/sweep.py run \
   --train-dataset "$PIPE_DIR/prep/v1.0/splits/train.zarr" \
   --val-dataset "$PIPE_DIR/prep/v1.0/splits/valid.zarr" \
@@ -38,8 +41,7 @@ srun -p gh -N 16 -n 16 --tasks-per-node 1 -t 2:00:00 bin/tacc \
   --num-nodes \$SLURM_NNODES --strategy ddp \
   --base-encoder-path "$MODEL_PATH" --torch-compile no \
   --project-name pc-genome-annot --run-name sweep-v1.0 \
-  --run-id v1.0 \
-  2>&1 | tee local/logs/exec/training_v1.0.log
+  --run-id v1.0
 
 echo "$(date): Training v1.0 completed!"
 echo "Checkpoint should be available at: $PIPE_DIR/sweep/sweep-v1.0__cfg_013__arch_all__frzn_yes__lr_1e-04/pc-genome-annot/v1.0/checkpoints/last.ckpt" 

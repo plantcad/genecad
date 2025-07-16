@@ -36,7 +36,10 @@ fi
 echo "$(date): Checkpoint verified, starting training"
 
 # Run training with proper resource allocation, run-id, and checkpoint loading
-srun -p gh -N 16 -n 16 --tasks-per-node 1 -t 2:00:00 bin/tacc \
+srun -p gh -N 16 -n 16 --tasks-per-node 1 -t 2:00:00 \
+  --output local/logs/exec/training_v1.2.log \
+  --error local/logs/exec/training_v1.2.log \
+  bin/tacc \
   python scripts/sweep.py run \
   --train-dataset "$PIPE_DIR/prep/v1.2/splits/train.zarr" \
   --val-dataset "$PIPE_DIR/prep/v1.2/splits/valid.zarr" \
@@ -52,8 +55,7 @@ srun -p gh -N 16 -n 16 --tasks-per-node 1 -t 2:00:00 bin/tacc \
   --project-name pc-genome-annot --run-name sweep-v1.2 \
   --run-id v1.2 \
   --checkpoint "$V1_1_CHECKPOINT" \
-  --checkpoint-type trainer \
-  2>&1 | tee local/logs/exec/training_v1.2.log
+  --checkpoint-type trainer
 
 echo "$(date): Training v1.2 completed!"
 echo "Checkpoint should be available at: $PIPE_DIR/sweep/sweep-v1.2__cfg_013__arch_all__frzn_yes__lr_1e-04/pc-genome-annot/v1.2/checkpoints/last.ckpt" 

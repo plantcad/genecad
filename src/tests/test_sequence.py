@@ -11,11 +11,12 @@ from src.sequence import (
     find_overlapping_intervals,
     convert_entity_intervals_to_labels,
     convert_biluo_entity_names,
-    create_prediction_windows,
+    create_index_windows,
     create_sequence_windows,
     viterbi_decode,
     brute_force_decode,
     partition_sequence,
+    expand_sequence_slice,
 )
 
 
@@ -599,11 +600,11 @@ def test_convert_entity_intervals_to_labels_overlap_errors(intervals, domain, nu
         )
 
 # -------------------------------------------------------------------------------------------------
-# Tests for create_prediction_windows
+# Tests for create_index_windows
 # -------------------------------------------------------------------------------------------------
 
-def test_create_prediction_windows():
-    """Test that create_prediction_windows generates correct windows."""
+def test_create_index_windows():
+    """Test that create_index_windows generates correct windows."""
     # Basic test case with stride == window_size (no overlap)
     sequence_length = 16
     window_size = 8
@@ -624,7 +625,7 @@ def test_create_prediction_windows():
         [8, 16, 8, 16]
     ])
 
-    result = create_prediction_windows(sequence_length, window_size, stride)
+    result = create_index_windows(sequence_length, window_size, stride)
     np.testing.assert_array_equal(result, expected)
 
     # Test with stride = window_size / 2 (50% overlap)
@@ -650,7 +651,7 @@ def test_create_prediction_windows():
         [8, 16, 10, 16]
     ])
 
-    result = create_prediction_windows(sequence_length, window_size, stride)
+    result = create_index_windows(sequence_length, window_size, stride)
     np.testing.assert_array_equal(result, expected_half_overlap)
 
     # Test with stride = window_size / 4 (75% overlap)
@@ -670,28 +671,28 @@ def test_create_prediction_windows():
         [8, 16, 11, 16]
     ])
 
-    result = create_prediction_windows(sequence_length, window_size, stride)
+    result = create_index_windows(sequence_length, window_size, stride)
     np.testing.assert_array_equal(result, expected_quarter_stride)
 
     # Test with invalid stride (too small)
     with pytest.raises(ValueError, match="stride must be in range"):
-        create_prediction_windows(16, 8, 0)
+        create_index_windows(16, 8, 0)
 
     # Test with invalid stride (too large)
     with pytest.raises(ValueError, match="stride must be in range"):
-        create_prediction_windows(16, 8, 9)
+        create_index_windows(16, 8, 9)
 
     # Test with odd sequence_length
     with pytest.raises(ValueError, match="sequence_length must be even"):
-        create_prediction_windows(15, 8, 4)
+        create_index_windows(15, 8, 4)
 
     # Test with odd window_size
     with pytest.raises(ValueError, match="window_size must be even"):
-        create_prediction_windows(16, 7, 4)
+        create_index_windows(16, 7, 4)
 
     # Test with sequence_length not divisible by stride
     with pytest.raises(ValueError, match="sequence_length must be divisible by stride"):
-        create_prediction_windows(16, 8, 3)
+        create_index_windows(16, 8, 3)
 
 
 def test_create_representative_prediction_windows():
@@ -705,7 +706,7 @@ def test_create_representative_prediction_windows():
         [12288, 20480, 14336, 18432],
         [16384, 24576, 18432, 24576]
     ])
-    result = create_prediction_windows(sequence_length, window_size, stride)
+    result = create_index_windows(sequence_length, window_size, stride)
     np.testing.assert_array_equal(result, expected)
 
 def test_create_sequence_windows():
@@ -897,6 +898,45 @@ def test_partition_sequence_invalid_inputs():
     # Test with non-1D array
     with pytest.raises(ValueError, match="must be 1D array"):
         partition_sequence(np.array([[0, 1], [1, 0]]), 2, 1)
+
+
+def test_expand_sequence_slice():
+    """Test expand_sequence_slice with various scenarios."""
+
+    # Test case 1: Normal case - margin doesn't hit boundaries
+    padded_bounds, trim_bounds = expand_sequence_slice(start=10, stop=20, margin=5, sequence_length=100)
+    assert padded_bounds == (5, 25)
+    assert trim_bounds == (5, 15)
+
+    # Test case 2: Left boundary hit
+    padded_bounds, trim_bounds = expand_sequence_slice(start=2, stop=8, margin=5, sequence_length=100)
+    assert padded_bounds == (0, 13)
+    assert trim_bounds == (2, 8)
+
+    # Test case 3: Right boundary hit
+    padded_bounds, trim_bounds = expand_sequence_slice(start=90, stop=95, margin=10, sequence_length=100)
+    assert padded_bounds == (80, 100)
+    assert trim_bounds == (10, 15)
+
+    # Test case 4: Both boundaries hit
+    padded_bounds, trim_bounds = expand_sequence_slice(start=2, stop=8, margin=10, sequence_length=10)
+    assert padded_bounds == (0, 10)
+    assert trim_bounds == (2, 8)
+
+    # Test case 5: Zero margin
+    padded_bounds, trim_bounds = expand_sequence_slice(start=10, stop=20, margin=0, sequence_length=100)
+    assert padded_bounds == (10, 20)
+    assert trim_bounds == (0, 10)
+
+    # Test case 6: Start at beginning
+    padded_bounds, trim_bounds = expand_sequence_slice(start=0, stop=10, margin=3, sequence_length=50)
+    assert padded_bounds == (0, 13)
+    assert trim_bounds == (0, 10)
+
+    # Test case 7: Stop at end
+    padded_bounds, trim_bounds = expand_sequence_slice(start=40, stop=50, margin=3, sequence_length=50)
+    assert padded_bounds == (37, 50)
+    assert trim_bounds == (3, 13)
 
 
 # fmt: off

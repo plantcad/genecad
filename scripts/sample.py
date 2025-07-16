@@ -6,15 +6,19 @@ import os
 from argparse import Namespace as Args
 import xarray as xr
 from concurrent.futures import ProcessPoolExecutor
-from src.dataset import open_datatree, set_dimension_chunks
+from src.dataset import (
+    open_datatree,
+    set_dimension_chunks,
+    list_species_contig_datatree,
+)
 from src.sampling import (
     get_feature_class_map,
     get_tag_stats,
-    extract_label_dataset,
     select_windows,
     get_tag_class_map,
 )
 from src.sequence import partition_sequence
+from src.config import get_species_config
 
 logger = logging.getLogger(__name__)
 
@@ -98,21 +102,25 @@ def _create_sequence_partitions(
     """Create sequence partitions based on intergenic regions."""
     # Create separator array: 1 where intergenic regions are present
     # Compute and convert to int8, then immediately extract values for partition_sequence
-    separators = strand_data.feature_labels.sel(feature="intergenic").compute().astype(np.int8).values
+    separators = (
+        strand_data.feature_labels.sel(feature="intergenic")
+        .compute()
+        .astype(np.int8)
+        .values
+    )
 
     # Partition the sequence based on long intergenic regions
     partitions = partition_sequence(
         separators,
         min_partition_length=min_partition_length,
-        min_separator_length=min_separator_length
+        min_separator_length=min_separator_length,
     )
 
     return partitions
 
 
 def _log_partition_window_stats(
-    species_id: str,
-    chrom_id: str,
+    prefix: str,
     strand_name: str,
     partition_idx: int,
     total_partitions: int,
@@ -120,15 +128,14 @@ def _log_partition_window_stats(
 ) -> None:
     """Log window selection statistics for a single partition."""
     logger.info(
-        f"[{species_id}/{chrom_id}] {strand_name} partition {partition_idx + 1}/{total_partitions}: "
+        f"{prefix} {strand_name} partition {partition_idx + 1}/{total_partitions}: "
         f"{window_stats['available_intergenic_windows']}/{window_stats['available_genic_windows']} available (intergenic/genic), "
         f"{window_stats['selected_intergenic_windows']}/{window_stats['selected_genic_windows']} selected"
     )
 
 
 def _log_final_processing_stats(
-    species_id: str,
-    chrom_id: str,
+    prefix: str,
     total_windows_processed: int,
     total_windows_kept: int,
     total_windows_skipped: int,
@@ -138,13 +145,15 @@ def _log_final_processing_stats(
     if total_windows_processed > 0:
         kept_pct = (total_windows_kept / total_windows_processed) * 100
         skipped_pct = (total_windows_skipped / total_windows_processed) * 100
-        logger.info(f"[{species_id}/{chrom_id}] Completed:")
-        logger.info(f"[{species_id}/{chrom_id}]   Windows processed: {total_windows_processed}")
-        logger.info(f"[{species_id}/{chrom_id}]   Windows kept: {total_windows_kept} ({kept_pct:.1f}%)")
-        logger.info(f"[{species_id}/{chrom_id}]   Windows skipped: {total_windows_skipped} ({skipped_pct:.1f}%)")
-        logger.info(f"[{species_id}/{chrom_id}]   Samples generated: {total_samples_generated}")
+        logger.info(f"{prefix} Completed:")
+        logger.info(f"{prefix}   Windows processed: {total_windows_processed}")
+        logger.info(f"{prefix}   Windows kept: {total_windows_kept} ({kept_pct:.1f}%)")
+        logger.info(
+            f"{prefix}   Windows skipped: {total_windows_skipped} ({skipped_pct:.1f}%)"
+        )
+        logger.info(f"{prefix}   Samples generated: {total_samples_generated}")
     else:
-        logger.info(f"[{species_id}/{chrom_id}] Completed: No windows processed")
+        logger.info(f"{prefix} Completed: No windows processed")
 
 
 def _generate_training_windows(task):
@@ -153,9 +162,10 @@ def _generate_training_windows(task):
     Parameters
     ----------
     task : tuple
-        Tuple containing (args, output_path, species_id, chrom_id, task_id, total_tasks) where:
+        Tuple containing (args, output_path, group_path, species_id, chrom_id, task_id, total_tasks) where:
         - args: command line arguments
         - output_path: path to output zarr dataset
+        - group_path: zarr group path for this dataset
         - species_id: species identifier
         - chrom_id: chromosome identifier
         - task_id: 1-based task identifier
@@ -166,22 +176,27 @@ def _generate_training_windows(task):
     dict
         stats_dict containing processing statistics
     """
-    args, output_path, species_id, chrom_id, task_id, total_tasks = task
+    args, output_path, group_path, species_id, chrom_id, task_id, total_tasks = task
+    prefix = f"[{species_id}/{chrom_id}]"
 
     # Load the dataset for this specific group
-    logger.info(
-        f"[{species_id}/{chrom_id}] Processing {task_id}/{total_tasks}: Loading dataset"
-    )
-    ds = xr.open_zarr(args.input, group=f"/{species_id}/{chrom_id}")
+    logger.info(f"{prefix} Processing {task_id}/{total_tasks}: Loading dataset")
+    ds = xr.open_zarr(args.input, group=group_path)
 
     seq_length = ds.sizes["sequence"]
-    logger.info(f"[{species_id}/{chrom_id}] Sequence length: {seq_length} bp")
+    logger.info(f"{prefix} Sequence length: {seq_length} bp")
 
     # Extract BILUO labels once for this dataset
-    ds_data = ds[[
-        "sequence_input_ids", "sequence_masks", "feature_labels",
-        "tag_labels_masked", "tag_labels", "label_masks",
-    ]]
+    ds_data = ds[
+        [
+            "sequence_input_ids",
+            "sequence_masks",
+            "feature_labels",
+            "tag_labels_masked",
+            "tag_labels",
+            "label_masks",
+        ]
+    ]
 
     # Get tag class mapping and stats data
     tag_class_map = get_tag_class_map(ds.feature_labels)
@@ -212,15 +227,19 @@ def _generate_training_windows(task):
             min_separator_length=args.min_separator_length,
         )
 
-        logger.info(f"[{species_id}/{chrom_id}] {strand_name} strand: Created {len(partitions)} partitions")
+        logger.info(
+            f"{prefix} {strand_name} strand: Created {len(partitions)} partitions"
+        )
 
         # Process each partition
         for partition_idx, partition_slice in enumerate(partitions):
             partition_seq_length = partition_slice.stop - partition_slice.start
             partition_start = partition_slice.start
 
-            logger.info(f"[{species_id}/{chrom_id}] {strand_name} strand, partition {partition_idx + 1}/{len(partitions)}: "
-                       f"Processing {partition_seq_length} bp (positions {partition_start}-{partition_slice.stop})")
+            logger.info(
+                f"{prefix} {strand_name} strand, partition {partition_idx + 1}/{len(partitions)}: "
+                f"Processing {partition_seq_length} bp (positions {partition_start}-{partition_slice.stop})"
+            )
 
             # Extract partition data and compute it
             partition_data = strand_data.isel(sequence=partition_slice).compute()
@@ -239,8 +258,7 @@ def _generate_training_windows(task):
 
             # Log window selection stats for this partition
             _log_partition_window_stats(
-                species_id=species_id,
-                chrom_id=chrom_id,
+                prefix=prefix,
                 strand_name=strand_name,
                 partition_idx=partition_idx,
                 total_partitions=len(partitions),
@@ -291,13 +309,17 @@ def _generate_training_windows(task):
                     "species": species_id,
                     "chromosome": chrom_id,
                     "strand": strand_name,
-                    "position": partition_start + w_start,  # Adjust position to global coordinates
+                    "position": partition_start
+                    + w_start,  # Adjust position to global coordinates
                 }
 
                 batch_samples.append(sample)
 
                 # Write batch when full
                 if len(batch_samples) >= args.chunk_size:
+                    logger.info(
+                        f"{prefix} Writing batch of {len(batch_samples)} samples to {args.output}/{species_id}/{chrom_id}"
+                    )
                     _write_training_window_batch(
                         samples=batch_samples,
                         output_path=args.output,
@@ -309,35 +331,65 @@ def _generate_training_windows(task):
                         total_samples_written=total_samples_generated,
                     )
                     total_samples_generated += len(batch_samples)
+                    logger.info(
+                        f"{prefix} Successfully wrote batch, {total_samples_generated} total samples written so far"
+                    )
                     batch_samples.clear()
 
     # Write final batch
-    _write_training_window_batch(
-        samples=batch_samples,
-        output_path=args.output,
-        species_id=species_id,
-        chrom_id=chrom_id,
-        feature_class_map=feature_class_map,
-        tag_class_map=tag_class_map,
-        chunk_size=args.chunk_size,
-        total_samples_written=total_samples_generated,
-    )
-    total_samples_generated += len(batch_samples)
+    if len(batch_samples) > 0:
+        logger.info(
+            f"{prefix} Writing final batch of {len(batch_samples)} samples to {args.output}/{species_id}/{chrom_id}"
+        )
+        _write_training_window_batch(
+            samples=batch_samples,
+            output_path=args.output,
+            species_id=species_id,
+            chrom_id=chrom_id,
+            feature_class_map=feature_class_map,
+            tag_class_map=tag_class_map,
+            chunk_size=args.chunk_size,
+            total_samples_written=total_samples_generated,
+        )
+        total_samples_generated += len(batch_samples)
+        logger.info(f"{prefix} Successfully wrote final batch")
+    else:
+        logger.info(
+            f"{prefix} No final batch to write (all samples already written in previous batches)"
+        )
 
     if total_samples_generated > 0:
-        logger.info(f"[{species_id}/{chrom_id}] Saved {total_samples_generated} samples to {output_path}/{species_id}/{chrom_id}")
+        logger.info(
+            f"{prefix} Saved {total_samples_generated} samples to {output_path}/{species_id}/{chrom_id}"
+        )
 
     # Aggregate window stats across all partitions
     aggregated_window_stats = {
-        "available_intergenic_windows": sum(ws["available_intergenic_windows"] for ws in all_window_stats),
-        "available_genic_windows": sum(ws["available_genic_windows"] for ws in all_window_stats),
-        "selected_intergenic_windows": sum(ws["selected_intergenic_windows"] for ws in all_window_stats),
-        "selected_genic_windows": sum(ws["selected_genic_windows"] for ws in all_window_stats),
+        "available_intergenic_windows": sum(
+            ws["available_intergenic_windows"] for ws in all_window_stats
+        ),
+        "available_genic_windows": sum(
+            ws["available_genic_windows"] for ws in all_window_stats
+        ),
+        "selected_intergenic_windows": sum(
+            ws["selected_intergenic_windows"] for ws in all_window_stats
+        ),
+        "selected_genic_windows": sum(
+            ws["selected_genic_windows"] for ws in all_window_stats
+        ),
         "target_intergenic_proportion": args.intergenic_proportion,
         "actual_intergenic_proportion": (
-            sum(ws["selected_intergenic_windows"] for ws in all_window_stats) /
-            max(1, sum(ws["selected_intergenic_windows"] + ws["selected_genic_windows"] for ws in all_window_stats))
-        ) if all_window_stats else 0,
+            sum(ws["selected_intergenic_windows"] for ws in all_window_stats)
+            / max(
+                1,
+                sum(
+                    ws["selected_intergenic_windows"] + ws["selected_genic_windows"]
+                    for ws in all_window_stats
+                ),
+            )
+        )
+        if all_window_stats
+        else 0,
     }
 
     stats = {
@@ -353,8 +405,7 @@ def _generate_training_windows(task):
 
     # Print readable statistics for this dataset
     _log_final_processing_stats(
-        species_id=species_id,
-        chrom_id=chrom_id,
+        prefix=prefix,
         total_windows_processed=total_windows_processed,
         total_windows_kept=total_windows_kept,
         total_windows_skipped=total_windows_skipped,
@@ -467,28 +518,13 @@ def generate_training_windows(args: Args) -> None:
         - intergenic_proportion: Target proportion of intergenic windows
     """
 
-    logger.info(f"Loading sequence datasets from {args.input}")
-    dt = open_datatree(args.input)
+    logger.info(f"Finding species/contig combinations from {args.input}")
+    group_info = list_species_contig_datatree(args.input)
 
-    # Get all groups (species/chromosome combinations)
-    groups = list(dt.groups)
-    logger.info(f"Found {len(groups)} sequence datasets")
-
-    # Extract species_id and chrom_id from each group
-    group_info = []
-    for group in groups:
-        # Extract species_id and chrom_id from group path (handle leading /)
-        parts = group.strip("/").split("/")
-        if len(parts) > 2:
-            raise ValueError(f"Found invalid group: {group}")
-        if len(parts) < 2:
-            continue
-        species_id, chrom_id = parts
-        group_info.append((species_id, chrom_id))
-
+    logger.info(f"Found {len(group_info)} sequence datasets")
     logger.info(f"Processing {len(group_info)} datasets:")
-    for species_id, chrom_id in group_info:
-        logger.info(f"  {species_id}/{chrom_id}")
+    for group in group_info:
+        logger.info(f"  {group['species_id']}/{group['chrom_id']}")
 
     # Determine number of processes to use
     if args.num_workers is None or args.num_workers == 0:
@@ -500,8 +536,16 @@ def generate_training_windows(args: Args) -> None:
 
     # Prepare arguments for worker processes
     task_args = [
-        (args, args.output, species_id, chrom_id, i + 1, len(group_info))
-        for i, (species_id, chrom_id) in enumerate(group_info)
+        (
+            args,
+            args.output,
+            group["group_path"],
+            group["species_id"],
+            group["chrom_id"],
+            i + 1,
+            len(group_info),
+        )
+        for i, group in enumerate(group_info)
     ]
 
     # Process datasets in parallel or sequentially
@@ -541,36 +585,65 @@ def generate_training_windows(args: Args) -> None:
 def generate_training_splits(args: Args) -> None:
     """Generate training splits from windowed datasets."""
     logger.info(f"Loading windowed datasets from {args.input}")
-    dt = open_datatree(args.input)
+    groups = list_species_contig_datatree(args.input)
 
-    datasets = [dt.ds for dt in dt.subtree if dt.is_leaf]
-    logger.info(f"Found {len(datasets)} datasets to split")
+    # Filter groups based on species configuration
+    filtered_groups = []
+    for group in groups:
+        species_id = group["species_id"]
+        try:
+            config = get_species_config(species_id)
+            # Skip species that are not used in training or validation
+            if not config.split.use_in_training and not config.split.use_in_validation:
+                logger.info(
+                    f"Skipping {species_id}: not configured for training or validation"
+                )
+                continue
+            filtered_groups.append((group, config))
+        except KeyError:
+            logger.warning(f"No config found for species {species_id}, skipping")
+            continue
+
+    logger.info(f"Found {len(filtered_groups)} datasets to split")
 
     rng = np.random.RandomState(args.seed)
 
     # Track global sample indices for each split
     sample_counters = {args.train_output: 0, args.valid_output: 0}
 
-    for i, ds in enumerate(datasets):
-        species_id = ds.attrs["species_id"]
-        chrom_id = ds.attrs["chromosome_id"]
+    for i, (group, config) in enumerate(filtered_groups):
+        species_id = group["species_id"]
+        chrom_id = group["chrom_id"]
+        dataset_path = group["dataset_path"]
+
         logger.info(
-            f"[{species_id}/{chrom_id}] Processing dataset {i + 1}/{len(datasets)}"
+            f"[{species_id}/{chrom_id}] Processing dataset {i + 1}/{len(filtered_groups)}"
         )
+
+        # Load the dataset
+        ds = xr.open_zarr(dataset_path)
 
         # Random split
         n_samples = ds.sizes["sample"]
-        n_valid = int(n_samples * args.valid_proportion)
+        n_valid = (
+            int(n_samples * args.valid_proportion)
+            if config.split.use_in_validation
+            else 0
+        )
         indices = rng.permutation(n_samples)
 
-        splits = [
-            (indices[n_valid:], args.train_output, "train"),
-            (indices[:n_valid], args.valid_output, "valid"),
-        ]
+        # Build splits based on configuration
+        splits = []
+        if config.split.use_in_training:
+            splits.append((indices[n_valid:], args.train_output, "train"))
+        if config.split.use_in_validation and n_valid > 0:
+            splits.append((indices[:n_valid], args.valid_output, "valid"))
 
         # Log split sizes for this dataset
+        train_size = len(indices[n_valid:]) if config.split.use_in_training else 0
+        valid_size = n_valid if config.split.use_in_validation else 0
         logger.info(
-            f"  [{species_id}/{chrom_id}] Total samples: {n_samples}, Train: {len(splits[0][0])}, Valid: {len(splits[1][0])}"
+            f"[{species_id}/{chrom_id}] Total samples: {n_samples}, Train: {train_size}, Valid: {valid_size}"
         )
 
         for split_indices, output_path, split_name in splits:
