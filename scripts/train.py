@@ -16,6 +16,7 @@ from src.dataset import XarrayDataset
 from src.config import WINDOW_SIZE
 from src.modeling import GeneClassifier, GeneClassifierConfig, ThroughputMonitor
 from src.logging import rank_zero_logger
+from src.visualization import set_visualization_save_dir
 
 logger = rank_zero_logger(logging.getLogger(__name__))
 
@@ -217,6 +218,11 @@ def train(args: Args) -> None:
     L.seed_everything(args.seed)
     logger.info(f"Set random seed to {args.seed}")
 
+    # Set visualization save directory with run name
+    viz_save_dir = f"local/logs/train_{args.run_name}"
+    logger.info(f"Setting visualization save directory to {viz_save_dir}")
+    set_visualization_save_dir(viz_save_dir)
+
     # Load preprocessed datasets
     logger.info("Loading preprocessed datasets...")
     logger.info(f"Loading training dataset from {args.train_dataset}")
@@ -279,6 +285,7 @@ def train(args: Args) -> None:
         save_dir=args.output_dir,
         **(dict(id=args.run_id, resume="must") if args.run_id else dict()),
     )
+
     csv_dir = os.path.join(args.output_dir, "logs/csv")
     logger.info(f"Setting up CSV logger with save_dir={csv_dir}")
     csv_logger = CSVLogger(save_dir=csv_dir)
@@ -323,12 +330,12 @@ def train(args: Args) -> None:
     # Setup callbacks
     logger.info("Setting up callbacks")
     checkpoint_callback = ModelCheckpoint(
+        dirpath=os.path.join(args.output_dir, "checkpoints"),
+        filename="epoch_{epoch:02d}-step_{step:06d}",
         every_n_train_steps=args.checkpoint_frequency,
         save_on_train_epoch_end=True,
         save_last=True,
         save_top_k=-1,
-        mode="max",
-        monitor="valid__entity__overall/f1",
         auto_insert_metric_name=False,
     )
 

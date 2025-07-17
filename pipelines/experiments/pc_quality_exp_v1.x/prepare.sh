@@ -1,22 +1,58 @@
 #!/bin/bash
 
-# PC Quality Filter Experiment - Data Preparation v1.0
-# Species: Athaliana only
-# Generated from: make -f pipelines/training -n all SPECIES_IDS=Athaliana RUN_VERSION=v1.0
+#SBATCH -p gg
+#SBATCH -N 1
+#SBATCH -n 1
+#SBATCH -t 2:00:00
+
+# PC Quality Filter Experiment - Unified Data Preparation Script
+# Usage: ./prepare.sh {1.0|1.1|1.2}
 
 set -euo pipefail
 
-echo "Starting PC Quality Filter Experiment - Data Preparation v1.0"
-echo "Species: Athaliana only"
+# Parse arguments
+if [ $# -ne 1 ]; then
+    echo "Usage: $0 {1.0|1.1|1.2}"
+    echo "  1.0 - Athaliana only"
+    echo "  1.1 - Athaliana + Osativa (high quality, multiple epochs equivalent)"
+    echo "  1.2 - Athaliana + Osativa + Gmax + Hvulgare + Ptrichocarpa (mixed quality, single epoch equivalent)"
+    exit 1
+fi
+
+VERSION="$1"
+
+# Validate version
+if [ "$VERSION" != "1.0" ] && [ "$VERSION" != "1.1" ] && [ "$VERSION" != "1.2" ]; then
+    echo "ERROR: Invalid version '$VERSION'"
+    echo "Must be '1.0', '1.1', or '1.2'"
+    exit 1
+fi
+
+# Set version-specific configurations
+case "$VERSION" in
+    "1.0")
+        SPECIES_LIST="Athaliana"
+        DESCRIPTION="Athaliana only"
+        ;;
+    "1.1")
+        SPECIES_LIST="Athaliana Osativa"
+        DESCRIPTION="Athaliana + Osativa (high quality, multiple epochs equivalent)"
+        ;;
+    "1.2")
+        SPECIES_LIST="Athaliana Osativa Gmax Hvulgare Ptrichocarpa"
+        DESCRIPTION="Athaliana + Osativa + Gmax + Hvulgare + Ptrichocarpa (mixed quality, single epoch equivalent)"
+        ;;
+esac
+
+echo "Starting PC Quality Filter Experiment - Data Preparation v$VERSION"
+echo "Species: $DESCRIPTION"
 echo "$(date): Beginning data preparation pipeline"
 
 # Define paths
-RAW_DIR="/work/10459/eczech/vista/data/dna/plant_caduceus_genome_annotation_task/data_share_20250326/training_data"
-PIPE_DIR="/scratch/10459/eczech/data/dna/plant_caduceus_genome_annotation_task/pipeline"
-EXTRACT_DIR="$PIPE_DIR/extract/v1.0"
-TRANSFORM_DIR="$PIPE_DIR/transform/v1.0"
-PREP_DIR="$PIPE_DIR/prep/v1.0"
-MODEL_PATH="kuleshov-group/compo-cad2-l24-dna-chtk-c8192-v2-b2-NpnkD-ba240000"
+RAW_DIR="$DATA_DIR/training_data"
+EXTRACT_DIR="$PIPE_DIR/extract/v$VERSION"
+TRANSFORM_DIR="$PIPE_DIR/transform/v$VERSION"
+PREP_DIR="$PIPE_DIR/prep/v$VERSION"
 
 # Create output directories
 mkdir -p "$EXTRACT_DIR" "$TRANSFORM_DIR" "$PREP_DIR/splits"
@@ -29,13 +65,13 @@ echo "Filtering GFF files with PC quality filter..."
 python scripts/gff.py filter_to_pc_quality_score_pass \
   --input-dir "$RAW_DIR/gff_tagged" \
   --output-dir "$EXTRACT_DIR/gff_filtered" \
-  --species-ids Athaliana
+  --species-ids $SPECIES_LIST
 
 # Step 2: Extract GFF features (using filtered GFF files)
 echo "$(date): Step 2 - Extracting GFF features"
 python scripts/extract.py extract_gff_features \
   --input-dir "$EXTRACT_DIR/gff_filtered" \
-  --species-id Athaliana \
+  --species-id $SPECIES_LIST \
   --output "$EXTRACT_DIR/raw_features.parquet"
 
 # Step 3: Filter features
@@ -64,7 +100,7 @@ python scripts/transform.py create_labels \
 echo "$(date): Step 6 - Extracting FASTA sequences"
 python scripts/extract.py extract_fasta_sequences \
   --input-dir "$RAW_DIR/fasta" \
-  --species-id Athaliana \
+  --species-id $SPECIES_LIST \
   --tokenizer-path "$MODEL_PATH" \
   --output "$EXTRACT_DIR/tokens.zarr"
 
@@ -91,6 +127,6 @@ python scripts/sample.py generate_training_splits \
   --valid-output "$PREP_DIR/splits/valid.zarr" \
   --valid-proportion .025
 
-echo "$(date): Data preparation v1.0 completed successfully!"
+echo "$(date): Data preparation v$VERSION completed successfully!"
 echo "Training data ready at: $PREP_DIR/splits/train.zarr"
-echo "Validation data ready at: $PREP_DIR/splits/valid.zarr" 
+echo "Validation data ready at: $PREP_DIR/splits/valid.zarr"

@@ -10,7 +10,6 @@ echo "PC Quality Filter Experiment - Data Preparation Reset"
 echo "$(date): Starting cleanup of v1.x data directories"
 
 # Define paths
-PIPE_DIR="/scratch/10459/eczech/data/dna/plant_caduceus_genome_annotation_task/pipeline"
 TRASH_DIR="/scratch/10459/eczech/trash"
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 
@@ -27,7 +26,7 @@ for version in v1.0 v1.1 v1.2; do
     fi
 done
 
-# Clean up transform directories  
+# Clean up transform directories
 for version in v1.0 v1.1 v1.2; do
     if [ -d "$PIPE_DIR/transform/$version" ]; then
         echo "Moving transform/$version to trash..."
@@ -48,5 +47,5 @@ echo "All v1.x directories moved to trash with timestamp: $TIMESTAMP"
 echo ""
 echo "You can now run the data preparation scripts:"
 echo "  ./scripts/misc/pc_quality_exp/data_prep_v1.0.sh"
-echo "  ./scripts/misc/pc_quality_exp/data_prep_v1.1.sh" 
-echo "  ./scripts/misc/pc_quality_exp/data_prep_v1.2.sh" 
+echo "  ./scripts/misc/pc_quality_exp/data_prep_v1.1.sh"
+echo "  ./scripts/misc/pc_quality_exp/data_prep_v1.2.sh"

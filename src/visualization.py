@@ -20,6 +20,17 @@ SAVE_DIR = "local/logs/train"
 # Utility Functions
 # -------------------------------------------------------------------------
 
+def set_visualization_save_dir(save_dir: str) -> None:
+    """Set the global save directory for visualizations.
+
+    Parameters
+    ----------
+    save_dir : str
+        Directory path where visualization files will be saved
+    """
+    global SAVE_DIR
+    SAVE_DIR = save_dir
+
 
 def visualize_tokens(
     module: L.LightningModule,
