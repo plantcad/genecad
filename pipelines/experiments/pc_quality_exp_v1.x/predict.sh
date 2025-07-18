@@ -48,7 +48,7 @@ RUN_VERSION="v$MODEL_VERSION"
 
 echo "Starting PC Quality Filter Experiment - Prediction Generation $RUN_VERSION"
 echo "Model: $MODEL_DESCRIPTION"
-echo "Species: jregia, pvulgaris, carabica"
+echo "Species: jregia, pvulgaris, carabica, zmays, ntabacum, nsylvestris"
 echo "$(date): Beginning prediction generation"
 
 # Define paths
@@ -57,7 +57,7 @@ PREDICT_DIR="$PIPE_DIR/predict"
 MODEL_CHECKPOINT="$PIPE_DIR/sweep/$SWEEP_DIR/checkpoints/last.ckpt"
 
 # Define species to evaluate
-SPECIES_LIST="jregia pvulgaris carabica"
+SPECIES_LIST="jregia pvulgaris carabica zmays ntabacum nsylvestris"
 CHR_ID="chr1"
 
 echo "Model checkpoint: $MODEL_CHECKPOINT"
@@ -115,4 +115,4 @@ for SPECIES in $SPECIES_LIST; do
 done
 
 echo "$(date): Prediction generation $RUN_VERSION completed successfully!"
-echo "Predictions available in: $PREDICT_DIR/{jregia,pvulgaris,carabica}/runs/$RUN_VERSION/$CHR_ID/predictions/"
+echo "Predictions available in: $PREDICT_DIR/{jregia,pvulgaris,carabica,zmays,ntabacum,nsylvestris}/runs/$RUN_VERSION/$CHR_ID/predictions/"

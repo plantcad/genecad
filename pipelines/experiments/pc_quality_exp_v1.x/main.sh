@@ -5,6 +5,8 @@
 
 set -euo pipefail
 
+# Initialization
+# -------------------------------------------------
 # Define experiment directory path
 EXPERIMENT_DIR="pipelines/experiments/pc_quality_exp_v1.x"
 
@@ -13,6 +15,10 @@ source $EXPERIMENT_DIR/init.sh
 
 # Define log directory path
 LOG_DIR="local/logs/pc_quality_exp"
+
+# Define model versions to process
+MODEL_VERSIONS="1.0 1.1 1.2"
+# -------------------------------------------------
 
 echo "Starting PC Quality Filter Experiment Pipeline"
 echo "$(date): Beginning main orchestration"
@@ -24,17 +30,11 @@ echo "$(date): =================================="
 echo "$(date): PHASE 1: Data Preparation"
 echo "$(date): =================================="
 
-# Allocate compute node for data preparation
-idev -p gg -N 1 -n 1 -t 2:00:00
-
-# Data preparation v1.0
-$EXPERIMENT_DIR/prepare.sh 1.0 2>&1 | tee -a $LOG_DIR/prepare_v1.0.log
-
-# Data preparation v1.1
-$EXPERIMENT_DIR/prepare.sh 1.1 2>&1 | tee -a $LOG_DIR/prepare_v1.1.log
-
-# Data preparation v1.2
-$EXPERIMENT_DIR/prepare.sh 1.2 2>&1 | tee -a $LOG_DIR/prepare_v1.2.log
+for version in $MODEL_VERSIONS; do
+sbatch -p gg -N 1 -n 1 -t 2:00:00 \
+    --output $LOG_DIR/prepare_v${version}.log --error $LOG_DIR/prepare_v${version}.log \
+    $EXPERIMENT_DIR/prepare.sh $version
+done
 
 echo "$(date): Data preparation phase completed successfully!"
 
@@ -42,13 +42,13 @@ echo "$(date): =================================="
 echo "$(date): PHASE 2: Training"
 echo "$(date): =================================="
 
-# Training v1.0 (Athaliana only - 16 nodes, 2 hours)
+# Training v1.0 (Athaliana only - 3 epochs, 2 hours)
 $EXPERIMENT_DIR/train.sh 1.0
 
-# Training v1.1 (Athaliana + Osativa - 16 nodes, 2 hours)
+# Training v1.1 (Athaliana + Osativa - 3 epochs, 2 hours)
 $EXPERIMENT_DIR/train.sh 1.1
 
-# Training v1.2 (All 5 species from v1.1 checkpoint - 16 nodes, 8 hours)
+# Training v1.2 (All 5 species from v1.1 checkpoint - 1 epoch, 3 hours)
 $EXPERIMENT_DIR/train.sh 1.2
 
 echo "$(date): Training phase completed successfully!"
@@ -69,17 +69,11 @@ echo "$(date): =================================="
 echo "$(date): PHASE 4: Prediction Generation"
 echo "$(date): =================================="
 
-# Allocate GPU nodes for prediction generation
-idev -p gh -N 20 -n 20 --tasks-per-node 1 -t 2:00:00
-
-# Prediction generation v1.0
-$EXPERIMENT_DIR/predict.sh 1.0 2>&1 | tee -a $LOG_DIR/predict_v1.0.log
-
-# Prediction generation v1.1
-$EXPERIMENT_DIR/predict.sh 1.1 2>&1 | tee -a $LOG_DIR/predict_v1.1.log
-
-# Prediction generation v1.2
-$EXPERIMENT_DIR/predict.sh 1.2 2>&1 | tee -a $LOG_DIR/predict_v1.2.log
+for version in $MODEL_VERSIONS; do
+sbatch -p gh -N 20 -n 20 -t 2:00:00 \
+    --output $LOG_DIR/predict_v${version}.log --error $LOG_DIR/predict_v${version}.log \
+    $EXPERIMENT_DIR/predict.sh $version
+done
 
 echo "$(date): Prediction generation phase completed successfully!"
 
@@ -87,26 +81,17 @@ echo "$(date): =================================="
 echo "$(date): PHASE 5: Evaluation"
 echo "$(date): =================================="
 
-# Allocate compute node for evaluation
-idev -p gg -N 1 -n 1 -t 2:00:00
+for version in $MODEL_VERSIONS; do
+for ground_truth in original pc-filtered; do
+sbatch -p gg -N 1 -n 1 -t 2:00:00 \
+    --output $LOG_DIR/evaluate_v${version}_${ground_truth}.log --error $LOG_DIR/evaluate_v${version}_${ground_truth}.log \
+    $EXPERIMENT_DIR/evaluate.sh $version $ground_truth
+done
+done
 
-# Evaluation v1.0 with original ground truth
-$EXPERIMENT_DIR/evaluate.sh 1.0 original 2>&1 | tee -a $LOG_DIR/evaluate_v1.0_original.log
-
-# Evaluation v1.0 with PC-filtered ground truth
-$EXPERIMENT_DIR/evaluate.sh 1.0 pc-filtered 2>&1 | tee -a $LOG_DIR/evaluate_v1.0_pc-filtered.log
-
-# Evaluation v1.1 with original ground truth
-$EXPERIMENT_DIR/evaluate.sh 1.1 original 2>&1 | tee -a $LOG_DIR/evaluate_v1.1_original.log
-
-# Evaluation v1.1 with PC-filtered ground truth
-$EXPERIMENT_DIR/evaluate.sh 1.1 pc-filtered 2>&1 | tee -a $LOG_DIR/evaluate_v1.1_pc-filtered.log
-
-# Evaluation v1.2 with original ground truth
-$EXPERIMENT_DIR/evaluate.sh 1.2 original 2>&1 | tee -a $LOG_DIR/evaluate_v1.2_original.log
-
-# Evaluation v1.2 with PC-filtered ground truth
-$EXPERIMENT_DIR/evaluate.sh 1.2 pc-filtered 2>&1 | tee -a $LOG_DIR/evaluate_v1.2_pc-filtered.log
+# Interactive execution:
+# idev -p gg -N 1 -n 1 -t 2:00:00
+# $EXPERIMENT_DIR/evaluate.sh 1.0 original 2>&1 | tee -a $LOG_DIR/evaluate_v1.0_original.log
 
 echo "$(date): Evaluation phase completed successfully!"
 echo "$(date): PC Quality Filter Experiment pipeline completed!"

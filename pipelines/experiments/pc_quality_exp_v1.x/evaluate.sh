@@ -68,7 +68,7 @@ fi
 echo "Starting PC Quality Filter Experiment - Evaluation $RUN_VERSION"
 echo "Model: $MODEL_DESCRIPTION"
 echo "Ground Truth: $GT_DESCRIPTION"
-echo "Species: jregia, pvulgaris, carabica"
+echo "Species: jregia, pvulgaris, carabica, zmays, ntabacum, nsylvestris"
 echo "$(date): Beginning evaluation (assumes predictions already generated)"
 
 # Define paths
@@ -76,7 +76,8 @@ RAW_DIR="$DATA_DIR/testing_data"
 PREDICT_DIR="$PIPE_DIR/predict"
 
 # Define species to evaluate
-SPECIES_LIST="jregia pvulgaris carabica"
+SPECIES_LIST="jregia pvulgaris carabica zmays ntabacum nsylvestris"
+# SPECIES_LIST="carabica zmays"
 CHR_ID="chr1"
 
 echo "Prediction directory: $PREDICT_DIR"
@@ -96,6 +97,12 @@ for SPECIES in $SPECIES_LIST; do
     echo "Species ID: $SPECIES_ID"
     echo "Prediction directory: $PREDICTION_DIR"
     echo "Results directory: $SPECIES_DIR"
+
+    # Check if final results already exist
+    if [ -f "$SPECIES_DIR/results/gffcompare.stats.consolidated.csv" ]; then
+        echo "$(date): Final results already exist for $SPECIES, skipping processing"
+        continue
+    fi
 
     # Create output directories
     mkdir -p "$SPECIES_DIR/gff" "$SPECIES_DIR/results"
@@ -162,13 +169,14 @@ for SPECIES in $SPECIES_LIST; do
 
     # Step 4: Process labels (conditional on ground truth type)
     echo "$(date): Step 4 - Processing labels ($GT_DESCRIPTION) for $SPECIES"
-    python scripts/gff.py resolve \
-      --input-dir "$RAW_DIR/gff" \
-      --species-id "$SPECIES_ID" \
-      --output "$SPECIES_DIR/gff/labels_raw.gff"
 
     if [ "$GROUND_TRUTH_TYPE" = "original" ]; then
         # Original ground truth - no PC filtering
+        python scripts/gff.py resolve \
+          --input-dir "$RAW_DIR/gff" \
+          --species-id "$SPECIES_ID" \
+          --output "$SPECIES_DIR/gff/labels_raw.gff"
+
         python scripts/gff.py filter_to_chromosome \
           --input "$SPECIES_DIR/gff/labels_raw.gff" \
           --output "$SPECIES_DIR/gff/labels.gff" \
@@ -176,6 +184,11 @@ for SPECIES in $SPECIES_LIST; do
           --species-id "$SPECIES_ID"
     else
         # PC-filtered ground truth
+        python scripts/gff.py resolve \
+          --input-dir "$RAW_DIR/gff_tagged" \
+          --species-id "$SPECIES_ID" \
+          --output "$SPECIES_DIR/gff/labels_raw.gff"
+
         python scripts/gff.py filter_to_chromosome \
           --input "$SPECIES_DIR/gff/labels_raw.gff" \
           --output "$SPECIES_DIR/gff/labels_chr.gff" \
@@ -254,5 +267,5 @@ for SPECIES in $SPECIES_LIST; do
 done
 
 echo "$(date): Evaluation $RUN_VERSION completed successfully!"
-echo "Using predictions from: $PREDICT_DIR/{jregia,pvulgaris,carabica}/runs/$PREDICTION_VERSION/$CHR_ID/predictions/"
-echo "Results available in: $PREDICT_DIR/{jregia,pvulgaris,carabica}/runs/$RUN_VERSION/$CHR_ID/results/"
+echo "Using predictions from: $PREDICT_DIR/{jregia,pvulgaris,carabica,zmays,ntabacum,nsylvestris}/runs/$PREDICTION_VERSION/$CHR_ID/predictions/"
+echo "Results available in: $PREDICT_DIR/{jregia,pvulgaris,carabica,zmays,ntabacum,nsylvestris}/runs/$RUN_VERSION/$CHR_ID/results/"
