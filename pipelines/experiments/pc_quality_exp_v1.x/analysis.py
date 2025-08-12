@@ -453,6 +453,16 @@ def main():
         raw_data = load_all_csv_files()
         processed_data = filter_and_process_data(raw_data)
 
+        # Save data to CSV files as requested
+        raw_data_path = output_dir / "all_evaluation_statistics.csv"
+        processed_data_path = output_dir / "primary_evaluation_statistics.csv"
+
+        raw_data.to_csv(raw_data_path, sep="\t", index=False)
+        processed_data.to_csv(processed_data_path, sep="\t", index=False)
+
+        logger.info(f"Saved raw data to: {raw_data_path}")
+        logger.info(f"Saved processed data to: {processed_data_path}")
+
         # Create both visualizations
         create_comprehensive_visualization(processed_data, output_dir)
         create_focused_visualization(processed_data, output_dir)

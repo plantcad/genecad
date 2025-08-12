@@ -178,15 +178,16 @@ process-results-%: predict-%
 	# ------------------------------------------------------------
 	# Merge labels and predictions
 	# ------------------------------------------------------------
+	TEMP_DIR=$$(mktemp -d); \
 	python scripts/gff.py set_source --source labels \
 	  --input $(SPECIES_DIR)/gff/labels.gff \
-	  --output /tmp/labels.gff
+	  --output $$TEMP_DIR/labels.gff; \
 	python scripts/gff.py set_source --source predictions \
 	  --input $(SPECIES_DIR)/gff/predictions__strand_both__feat_len_2__gene_len_30__has_cds.gff \
-	  --output /tmp/predictions.gff
+	  --output $$TEMP_DIR/predictions.gff; \
 	python scripts/gff.py merge \
-	  --input /tmp/labels.gff /tmp/predictions.gff \
-	  --output $(SPECIES_DIR)/gff/labeled_predictions__strand_both.gff
+	  --input $$TEMP_DIR/labels.gff $$TEMP_DIR/predictions.gff \
+	  --output $(SPECIES_DIR)/gff/labeled_predictions__strand_both.gff; \
 
 # Clean target
 clean:

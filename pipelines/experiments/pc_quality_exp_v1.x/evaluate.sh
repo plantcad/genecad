@@ -77,7 +77,6 @@ PREDICT_DIR="$PIPE_DIR/predict"
 
 # Define species to evaluate
 SPECIES_LIST="jregia pvulgaris carabica zmays ntabacum nsylvestris"
-# SPECIES_LIST="carabica zmays"
 CHR_ID="chr1"
 
 echo "Prediction directory: $PREDICT_DIR"
@@ -116,20 +115,28 @@ for SPECIES in $SPECIES_LIST; do
     echo "$(date): Using existing predictions for $SPECIES from $PREDICTION_DIR/predictions"
 
     # Step 1: Detect intervals and export GFF
-    echo "$(date): Step 1 - Detecting intervals for $SPECIES"
-    python scripts/predict.py detect_intervals \
-      --input-dir "$PREDICTION_DIR/predictions" \
-      --output "$SPECIES_DIR/intervals.zarr" \
-      --decoding-methods "direct,viterbi" \
-      --remove-incomplete-features yes
+    if [ -d "$SPECIES_DIR/intervals.zarr" ]; then
+        echo "$(date): Step 1 - Intervals already exist for $SPECIES, skipping detection"
+    else
+        echo "$(date): Step 1 - Detecting intervals for $SPECIES"
+        python scripts/predict.py detect_intervals \
+          --input-dir "$PREDICTION_DIR/predictions" \
+          --output "$SPECIES_DIR/intervals.zarr" \
+          --decoding-methods "direct,viterbi" \
+          --remove-incomplete-features yes
+    fi
 
-    echo "$(date): Step 2 - Exporting predictions to GFF for $SPECIES"
-    python scripts/predict.py export_gff \
-      --input "$SPECIES_DIR/intervals.zarr" \
-      --output "$SPECIES_DIR/gff/predictions.gff" \
-      --decoding-method viterbi \
-      --min-transcript-length 3 \
-      --strip-introns yes
+    if [ -f "$SPECIES_DIR/gff/predictions.gff" ]; then
+        echo "$(date): Step 2 - GFF predictions already exist for $SPECIES, skipping export"
+    else
+        echo "$(date): Step 2 - Exporting predictions to GFF for $SPECIES"
+        python scripts/predict.py export_gff \
+          --input "$SPECIES_DIR/intervals.zarr" \
+          --output "$SPECIES_DIR/gff/predictions.gff" \
+          --decoding-method viterbi \
+          --min-transcript-length 3 \
+          --strip-introns yes
+    fi
 
     # Step 3: Process predictions
     echo "$(date): Step 3 - Processing predictions for $SPECIES"
@@ -262,6 +269,22 @@ for SPECIES in $SPECIES_LIST; do
     python scripts/gff.py collect_results \
       --input "$SPECIES_DIR/results" \
       --output "$SPECIES_DIR/results/gffcompare.stats.consolidated.csv"
+
+    # Step 8: Merge labels and predictions
+    echo "$(date): Step 8 - Merging labels and predictions for $SPECIES"
+    TEMP_DIR=$(mktemp -d)
+
+    python scripts/gff.py set_source --source labels \
+      --input "$SPECIES_DIR/gff/labels.gff" \
+      --output "$TEMP_DIR/labels.gff"
+
+    python scripts/gff.py set_source --source predictions \
+      --input "$SPECIES_DIR/gff/predictions__strand_both__feat_len_2__gene_len_30__has_cds.gff" \
+      --output "$TEMP_DIR/predictions.gff"
+
+    python scripts/gff.py merge \
+      --input "$TEMP_DIR/labels.gff" "$TEMP_DIR/predictions.gff" \
+      --output "$SPECIES_DIR/gff/labeled_predictions__strand_both.gff"
 
     echo "$(date): Completed evaluation for $SPECIES"
 done

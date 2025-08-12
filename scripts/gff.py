@@ -541,11 +541,15 @@ def filter_to_min_feature_length(
 
     # Log statistics
     logger.info("Boundary updates:")
-    logger.info(
-        f"  - Genes: {genes_updated}/{total_genes} ({genes_updated / total_genes * 100:.1f}%) had boundaries updated"
+    genes_percentage = (genes_updated / total_genes * 100) if total_genes > 0 else 0
+    transcripts_percentage = (
+        (transcripts_updated / total_transcripts * 100) if total_transcripts > 0 else 0
     )
     logger.info(
-        f"  - Transcripts: {transcripts_updated}/{total_transcripts} ({transcripts_updated / total_transcripts * 100:.1f}%) had boundaries updated"
+        f"  - Genes: {genes_updated}/{total_genes} ({genes_percentage:.1f}%) had boundaries updated"
+    )
+    logger.info(
+        f"  - Transcripts: {transcripts_updated}/{total_transcripts} ({transcripts_percentage:.1f}%) had boundaries updated"
     )
 
     # Write filtered GFF
@@ -976,18 +980,25 @@ def evaluate_gff_files(
     logger.info("Evaluation complete")
 
 
-def summarize_gff(input_path: str) -> None:
+def summarize_gff(input_path: str, species_id: str = None) -> None:
     """Summarize the distribution of source and type fields in a GFF file.
 
     Parameters
     ----------
     input_path : str
         Path to input GFF file
+    species_id : str, optional
+        Species ID to use for getting attributes_to_drop configuration
     """
     logger.info(f"Summarizing GFF file: {input_path}")
 
+    # Get attributes to drop if species_id is provided
+    attributes_to_drop = None
+    if species_id and species_id in SPECIES_CONFIGS:
+        attributes_to_drop = SPECIES_CONFIGS[species_id].gff.attributes_to_drop
+
     # Read GFF file
-    features = load_gff(input_path)
+    features = load_gff(input_path, attributes_to_drop=attributes_to_drop)
 
     # Count source field distribution
     source_counts = features["source"].value_counts()
@@ -997,6 +1008,9 @@ def summarize_gff(input_path: str) -> None:
 
     # Count strand distribution
     strand_counts = features["strand"].value_counts()
+
+    # Count sequence ID distribution
+    seq_id_counts = features["seq_id"].value_counts()
 
     total_records = len(features)
 
@@ -1033,6 +1047,13 @@ def summarize_gff(input_path: str) -> None:
         strand_display = "+" if strand == "+" else "-" if strand == "-" else strand
         percentage = (count / total_records) * 100
         print(f"{strand_display:<10} {count:<10} {percentage:.2f}%")
+
+    print("\n=== Sequence ID Distribution ===")
+    print(f"{'Sequence ID':<30} {'Count':<10} {'Percentage':<10}")
+    print("-" * 50)
+    for seq_id, count in seq_id_counts.items():
+        percentage = (count / total_records) * 100
+        print(f"{seq_id:<30} {count:<10} {percentage:.2f}%")
 
     # Display source/strand/type combinations
     print("\n=== Source/Strand/Type Combinations ===")
@@ -1077,9 +1098,15 @@ def summarize_gff(input_path: str) -> None:
     transcript_counts[0] = len(genes_without_transcripts)
 
     # Sort by transcript count and display
-    for transcript_count, gene_count in sorted(transcript_counts.items()):
-        percentage = (gene_count / total_genes) * 100
-        print(f"{transcript_count:<20} {gene_count:<15} {percentage:.2f}%")
+    if total_genes == 0:
+        logger.warning(
+            "No gene features found in GFF file. Skipping transcript per gene distribution."
+        )
+        print("No gene features found - skipping transcript distribution analysis")
+    else:
+        for transcript_count, gene_count in sorted(transcript_counts.items()):
+            percentage = (gene_count / total_genes) * 100
+            print(f"{transcript_count:<20} {gene_count:<15} {percentage:.2f}%")
 
     # Calculate fraction of genes with a canonical transcript
     print("\n=== Canonical Transcript Annotation ===")
@@ -1744,6 +1771,11 @@ def main() -> None:
         help="Summarize the distribution of source and type fields in a GFF file",
     )
     summarize_parser.add_argument("--input", required=True, help="Input GFF file")
+    summarize_parser.add_argument(
+        "--species-id",
+        default=None,
+        help="Species ID for getting attributes_to_drop configuration",
+    )
 
     # Collect results command
     collect_parser = subparsers.add_parser(
@@ -1843,7 +1875,7 @@ def main() -> None:
             args.as_percentage == "yes",
         )
     elif args.command == "summarize":
-        summarize_gff(args.input)
+        summarize_gff(args.input, species_id=args.species_id)
     elif args.command == "collect_results":
         collect_results(args.input, args.output)
     elif args.command == "clean":
