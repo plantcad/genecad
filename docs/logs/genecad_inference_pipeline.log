@@ -1,0 +1,657 @@
+python scripts/extract.py extract_fasta_file \
+  --species-id athaliana \
+  --fasta-file Arabidopsis_thaliana.TAIR10.dna.chromosome.4.fa.gz \
+  --chrom-map "4:4" \
+  --tokenizer-path kuleshov-group/PlantCAD2-Small-l24-d0768 \
+  --output /tmp/results/pipeline/sequences.zarr
+2025-08-31 12:00:39,923 - INFO - Parsed chromosome mapping: {'4': '4'}
+2025-08-31 12:00:43,190 - INFO - Loading tokenizer from kuleshov-group/PlantCAD2-Small-l24-d0768
+2025-08-31 12:00:43,301 - INFO - Vectorizing token map: {'g': 5, 'G': 5, 'c': 4, 'C': 4, 't': 6, 'T': 6, 'a': 3, 'A': 3, 'm': 2, 'M': 2, 'r': 2, 'R': 2, 'w': 2, 'W': 2, 's': 2, 'S': 2, 'y': 2, 'Y': 2, 'k': 2, 'K': 2, 'v': 2, 'V': 2, 'h': 2, 'H': 2, 'd': 2, 'D': 2, 'b': 2, 'B': 2, 'x': 2, 'X': 2, 'n': 2, 'N': 2}
+2025-08-31 12:00:43,301 - INFO - [species=athaliana] Processing FASTA file: Arabidopsis_thaliana.TAIR10.dna.chromosome.4.fa.gz
+2025-08-31 12:00:43,451 - INFO - [species=athaliana] Added 4 (from 4), length: 18585056
+2025-08-31 12:00:43,451 - INFO - [species=athaliana] Found 1 total chromosomes
+2025-08-31 12:00:43,451 - INFO - [species=athaliana] Processing chromosome: 4
+2025-08-31 12:00:44,305 - INFO - [species=athaliana] Creating dataset...
+2025-08-31 12:00:44,317 - INFO - [species=athaliana] Tokenizing forward strand: NNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNN ...
+2025-08-31 12:00:45,585 - INFO - [species=athaliana] Token ID frequencies: {3: 5940546, 6: 5914038, 4: 3371349, 5: 3356091, 2: 3032}
+2025-08-31 12:00:45,593 - INFO - [species=athaliana] Tokenizing reverse strand: NNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNN ...
+2025-08-31 12:00:46,863 - INFO - [species=athaliana] Token ID frequencies: {6: 5940546, 3: 5914038, 5: 3371349, 4: 3356091, 2: 3032}
+2025-08-31 12:00:46,895 - INFO - [species=athaliana] Saving 4 dataset to /tmp/results/pipeline/sequences.zarr
+2025-08-31 12:00:47,927 - INFO - [species=athaliana] Saved 1 chromosome sequences to /tmp/results/pipeline/sequences.zarr
+2025-08-31 12:00:48,017 - INFO - Final data tree:
+<xarray.DataTree>
+Group: /
+└── Group: /athaliana
+    └── Group: /athaliana/4
+            Dimensions:             (strand: 2, sequence: 18585056)
+            Coordinates:
+              * strand              (strand) <U8 64B 'positive' 'negative'
+              * sequence            (sequence) int64 149MB 0 1 2 ... 18585054 18585055
+            Data variables:
+                sequence_tokens     (strand, sequence) |S1 37MB ...
+                sequence_masks      (strand, sequence) bool 37MB ...
+                sequence_input_ids  (strand, sequence) int64 297MB ...
+            Attributes:
+                species_id:     athaliana
+                chromosome_id:  4
+2025-08-31 12:00:48,017 - INFO - Done
+python scripts/predict.py create_predictions \
+  --input /tmp/results/pipeline/sequences.zarr \
+  --output-dir /tmp/results/pipeline/predictions.zarr \
+  --model-path kuleshov-group/PlantCAD2-Small-l24-d0768 \
+  --model-checkpoint plantcad/GeneCAD-l8-d768-PC2-Small \
+  --species-id athaliana \
+  --chromosome-id 4 \
+  --batch-size 32 \
+  --dtype bfloat16
+2025-08-31 12:00:56,024 - INFO - Loading model from plantcad/GeneCAD-l8-d768-PC2-Small
+2025-08-31 12:00:56,024 - INFO - Local path for classifier plantcad/GeneCAD-l8-d768-PC2-Small not found; attempting Hugging Face download ...
+2025-08-31 12:00:56,119 - INFO - Downloaded classifier to /scratch/10459/eczech/cache/huggingface/hub/models--plantcad--GeneCAD-l8-d768-PC2-Small/snapshots/31578e2243fdfbad3b694a0e95b67edcdba33030/model.ckpt
+2025-08-31 12:01:00,897 - INFO - Loading tokenizer from kuleshov-group/PlantCAD2-Small-l24-d0768
+2025-08-31 12:01:00,984 - INFO - Opening input sequence datatree from /tmp/results/pipeline/sequences.zarr
+2025-08-31 12:01:01,080 - INFO - Input sequences:
+<xarray.DataTree>
+Group: /
+└── Group: /athaliana
+    └── Group: /athaliana/4
+            Dimensions:             (strand: 2, sequence: 18585056)
+            Coordinates:
+              * strand              (strand) <U8 64B 'positive' 'negative'
+              * sequence            (sequence) int64 149MB 0 1 2 ... 18585054 18585055
+            Data variables:
+                sequence_tokens     (strand, sequence) |S1 37MB ...
+                sequence_input_ids  (strand, sequence) int64 297MB ...
+                sequence_masks      (strand, sequence) bool 37MB ...
+            Attributes:
+                species_id:     athaliana
+                chromosome_id:  4
+2025-08-31 12:01:01,080 - INFO - Selecting data for species 'athaliana' and chromosome '4'
+2025-08-31 12:01:01,080 - INFO - Loaded dataset with dimensions: {'strand': 2, 'sequence': 18585056}
+2025-08-31 12:01:01,080 - INFO - Running predictions for athaliana/4
+2025-08-31 12:01:01,080 - INFO - Generating predictions with args.batch_size=32, args.window_size=8192, args.stride=4096 (rank=0, world_size=1)
+2025-08-31 12:01:01,080 - INFO - Using pad_value=2 (UNK token) for sequence padding
+2025-08-31 12:01:01,080 - INFO - Processing strand: positive
+2025-08-31 12:01:01,708 - INFO - Processing 4537 windows in 141 batches of size 32
+2025-08-31 12:01:01,708 - INFO - Processing batch 1 of 141 [rank=0, world_size=1]
+2025-08-31 12:01:12,376 - INFO - Processing batch 2 of 141 [rank=0, world_size=1]
+2025-08-31 12:01:14,077 - INFO - Processing batch 3 of 141 [rank=0, world_size=1]
+2025-08-31 12:01:15,794 - INFO - Processing batch 4 of 141 [rank=0, world_size=1]
+2025-08-31 12:01:17,511 - INFO - Processing batch 5 of 141 [rank=0, world_size=1]
+2025-08-31 12:01:19,229 - INFO - Processing batch 6 of 141 [rank=0, world_size=1]
+2025-08-31 12:01:20,946 - INFO - Processing batch 7 of 141 [rank=0, world_size=1]
+2025-08-31 12:01:22,663 - INFO - Processing batch 8 of 141 [rank=0, world_size=1]
+2025-08-31 12:01:24,377 - INFO - Processing batch 9 of 141 [rank=0, world_size=1]
+2025-08-31 12:01:26,087 - INFO - Processing batch 10 of 141 [rank=0, world_size=1]
+2025-08-31 12:01:27,798 - INFO - Processing batch 11 of 141 [rank=0, world_size=1]
+2025-08-31 12:01:29,511 - INFO - Processing batch 12 of 141 [rank=0, world_size=1]
+2025-08-31 12:01:31,227 - INFO - Processing batch 13 of 141 [rank=0, world_size=1]
+2025-08-31 12:01:32,939 - INFO - Processing batch 14 of 141 [rank=0, world_size=1]
+2025-08-31 12:01:34,646 - INFO - Processing batch 15 of 141 [rank=0, world_size=1]
+2025-08-31 12:01:36,357 - INFO - Processing batch 16 of 141 [rank=0, world_size=1]
+2025-08-31 12:01:38,071 - INFO - Processing batch 17 of 141 [rank=0, world_size=1]
+2025-08-31 12:01:39,783 - INFO - Processing batch 18 of 141 [rank=0, world_size=1]
+2025-08-31 12:01:41,498 - INFO - Processing batch 19 of 141 [rank=0, world_size=1]
+2025-08-31 12:01:43,211 - INFO - Processing batch 20 of 141 [rank=0, world_size=1]
+2025-08-31 12:01:44,925 - INFO - Processing batch 21 of 141 [rank=0, world_size=1]
+2025-08-31 12:01:46,637 - INFO - Processing batch 22 of 141 [rank=0, world_size=1]
+2025-08-31 12:01:48,350 - INFO - Processing batch 23 of 141 [rank=0, world_size=1]
+2025-08-31 12:01:50,062 - INFO - Processing batch 24 of 141 [rank=0, world_size=1]
+2025-08-31 12:01:51,774 - INFO - Processing batch 25 of 141 [rank=0, world_size=1]
+2025-08-31 12:01:53,481 - INFO - Processing batch 26 of 141 [rank=0, world_size=1]
+2025-08-31 12:01:55,150 - INFO - Processing batch 27 of 141 [rank=0, world_size=1]
+2025-08-31 12:01:56,814 - INFO - Processing batch 28 of 141 [rank=0, world_size=1]
+2025-08-31 12:01:58,479 - INFO - Processing batch 29 of 141 [rank=0, world_size=1]
+2025-08-31 12:02:00,140 - INFO - Processing batch 30 of 141 [rank=0, world_size=1]
+2025-08-31 12:02:01,804 - INFO - Processing batch 31 of 141 [rank=0, world_size=1]
+2025-08-31 12:02:03,465 - INFO - Processing batch 32 of 141 [rank=0, world_size=1]
+2025-08-31 12:02:05,131 - INFO - Processing batch 33 of 141 [rank=0, world_size=1]
+2025-08-31 12:02:06,795 - INFO - Processing batch 34 of 141 [rank=0, world_size=1]
+2025-08-31 12:02:08,460 - INFO - Processing batch 35 of 141 [rank=0, world_size=1]
+2025-08-31 12:02:10,122 - INFO - Processing batch 36 of 141 [rank=0, world_size=1]
+2025-08-31 12:02:11,795 - INFO - Processing batch 37 of 141 [rank=0, world_size=1]
+2025-08-31 12:02:13,459 - INFO - Processing batch 38 of 141 [rank=0, world_size=1]
+2025-08-31 12:02:15,121 - INFO - Processing batch 39 of 141 [rank=0, world_size=1]
+2025-08-31 12:02:16,782 - INFO - Processing batch 40 of 141 [rank=0, world_size=1]
+2025-08-31 12:02:18,444 - INFO - Processing batch 41 of 141 [rank=0, world_size=1]
+2025-08-31 12:02:20,111 - INFO - Processing batch 42 of 141 [rank=0, world_size=1]
+2025-08-31 12:02:21,778 - INFO - Processing batch 43 of 141 [rank=0, world_size=1]
+2025-08-31 12:02:23,445 - INFO - Processing batch 44 of 141 [rank=0, world_size=1]
+2025-08-31 12:02:25,111 - INFO - Processing batch 45 of 141 [rank=0, world_size=1]
+2025-08-31 12:02:26,778 - INFO - Processing batch 46 of 141 [rank=0, world_size=1]
+2025-08-31 12:02:28,445 - INFO - Processing batch 47 of 141 [rank=0, world_size=1]
+2025-08-31 12:02:30,111 - INFO - Processing batch 48 of 141 [rank=0, world_size=1]
+2025-08-31 12:02:31,778 - INFO - Processing batch 49 of 141 [rank=0, world_size=1]
+2025-08-31 12:02:33,444 - INFO - Processing batch 50 of 141 [rank=0, world_size=1]
+2025-08-31 12:02:35,111 - INFO - Processing batch 51 of 141 [rank=0, world_size=1]
+2025-08-31 12:02:36,778 - INFO - Processing batch 52 of 141 [rank=0, world_size=1]
+2025-08-31 12:02:38,446 - INFO - Processing batch 53 of 141 [rank=0, world_size=1]
+2025-08-31 12:02:40,114 - INFO - Processing batch 54 of 141 [rank=0, world_size=1]
+2025-08-31 12:02:41,781 - INFO - Processing batch 55 of 141 [rank=0, world_size=1]
+2025-08-31 12:02:43,449 - INFO - Processing batch 56 of 141 [rank=0, world_size=1]
+2025-08-31 12:02:45,117 - INFO - Processing batch 57 of 141 [rank=0, world_size=1]
+2025-08-31 12:02:46,785 - INFO - Processing batch 58 of 141 [rank=0, world_size=1]
+2025-08-31 12:02:48,451 - INFO - Processing batch 59 of 141 [rank=0, world_size=1]
+2025-08-31 12:02:50,117 - INFO - Processing batch 60 of 141 [rank=0, world_size=1]
+2025-08-31 12:02:51,782 - INFO - Processing batch 61 of 141 [rank=0, world_size=1]
+2025-08-31 12:02:53,448 - INFO - Processing batch 62 of 141 [rank=0, world_size=1]
+2025-08-31 12:02:55,112 - INFO - Processing batch 63 of 141 [rank=0, world_size=1]
+2025-08-31 12:02:56,778 - INFO - Processing batch 64 of 141 [rank=0, world_size=1]
+2025-08-31 12:02:58,442 - INFO - Processing batch 65 of 141 [rank=0, world_size=1]
+2025-08-31 12:03:00,110 - INFO - Processing batch 66 of 141 [rank=0, world_size=1]
+2025-08-31 12:03:01,777 - INFO - Processing batch 67 of 141 [rank=0, world_size=1]
+2025-08-31 12:03:03,445 - INFO - Processing batch 68 of 141 [rank=0, world_size=1]
+2025-08-31 12:03:05,113 - INFO - Processing batch 69 of 141 [rank=0, world_size=1]
+2025-08-31 12:03:06,779 - INFO - Processing batch 70 of 141 [rank=0, world_size=1]
+2025-08-31 12:03:08,447 - INFO - Processing batch 71 of 141 [rank=0, world_size=1]
+2025-08-31 12:03:10,115 - INFO - Processing batch 72 of 141 [rank=0, world_size=1]
+2025-08-31 12:03:11,782 - INFO - Processing batch 73 of 141 [rank=0, world_size=1]
+2025-08-31 12:03:13,447 - INFO - Processing batch 74 of 141 [rank=0, world_size=1]
+2025-08-31 12:03:15,115 - INFO - Processing batch 75 of 141 [rank=0, world_size=1]
+2025-08-31 12:03:16,795 - INFO - Processing batch 76 of 141 [rank=0, world_size=1]
+2025-08-31 12:03:18,461 - INFO - Processing batch 77 of 141 [rank=0, world_size=1]
+2025-08-31 12:03:20,127 - INFO - Processing batch 78 of 141 [rank=0, world_size=1]
+2025-08-31 12:03:21,795 - INFO - Processing batch 79 of 141 [rank=0, world_size=1]
+2025-08-31 12:03:23,462 - INFO - Processing batch 80 of 141 [rank=0, world_size=1]
+2025-08-31 12:03:25,128 - INFO - Processing batch 81 of 141 [rank=0, world_size=1]
+2025-08-31 12:03:26,797 - INFO - Processing batch 82 of 141 [rank=0, world_size=1]
+2025-08-31 12:03:28,462 - INFO - Processing batch 83 of 141 [rank=0, world_size=1]
+2025-08-31 12:03:30,130 - INFO - Processing batch 84 of 141 [rank=0, world_size=1]
+2025-08-31 12:03:31,796 - INFO - Processing batch 85 of 141 [rank=0, world_size=1]
+2025-08-31 12:03:33,447 - INFO - Processing batch 86 of 141 [rank=0, world_size=1]
+2025-08-31 12:03:35,115 - INFO - Processing batch 87 of 141 [rank=0, world_size=1]
+2025-08-31 12:03:36,783 - INFO - Processing batch 88 of 141 [rank=0, world_size=1]
+2025-08-31 12:03:38,451 - INFO - Processing batch 89 of 141 [rank=0, world_size=1]
+2025-08-31 12:03:40,118 - INFO - Processing batch 90 of 141 [rank=0, world_size=1]
+2025-08-31 12:03:41,784 - INFO - Processing batch 91 of 141 [rank=0, world_size=1]
+2025-08-31 12:03:43,452 - INFO - Processing batch 92 of 141 [rank=0, world_size=1]
+2025-08-31 12:03:45,118 - INFO - Processing batch 93 of 141 [rank=0, world_size=1]
+2025-08-31 12:03:46,783 - INFO - Processing batch 94 of 141 [rank=0, world_size=1]
+2025-08-31 12:03:48,453 - INFO - Processing batch 95 of 141 [rank=0, world_size=1]
+2025-08-31 12:03:50,121 - INFO - Processing batch 96 of 141 [rank=0, world_size=1]
+2025-08-31 12:03:51,788 - INFO - Processing batch 97 of 141 [rank=0, world_size=1]
+2025-08-31 12:03:53,457 - INFO - Processing batch 98 of 141 [rank=0, world_size=1]
+2025-08-31 12:03:55,124 - INFO - Processing batch 99 of 141 [rank=0, world_size=1]
+2025-08-31 12:03:56,791 - INFO - Processing batch 100 of 141 [rank=0, world_size=1]
+2025-08-31 12:03:58,456 - INFO - Processing batch 101 of 141 [rank=0, world_size=1]
+2025-08-31 12:04:00,125 - INFO - Processing batch 102 of 141 [rank=0, world_size=1]
+2025-08-31 12:04:01,794 - INFO - Processing batch 103 of 141 [rank=0, world_size=1]
+2025-08-31 12:04:03,459 - INFO - Processing batch 104 of 141 [rank=0, world_size=1]
+2025-08-31 12:04:05,126 - INFO - Processing batch 105 of 141 [rank=0, world_size=1]
+2025-08-31 12:04:06,794 - INFO - Processing batch 106 of 141 [rank=0, world_size=1]
+2025-08-31 12:04:08,460 - INFO - Processing batch 107 of 141 [rank=0, world_size=1]
+2025-08-31 12:04:10,122 - INFO - Processing batch 108 of 141 [rank=0, world_size=1]
+2025-08-31 12:04:11,938 - INFO - Processing batch 109 of 141 [rank=0, world_size=1]
+2025-08-31 12:04:13,605 - INFO - Processing batch 110 of 141 [rank=0, world_size=1]
+2025-08-31 12:04:15,271 - INFO - Processing batch 111 of 141 [rank=0, world_size=1]
+2025-08-31 12:04:16,937 - INFO - Processing batch 112 of 141 [rank=0, world_size=1]
+2025-08-31 12:04:18,603 - INFO - Processing batch 113 of 141 [rank=0, world_size=1]
+2025-08-31 12:04:20,268 - INFO - Processing batch 114 of 141 [rank=0, world_size=1]
+2025-08-31 12:04:21,949 - INFO - Processing batch 115 of 141 [rank=0, world_size=1]
+2025-08-31 12:04:23,617 - INFO - Processing batch 116 of 141 [rank=0, world_size=1]
+2025-08-31 12:04:25,282 - INFO - Processing batch 117 of 141 [rank=0, world_size=1]
+2025-08-31 12:04:26,948 - INFO - Processing batch 118 of 141 [rank=0, world_size=1]
+2025-08-31 12:04:28,614 - INFO - Processing batch 119 of 141 [rank=0, world_size=1]
+2025-08-31 12:04:30,280 - INFO - Processing batch 120 of 141 [rank=0, world_size=1]
+2025-08-31 12:04:31,946 - INFO - Processing batch 121 of 141 [rank=0, world_size=1]
+2025-08-31 12:04:33,612 - INFO - Processing batch 122 of 141 [rank=0, world_size=1]
+2025-08-31 12:04:35,276 - INFO - Processing batch 123 of 141 [rank=0, world_size=1]
+2025-08-31 12:04:36,942 - INFO - Processing batch 124 of 141 [rank=0, world_size=1]
+2025-08-31 12:04:38,607 - INFO - Processing batch 125 of 141 [rank=0, world_size=1]
+2025-08-31 12:04:40,274 - INFO - Processing batch 126 of 141 [rank=0, world_size=1]
+2025-08-31 12:04:41,942 - INFO - Processing batch 127 of 141 [rank=0, world_size=1]
+2025-08-31 12:04:43,610 - INFO - Processing batch 128 of 141 [rank=0, world_size=1]
+2025-08-31 12:04:45,277 - INFO - Processing batch 129 of 141 [rank=0, world_size=1]
+2025-08-31 12:04:46,942 - INFO - Processing batch 130 of 141 [rank=0, world_size=1]
+2025-08-31 12:04:48,608 - INFO - Processing batch 131 of 141 [rank=0, world_size=1]
+2025-08-31 12:04:50,276 - INFO - Processing batch 132 of 141 [rank=0, world_size=1]
+2025-08-31 12:04:51,944 - INFO - Processing batch 133 of 141 [rank=0, world_size=1]
+2025-08-31 12:04:53,613 - INFO - Processing batch 134 of 141 [rank=0, world_size=1]
+2025-08-31 12:04:55,279 - INFO - Processing batch 135 of 141 [rank=0, world_size=1]
+2025-08-31 12:04:56,946 - INFO - Processing batch 136 of 141 [rank=0, world_size=1]
+2025-08-31 12:04:58,613 - INFO - Processing batch 137 of 141 [rank=0, world_size=1]
+2025-08-31 12:05:00,280 - INFO - Processing batch 138 of 141 [rank=0, world_size=1]
+2025-08-31 12:05:01,946 - INFO - Processing batch 139 of 141 [rank=0, world_size=1]
+2025-08-31 12:05:03,614 - INFO - Processing batch 140 of 141 [rank=0, world_size=1]
+2025-08-31 12:05:05,280 - INFO - Processing batch 141 of 141 [rank=0, world_size=1]
+2025-08-31 12:05:06,947 - INFO - Processing strand: negative
+2025-08-31 12:05:07,573 - INFO - Processing 4537 windows in 141 batches of size 32
+2025-08-31 12:05:07,574 - INFO - Processing batch 1 of 141 [rank=0, world_size=1]
+2025-08-31 12:05:09,278 - INFO - Processing batch 2 of 141 [rank=0, world_size=1]
+2025-08-31 12:05:10,981 - INFO - Processing batch 3 of 141 [rank=0, world_size=1]
+2025-08-31 12:05:12,699 - INFO - Processing batch 4 of 141 [rank=0, world_size=1]
+2025-08-31 12:05:14,420 - INFO - Processing batch 5 of 141 [rank=0, world_size=1]
+2025-08-31 12:05:16,140 - INFO - Processing batch 6 of 141 [rank=0, world_size=1]
+2025-08-31 12:05:17,860 - INFO - Processing batch 7 of 141 [rank=0, world_size=1]
+2025-08-31 12:05:19,580 - INFO - Processing batch 8 of 141 [rank=0, world_size=1]
+2025-08-31 12:05:21,300 - INFO - Processing batch 9 of 141 [rank=0, world_size=1]
+2025-08-31 12:05:23,019 - INFO - Processing batch 10 of 141 [rank=0, world_size=1]
+2025-08-31 12:05:24,739 - INFO - Processing batch 11 of 141 [rank=0, world_size=1]
+2025-08-31 12:05:26,463 - INFO - Processing batch 12 of 141 [rank=0, world_size=1]
+2025-08-31 12:05:28,180 - INFO - Processing batch 13 of 141 [rank=0, world_size=1]
+2025-08-31 12:05:29,899 - INFO - Processing batch 14 of 141 [rank=0, world_size=1]
+2025-08-31 12:05:31,620 - INFO - Processing batch 15 of 141 [rank=0, world_size=1]
+2025-08-31 12:05:33,340 - INFO - Processing batch 16 of 141 [rank=0, world_size=1]
+2025-08-31 12:05:35,057 - INFO - Processing batch 17 of 141 [rank=0, world_size=1]
+2025-08-31 12:05:36,772 - INFO - Processing batch 18 of 141 [rank=0, world_size=1]
+2025-08-31 12:05:38,487 - INFO - Processing batch 19 of 141 [rank=0, world_size=1]
+2025-08-31 12:05:40,205 - INFO - Processing batch 20 of 141 [rank=0, world_size=1]
+2025-08-31 12:05:41,920 - INFO - Processing batch 21 of 141 [rank=0, world_size=1]
+2025-08-31 12:05:43,644 - INFO - Processing batch 22 of 141 [rank=0, world_size=1]
+2025-08-31 12:05:45,360 - INFO - Processing batch 23 of 141 [rank=0, world_size=1]
+2025-08-31 12:05:47,079 - INFO - Processing batch 24 of 141 [rank=0, world_size=1]
+2025-08-31 12:05:48,799 - INFO - Processing batch 25 of 141 [rank=0, world_size=1]
+2025-08-31 12:05:50,519 - INFO - Processing batch 26 of 141 [rank=0, world_size=1]
+2025-08-31 12:05:52,187 - INFO - Processing batch 27 of 141 [rank=0, world_size=1]
+2025-08-31 12:05:53,857 - INFO - Processing batch 28 of 141 [rank=0, world_size=1]
+2025-08-31 12:05:55,526 - INFO - Processing batch 29 of 141 [rank=0, world_size=1]
+2025-08-31 12:05:57,198 - INFO - Processing batch 30 of 141 [rank=0, world_size=1]
+2025-08-31 12:05:58,867 - INFO - Processing batch 31 of 141 [rank=0, world_size=1]
+2025-08-31 12:06:00,540 - INFO - Processing batch 32 of 141 [rank=0, world_size=1]
+2025-08-31 12:06:02,210 - INFO - Processing batch 33 of 141 [rank=0, world_size=1]
+2025-08-31 12:06:03,880 - INFO - Processing batch 34 of 141 [rank=0, world_size=1]
+2025-08-31 12:06:05,550 - INFO - Processing batch 35 of 141 [rank=0, world_size=1]
+2025-08-31 12:06:07,220 - INFO - Processing batch 36 of 141 [rank=0, world_size=1]
+2025-08-31 12:06:08,890 - INFO - Processing batch 37 of 141 [rank=0, world_size=1]
+2025-08-31 12:06:10,557 - INFO - Processing batch 38 of 141 [rank=0, world_size=1]
+2025-08-31 12:06:12,226 - INFO - Processing batch 39 of 141 [rank=0, world_size=1]
+2025-08-31 12:06:13,898 - INFO - Processing batch 40 of 141 [rank=0, world_size=1]
+2025-08-31 12:06:15,565 - INFO - Processing batch 41 of 141 [rank=0, world_size=1]
+2025-08-31 12:06:17,236 - INFO - Processing batch 42 of 141 [rank=0, world_size=1]
+2025-08-31 12:06:18,906 - INFO - Processing batch 43 of 141 [rank=0, world_size=1]
+2025-08-31 12:06:20,573 - INFO - Processing batch 44 of 141 [rank=0, world_size=1]
+2025-08-31 12:06:22,242 - INFO - Processing batch 45 of 141 [rank=0, world_size=1]
+2025-08-31 12:06:23,911 - INFO - Processing batch 46 of 141 [rank=0, world_size=1]
+2025-08-31 12:06:25,577 - INFO - Processing batch 47 of 141 [rank=0, world_size=1]
+2025-08-31 12:06:27,247 - INFO - Processing batch 48 of 141 [rank=0, world_size=1]
+2025-08-31 12:06:28,918 - INFO - Processing batch 49 of 141 [rank=0, world_size=1]
+2025-08-31 12:06:30,588 - INFO - Processing batch 50 of 141 [rank=0, world_size=1]
+2025-08-31 12:06:32,270 - INFO - Processing batch 51 of 141 [rank=0, world_size=1]
+2025-08-31 12:06:33,941 - INFO - Processing batch 52 of 141 [rank=0, world_size=1]
+2025-08-31 12:06:35,611 - INFO - Processing batch 53 of 141 [rank=0, world_size=1]
+2025-08-31 12:06:37,281 - INFO - Processing batch 54 of 141 [rank=0, world_size=1]
+2025-08-31 12:06:38,952 - INFO - Processing batch 55 of 141 [rank=0, world_size=1]
+2025-08-31 12:06:40,622 - INFO - Processing batch 56 of 141 [rank=0, world_size=1]
+2025-08-31 12:06:42,292 - INFO - Processing batch 57 of 141 [rank=0, world_size=1]
+2025-08-31 12:06:43,964 - INFO - Processing batch 58 of 141 [rank=0, world_size=1]
+2025-08-31 12:06:45,635 - INFO - Processing batch 59 of 141 [rank=0, world_size=1]
+2025-08-31 12:06:47,305 - INFO - Processing batch 60 of 141 [rank=0, world_size=1]
+2025-08-31 12:06:48,974 - INFO - Processing batch 61 of 141 [rank=0, world_size=1]
+2025-08-31 12:06:50,646 - INFO - Processing batch 62 of 141 [rank=0, world_size=1]
+2025-08-31 12:06:52,314 - INFO - Processing batch 63 of 141 [rank=0, world_size=1]
+2025-08-31 12:06:53,984 - INFO - Processing batch 64 of 141 [rank=0, world_size=1]
+2025-08-31 12:06:55,655 - INFO - Processing batch 65 of 141 [rank=0, world_size=1]
+2025-08-31 12:06:57,325 - INFO - Processing batch 66 of 141 [rank=0, world_size=1]
+2025-08-31 12:06:58,997 - INFO - Processing batch 67 of 141 [rank=0, world_size=1]
+2025-08-31 12:07:00,666 - INFO - Processing batch 68 of 141 [rank=0, world_size=1]
+2025-08-31 12:07:02,338 - INFO - Processing batch 69 of 141 [rank=0, world_size=1]
+2025-08-31 12:07:04,007 - INFO - Processing batch 70 of 141 [rank=0, world_size=1]
+2025-08-31 12:07:05,684 - INFO - Processing batch 71 of 141 [rank=0, world_size=1]
+2025-08-31 12:07:07,355 - INFO - Processing batch 72 of 141 [rank=0, world_size=1]
+2025-08-31 12:07:09,026 - INFO - Processing batch 73 of 141 [rank=0, world_size=1]
+2025-08-31 12:07:10,697 - INFO - Processing batch 74 of 141 [rank=0, world_size=1]
+2025-08-31 12:07:12,365 - INFO - Processing batch 75 of 141 [rank=0, world_size=1]
+2025-08-31 12:07:14,037 - INFO - Processing batch 76 of 141 [rank=0, world_size=1]
+2025-08-31 12:07:15,705 - INFO - Processing batch 77 of 141 [rank=0, world_size=1]
+2025-08-31 12:07:17,376 - INFO - Processing batch 78 of 141 [rank=0, world_size=1]
+2025-08-31 12:07:19,046 - INFO - Processing batch 79 of 141 [rank=0, world_size=1]
+2025-08-31 12:07:20,717 - INFO - Processing batch 80 of 141 [rank=0, world_size=1]
+2025-08-31 12:07:22,385 - INFO - Processing batch 81 of 141 [rank=0, world_size=1]
+2025-08-31 12:07:24,057 - INFO - Processing batch 82 of 141 [rank=0, world_size=1]
+2025-08-31 12:07:25,725 - INFO - Processing batch 83 of 141 [rank=0, world_size=1]
+2025-08-31 12:07:27,397 - INFO - Processing batch 84 of 141 [rank=0, world_size=1]
+2025-08-31 12:07:29,063 - INFO - Processing batch 85 of 141 [rank=0, world_size=1]
+2025-08-31 12:07:30,720 - INFO - Processing batch 86 of 141 [rank=0, world_size=1]
+2025-08-31 12:07:32,390 - INFO - Processing batch 87 of 141 [rank=0, world_size=1]
+2025-08-31 12:07:34,058 - INFO - Processing batch 88 of 141 [rank=0, world_size=1]
+2025-08-31 12:07:35,727 - INFO - Processing batch 89 of 141 [rank=0, world_size=1]
+2025-08-31 12:07:37,401 - INFO - Processing batch 90 of 141 [rank=0, world_size=1]
+2025-08-31 12:07:39,069 - INFO - Processing batch 91 of 141 [rank=0, world_size=1]
+2025-08-31 12:07:40,740 - INFO - Processing batch 92 of 141 [rank=0, world_size=1]
+2025-08-31 12:07:42,410 - INFO - Processing batch 93 of 141 [rank=0, world_size=1]
+2025-08-31 12:07:44,080 - INFO - Processing batch 94 of 141 [rank=0, world_size=1]
+2025-08-31 12:07:45,750 - INFO - Processing batch 95 of 141 [rank=0, world_size=1]
+2025-08-31 12:07:47,420 - INFO - Processing batch 96 of 141 [rank=0, world_size=1]
+2025-08-31 12:07:49,091 - INFO - Processing batch 97 of 141 [rank=0, world_size=1]
+2025-08-31 12:07:50,762 - INFO - Processing batch 98 of 141 [rank=0, world_size=1]
+2025-08-31 12:07:52,432 - INFO - Processing batch 99 of 141 [rank=0, world_size=1]
+2025-08-31 12:07:54,102 - INFO - Processing batch 100 of 141 [rank=0, world_size=1]
+2025-08-31 12:07:55,770 - INFO - Processing batch 101 of 141 [rank=0, world_size=1]
+2025-08-31 12:07:57,439 - INFO - Processing batch 102 of 141 [rank=0, world_size=1]
+2025-08-31 12:07:59,109 - INFO - Processing batch 103 of 141 [rank=0, world_size=1]
+2025-08-31 12:08:00,776 - INFO - Processing batch 104 of 141 [rank=0, world_size=1]
+2025-08-31 12:08:02,443 - INFO - Processing batch 105 of 141 [rank=0, world_size=1]
+2025-08-31 12:08:04,112 - INFO - Processing batch 106 of 141 [rank=0, world_size=1]
+2025-08-31 12:08:05,779 - INFO - Processing batch 107 of 141 [rank=0, world_size=1]
+2025-08-31 12:08:07,442 - INFO - Processing batch 108 of 141 [rank=0, world_size=1]
+2025-08-31 12:08:09,108 - INFO - Processing batch 109 of 141 [rank=0, world_size=1]
+2025-08-31 12:08:10,781 - INFO - Processing batch 110 of 141 [rank=0, world_size=1]
+2025-08-31 12:08:12,448 - INFO - Processing batch 111 of 141 [rank=0, world_size=1]
+2025-08-31 12:08:14,113 - INFO - Processing batch 112 of 141 [rank=0, world_size=1]
+2025-08-31 12:08:15,780 - INFO - Processing batch 113 of 141 [rank=0, world_size=1]
+2025-08-31 12:08:17,446 - INFO - Processing batch 114 of 141 [rank=0, world_size=1]
+2025-08-31 12:08:19,115 - INFO - Processing batch 115 of 141 [rank=0, world_size=1]
+2025-08-31 12:08:20,783 - INFO - Processing batch 116 of 141 [rank=0, world_size=1]
+2025-08-31 12:08:22,448 - INFO - Processing batch 117 of 141 [rank=0, world_size=1]
+2025-08-31 12:08:24,113 - INFO - Processing batch 118 of 141 [rank=0, world_size=1]
+2025-08-31 12:08:25,779 - INFO - Processing batch 119 of 141 [rank=0, world_size=1]
+2025-08-31 12:08:27,445 - INFO - Processing batch 120 of 141 [rank=0, world_size=1]
+2025-08-31 12:08:29,116 - INFO - Processing batch 121 of 141 [rank=0, world_size=1]
+2025-08-31 12:08:30,782 - INFO - Processing batch 122 of 141 [rank=0, world_size=1]
+2025-08-31 12:08:32,454 - INFO - Processing batch 123 of 141 [rank=0, world_size=1]
+2025-08-31 12:08:34,125 - INFO - Processing batch 124 of 141 [rank=0, world_size=1]
+2025-08-31 12:08:35,796 - INFO - Processing batch 125 of 141 [rank=0, world_size=1]
+2025-08-31 12:08:37,464 - INFO - Processing batch 126 of 141 [rank=0, world_size=1]
+2025-08-31 12:08:39,132 - INFO - Processing batch 127 of 141 [rank=0, world_size=1]
+2025-08-31 12:08:40,802 - INFO - Processing batch 128 of 141 [rank=0, world_size=1]
+2025-08-31 12:08:42,470 - INFO - Processing batch 129 of 141 [rank=0, world_size=1]
+2025-08-31 12:08:44,136 - INFO - Processing batch 130 of 141 [rank=0, world_size=1]
+2025-08-31 12:08:45,802 - INFO - Processing batch 131 of 141 [rank=0, world_size=1]
+2025-08-31 12:08:47,470 - INFO - Processing batch 132 of 141 [rank=0, world_size=1]
+2025-08-31 12:08:49,139 - INFO - Processing batch 133 of 141 [rank=0, world_size=1]
+2025-08-31 12:08:50,808 - INFO - Processing batch 134 of 141 [rank=0, world_size=1]
+2025-08-31 12:08:52,478 - INFO - Processing batch 135 of 141 [rank=0, world_size=1]
+2025-08-31 12:08:54,146 - INFO - Processing batch 136 of 141 [rank=0, world_size=1]
+2025-08-31 12:08:55,818 - INFO - Processing batch 137 of 141 [rank=0, world_size=1]
+2025-08-31 12:08:57,488 - INFO - Processing batch 138 of 141 [rank=0, world_size=1]
+2025-08-31 12:08:59,156 - INFO - Processing batch 139 of 141 [rank=0, world_size=1]
+2025-08-31 12:09:00,826 - INFO - Processing batch 140 of 141 [rank=0, world_size=1]
+2025-08-31 12:09:02,498 - INFO - Processing batch 141 of 141 [rank=0, world_size=1]
+2025-08-31 12:09:04,166 - INFO - Loading completed predictions from /tmp/results/pipeline/predictions.zarr/predictions.0.zarr (rank=0, world_size=1)
+2025-08-31 12:09:04,261 - INFO - Complete predictions dataset:
+<xarray.DataTree>
+Group: /
+├── Group: /negative
+│       Dimensions:              (sequence: 18585056, feature: 5, token: 17)
+│       Coordinates:
+│         * token                (token) <U17 1kB 'intergenic' ... 'U-three_prime_utr'
+│         * feature              (feature) <U15 300B 'intergenic' ... 'three_prime_utr'
+│         * sequence             (sequence) int64 149MB 18447840 18447841 ... 130527
+│       Data variables:
+│           feature_logits       (sequence, feature) float32 372MB ...
+│           feature_predictions  (sequence) int64 149MB ...
+│           token_predictions    (sequence) int64 149MB ...
+│           token_logits         (sequence, token) float32 1GB ...
+│       Attributes:
+│           strand:            negative
+│           species_id:        athaliana
+│           chromosome_id:     4
+│           model_checkpoint:  plantcad/GeneCAD-l8-d768-PC2-Small
+│           model_path:        kuleshov-group/PlantCAD2-Small-l24-d0768
+└── Group: /positive
+        Dimensions:              (sequence: 18585056, feature: 5, token: 17)
+        Coordinates:
+          * feature              (feature) <U15 300B 'intergenic' ... 'three_prime_utr'
+          * sequence             (sequence) int64 149MB 0 1 2 ... 18585054 18585055
+          * token                (token) <U17 1kB 'intergenic' ... 'U-three_prime_utr'
+        Data variables:
+            feature_logits       (sequence, feature) float32 372MB ...
+            feature_predictions  (sequence) int64 149MB ...
+            token_predictions    (sequence) int64 149MB ...
+            token_logits         (sequence, token) float32 1GB ...
+        Attributes:
+            strand:            positive
+            species_id:        athaliana
+            chromosome_id:     4
+            model_checkpoint:  plantcad/GeneCAD-l8-d768-PC2-Small
+            model_path:        kuleshov-group/PlantCAD2-Small-l24-d0768
+2025-08-31 12:09:04,261 - INFO - Done
+python scripts/predict.py detect_intervals \
+  --input-dir /tmp/results/pipeline/predictions.zarr \
+  --output /tmp/results/pipeline/intervals.zarr \
+  --decoding-methods "direct,viterbi" \
+  --remove-incomplete-features yes
+2025-08-31 12:09:12,547 - INFO - Detecting intervals from rank files in /tmp/results/pipeline/predictions.zarr and saving to /tmp/results/pipeline/intervals.zarr
+2025-08-31 12:09:12,547 - INFO - Found 1 rank prediction files: ['/tmp/results/pipeline/predictions.zarr/predictions.0.zarr']
+2025-08-31 12:09:12,547 - INFO - Processing strand: positive
+2025-08-31 12:09:12,650 - INFO - Concatenating 1 rank datasets for 'positive' strand along the sequence dimension.
+2025-08-31 12:09:13,651 - INFO - Processing strand: negative
+2025-08-31 12:09:13,736 - INFO - Concatenating 1 rank datasets for 'negative' strand along the sequence dimension.
+2025-08-31 12:09:14,842 - INFO - Concatenating 2 datasets along the strand dimension.
+2025-08-31 12:09:14,968 - INFO - Concatenated sequence predictions dataset:
+<xarray.Dataset> Size: 1GB
+Dimensions:              (strand: 2, sequence: 18585056, feature: 5, token: 17)
+Coordinates:
+  * strand               (strand) object 16B 'positive' 'negative'
+  * feature              (feature) <U15 300B 'intergenic' ... 'three_prime_utr'
+  * sequence             (sequence) int64 149MB 0 1 2 ... 18585054 18585055
+  * token                (token) <U17 1kB 'intergenic' ... 'U-three_prime_utr'
+Data variables:
+    feature_logits       (strand, sequence, feature) float32 743MB 5.656 ... ...
+    feature_predictions  (strand, sequence) int64 297MB 0 0 0 0 0 ... 0 0 0 0 0
+Attributes:
+    species_id:        athaliana
+    chromosome_id:     4
+    model_checkpoint:  plantcad/GeneCAD-l8-d768-PC2-Small
+    model_path:        kuleshov-group/PlantCAD2-Small-l24-d0768
+2025-08-31 12:09:14,971 - INFO - Detecting intervals
+2025-08-31 12:09:14,971 - INFO - Inferring regions from predicted labels
+2025-08-31 12:09:14,971 - INFO - Running decoding methods: ['direct', 'viterbi']
+2025-08-31 12:09:14,972 - INFO - Running direct decoding for 'positive' strand
+2025-08-31 12:09:16,160 - INFO - Running viterbi decoding for 'positive' strand
+2025-08-31 12:09:19,321 - INFO - Running viterbi decoding (alpha=None)
+2025-08-31 12:09:31,144 - INFO - Running direct decoding for 'negative' strand
+2025-08-31 12:09:32,276 - INFO - Running viterbi decoding for 'negative' strand
+2025-08-31 12:09:35,512 - INFO - Running viterbi decoding (alpha=None)
+2025-08-31 12:09:42,048 - INFO - Region intervals detected:
+          entity_index     start      stop    strand decoding      entity_name
+interval
+0                    1     13502     13502  positive   direct       transcript
+1                    1     13504     13509  positive   direct       transcript
+2                    1     13511     13511  positive   direct       transcript
+3                    1     13513     16076  positive   direct       transcript
+4                    1     16084     16085  positive   direct       transcript
+...                ...       ...       ...       ...      ...              ...
+243043               6  18557194  18557537  negative  viterbi  three_prime_utr
+243044               6  18559767  18559924  negative  viterbi  three_prime_utr
+243045               6  18560865  18561204  negative  viterbi  three_prime_utr
+243046               6  18571346  18571680  negative  viterbi  three_prime_utr
+243047               6  18580804  18581083  negative  viterbi  three_prime_utr
+
+[243048 rows x 6 columns]
+2025-08-31 12:09:42,048 - INFO - Region interval info:
+
+2025-08-31 12:09:42,100 - INFO - Merging sequence and interval predictions
+2025-08-31 12:09:42,105 - INFO - Final results:
+<xarray.DataTree>
+Group: /
+├── Group: /sequences
+│       Dimensions:              (strand: 2, sequence: 18585056, feature: 5, token: 17)
+│       Coordinates:
+│         * strand               (strand) object 16B 'positive' 'negative'
+│         * feature              (feature) <U15 300B 'intergenic' ... 'three_prime_utr'
+│         * sequence             (sequence) int64 149MB 0 1 2 ... 18585054 18585055
+│         * token                (token) <U17 1kB 'intergenic' ... 'U-three_prime_utr'
+│       Data variables:
+│           feature_logits       (strand, sequence, feature) float32 743MB 5.656 ... ...
+│           feature_predictions  (strand, sequence) int64 297MB 0 0 0 0 0 ... 0 0 0 0 0
+│       Attributes:
+│           species_id:        athaliana
+│           chromosome_id:     4
+│           model_checkpoint:  plantcad/GeneCAD-l8-d768-PC2-Small
+│           model_path:        kuleshov-group/PlantCAD2-Small-l24-d0768
+└── Group: /intervals
+        Dimensions:       (interval: 243048)
+        Coordinates:
+          * interval      (interval) int64 2MB 0 1 2 3 4 ... 243044 243045 243046 243047
+        Data variables:
+            entity_index  (interval) int64 2MB 1 1 1 1 1 1 1 1 1 1 ... 6 6 6 6 6 6 6 6 6
+            start         (interval) int64 2MB 13502 13504 13511 ... 18571346 18580804
+            stop          (interval) int64 2MB 13502 13509 13511 ... 18571680 18581083
+            strand        (interval) object 2MB 'positive' 'positive' ... 'negative'
+            decoding      (interval) object 2MB 'direct' 'direct' ... 'viterbi'
+            entity_name   (interval) object 2MB 'transcript' ... 'three_prime_utr'
+        Attributes:
+            interval_entity_names:  ['transcript', 'exon', 'intron', 'five_prime_utr'...
+            species_id:             athaliana
+            chromosome_id:          4
+            model_checkpoint:       plantcad/GeneCAD-l8-d768-PC2-Small
+            model_path:             kuleshov-group/PlantCAD2-Small-l24-d0768
+2025-08-31 12:09:42,105 - INFO - Saving results to output path /tmp/results/pipeline/intervals.zarr
+2025-08-31 12:09:42,669 - INFO - Done
+<class 'pandas.core.frame.DataFrame'>
+RangeIndex: 243048 entries, 0 to 243047
+Data columns (total 6 columns):
+ #   Column        Non-Null Count   Dtype
+---  ------        --------------   -----
+ 0   entity_index  243048 non-null  int64
+ 1   start         243048 non-null  int64
+ 2   stop          243048 non-null  int64
+ 3   strand        243048 non-null  object
+ 4   decoding      243048 non-null  object
+ 5   entity_name   243048 non-null  object
+dtypes: int64(3), object(3)
+memory usage: 11.1+ MB
+python scripts/predict.py export_gff \
+  --input /tmp/results/pipeline/intervals.zarr \
+  --output /tmp/results/pipeline/predictions__raw.gff \
+  --decoding-method viterbi \
+  --min-transcript-length 3 \
+  --strip-introns yes
+2025-08-31 12:09:51,037 - INFO - Loading predictions from /tmp/results/pipeline/intervals.zarr
+2025-08-31 12:09:51,100 - INFO - Loaded intervals for chromosome: 4
+2025-08-31 12:09:51,100 - INFO - Converting interval predictions to DataFrame
+2025-08-31 12:09:51,180 - INFO - Filtered intervals to 70663 rows using decoding method: viterbi
+2025-08-31 12:09:51,180 - INFO - Grouping intervals by transcript
+2025-08-31 12:09:51,183 - INFO - Filtered out 0 transcripts below minimum length of 3bp
+2025-08-31 12:09:51,183 - INFO - Retained 3748 transcripts
+
+  0%|          | 0/3748 [00:00<?, ?it/s]
+  1%|          | 42/3748 [00:00<00:08, 417.07it/s]
+  2%|▏         | 86/3748 [00:00<00:08, 427.03it/s]
+  3%|▎         | 130/3748 [00:00<00:08, 431.53it/s]
+  5%|▍         | 174/3748 [00:00<00:08, 432.03it/s]
+  6%|▌         | 218/3748 [00:00<00:08, 432.43it/s]
+  7%|▋         | 262/3748 [00:00<00:08, 432.26it/s]
+  8%|▊         | 306/3748 [00:00<00:07, 432.56it/s]
+  9%|▉         | 350/3748 [00:00<00:07, 433.84it/s]
+ 11%|█         | 394/3748 [00:00<00:07, 433.45it/s]
+ 12%|█▏        | 438/3748 [00:01<00:07, 433.47it/s]
+ 13%|█▎        | 482/3748 [00:01<00:07, 432.97it/s]
+ 14%|█▍        | 526/3748 [00:01<00:07, 432.52it/s]
+ 15%|█▌        | 570/3748 [00:01<00:07, 433.03it/s]
+ 16%|█▋        | 614/3748 [00:01<00:07, 433.26it/s]
+ 18%|█▊        | 658/3748 [00:01<00:07, 433.03it/s]
+ 19%|█▊        | 702/3748 [00:01<00:07, 431.92it/s]
+ 20%|█▉        | 746/3748 [00:01<00:06, 432.54it/s]
+ 21%|██        | 790/3748 [00:01<00:06, 432.79it/s]
+ 22%|██▏       | 834/3748 [00:01<00:06, 432.99it/s]
+ 23%|██▎       | 878/3748 [00:02<00:06, 432.48it/s]
+ 25%|██▍       | 922/3748 [00:02<00:06, 432.52it/s]
+ 26%|██▌       | 966/3748 [00:02<00:06, 431.18it/s]
+ 27%|██▋       | 1010/3748 [00:02<00:06, 429.04it/s]
+ 28%|██▊       | 1053/3748 [00:02<00:06, 427.38it/s]
+ 29%|██▉       | 1097/3748 [00:02<00:06, 428.82it/s]
+ 30%|███       | 1141/3748 [00:02<00:06, 430.20it/s]
+ 32%|███▏      | 1185/3748 [00:02<00:05, 431.37it/s]
+ 33%|███▎      | 1229/3748 [00:02<00:05, 431.57it/s]
+ 34%|███▍      | 1273/3748 [00:02<00:05, 432.32it/s]
+ 35%|███▌      | 1317/3748 [00:03<00:05, 433.14it/s]
+ 36%|███▋      | 1361/3748 [00:03<00:05, 433.90it/s]
+ 37%|███▋      | 1405/3748 [00:03<00:05, 433.73it/s]
+ 39%|███▊      | 1449/3748 [00:03<00:05, 433.92it/s]
+ 40%|███▉      | 1493/3748 [00:03<00:05, 433.98it/s]
+ 41%|████      | 1537/3748 [00:03<00:05, 434.92it/s]
+ 42%|████▏     | 1581/3748 [00:03<00:04, 434.30it/s]
+ 43%|████▎     | 1625/3748 [00:03<00:04, 434.71it/s]
+ 45%|████▍     | 1669/3748 [00:03<00:04, 434.79it/s]
+ 46%|████▌     | 1713/3748 [00:03<00:04, 435.02it/s]
+ 47%|████▋     | 1757/3748 [00:04<00:04, 433.93it/s]
+ 48%|████▊     | 1801/3748 [00:04<00:04, 433.86it/s]
+ 49%|████▉     | 1845/3748 [00:04<00:04, 434.30it/s]
+ 50%|█████     | 1889/3748 [00:04<00:04, 433.77it/s]
+ 52%|█████▏    | 1933/3748 [00:04<00:04, 433.15it/s]
+ 53%|█████▎    | 1977/3748 [00:04<00:04, 433.51it/s]
+ 54%|█████▍    | 2021/3748 [00:04<00:03, 432.68it/s]
+ 55%|█████▌    | 2065/3748 [00:04<00:03, 433.33it/s]
+ 56%|█████▋    | 2109/3748 [00:04<00:03, 433.20it/s]
+ 57%|█████▋    | 2153/3748 [00:04<00:03, 433.83it/s]
+ 59%|█████▊    | 2197/3748 [00:05<00:03, 434.26it/s]
+ 60%|█████▉    | 2241/3748 [00:05<00:03, 434.53it/s]
+ 61%|██████    | 2285/3748 [00:05<00:03, 434.70it/s]
+ 62%|██████▏   | 2329/3748 [00:05<00:03, 435.23it/s]
+ 63%|██████▎   | 2373/3748 [00:05<00:03, 435.25it/s]
+ 64%|██████▍   | 2417/3748 [00:05<00:03, 435.03it/s]
+ 66%|██████▌   | 2461/3748 [00:05<00:02, 435.40it/s]
+ 67%|██████▋   | 2505/3748 [00:05<00:02, 435.21it/s]
+ 68%|██████▊   | 2549/3748 [00:05<00:02, 435.25it/s]
+ 69%|██████▉   | 2593/3748 [00:05<00:02, 434.13it/s]
+ 70%|███████   | 2637/3748 [00:06<00:02, 433.97it/s]
+ 72%|███████▏  | 2681/3748 [00:06<00:02, 434.06it/s]
+ 73%|███████▎  | 2725/3748 [00:06<00:02, 434.09it/s]
+ 74%|███████▍  | 2769/3748 [00:06<00:02, 434.09it/s]
+ 75%|███████▌  | 2813/3748 [00:06<00:02, 434.59it/s]
+ 76%|███████▌  | 2857/3748 [00:06<00:02, 434.57it/s]
+ 77%|███████▋  | 2901/3748 [00:06<00:01, 434.80it/s]
+ 79%|███████▊  | 2945/3748 [00:06<00:01, 434.37it/s]
+ 80%|███████▉  | 2989/3748 [00:07<00:02, 304.05it/s]
+ 81%|████████  | 3032/3748 [00:07<00:02, 332.02it/s]
+ 82%|████████▏ | 3075/3748 [00:07<00:01, 356.05it/s]
+ 83%|████████▎ | 3118/3748 [00:07<00:01, 374.82it/s]
+ 84%|████████▍ | 3162/3748 [00:07<00:01, 390.62it/s]
+ 86%|████████▌ | 3206/3748 [00:07<00:01, 402.44it/s]
+ 87%|████████▋ | 3250/3748 [00:07<00:01, 411.48it/s]
+ 88%|████████▊ | 3294/3748 [00:07<00:01, 417.61it/s]
+ 89%|████████▉ | 3338/3748 [00:07<00:00, 422.25it/s]
+ 90%|█████████ | 3382/3748 [00:07<00:00, 425.64it/s]
+ 91%|█████████▏| 3426/3748 [00:08<00:00, 427.96it/s]
+ 93%|█████████▎| 3470/3748 [00:08<00:00, 428.99it/s]
+ 94%|█████████▍| 3514/3748 [00:08<00:00, 430.54it/s]
+ 95%|█████████▍| 3558/3748 [00:08<00:00, 431.94it/s]
+ 96%|█████████▌| 3602/3748 [00:08<00:00, 433.04it/s]
+ 97%|█████████▋| 3646/3748 [00:08<00:00, 432.43it/s]
+ 98%|█████████▊| 3690/3748 [00:08<00:00, 433.01it/s]
+100%|█████████▉| 3734/3748 [00:08<00:00, 432.58it/s]
+100%|██████████| 3748/3748 [00:08<00:00, 425.94it/s]
+2025-08-31 12:09:59,986 - INFO - Grouped intervals into 3748 transcripts/genes.
+2025-08-31 12:09:59,987 - INFO - Generating GFF3 output for 3748 genes on 4
+2025-08-31 12:10:02,501 - INFO - Writing 36062 lines to /tmp/results/pipeline/predictions__raw.gff
+2025-08-31 12:10:02,509 - INFO - GFF export complete
+python scripts/gff.py filter_to_min_feature_length \
+  --input /tmp/results/pipeline/predictions__raw.gff \
+  --output /tmp/results/pipeline/predictions__raw__feat_len_2.gff \
+  --feature-types "five_prime_UTR,three_prime_UTR,CDS" \
+  --min-length 2
+2025-08-31 12:10:04,369 - INFO - Filtering /tmp/results/pipeline/predictions__raw.gff to remove ['five_prime_UTR', 'three_prime_UTR', 'CDS'] features shorter than 2 bp
+2025-08-31 12:10:04,369 - INFO - Loading GFF file /tmp/results/pipeline/predictions__raw.gff
+2025-08-31 12:10:04,430 - INFO - Loading complete: 36061 records found
+2025-08-31 12:10:04,434 - INFO - Validated feature types: ['CDS', 'five_prime_UTR', 'three_prime_UTR'] (all valid)
+2025-08-31 12:10:04,436 - INFO - Found 198 small features to remove
+2025-08-31 12:10:21,409 - INFO - Boundary updates:
+2025-08-31 12:10:21,409 - INFO -   - Genes: 150/3748 (4.0%) had boundaries updated
+2025-08-31 12:10:21,409 - INFO -   - Transcripts: 150/3748 (4.0%) had boundaries updated
+2025-08-31 12:10:21,409 - INFO - Writing GFF to /tmp/results/pipeline/predictions__raw__feat_len_2.gff
+2025-08-31 12:10:21,493 - INFO - Complete: 35863 records written
+2025-08-31 12:10:21,493 - INFO - Filter complete: 198 features removed, 35863/36061 records retained
+python scripts/gff.py filter_to_min_gene_length \
+  --input /tmp/results/pipeline/predictions__raw__feat_len_2.gff \
+  --output /tmp/results/pipeline/predictions__raw__feat_len_2__gene_len_30.gff \
+  --min-length 30
+2025-08-31 12:10:22,585 - INFO - Filtering /tmp/results/pipeline/predictions__raw__feat_len_2.gff to remove genes shorter than 30 bp
+2025-08-31 12:10:22,586 - INFO - Loading GFF file /tmp/results/pipeline/predictions__raw__feat_len_2.gff
+2025-08-31 12:10:22,653 - INFO - Loading complete: 35863 records found
+2025-08-31 12:10:22,659 - INFO - Found 3748 gene features to check for length
+2025-08-31 12:10:22,659 - INFO - Found 2 genes shorter than 30 bp
+2025-08-31 12:10:22,667 - INFO - Removing 2 genes directly (too short)
+2025-08-31 12:10:22,668 - INFO - Removing 4 features indirectly (parent gene too short)
+2025-08-31 12:10:22,668 - INFO - Total features removed: 6
+2025-08-31 12:10:22,668 - INFO - Writing GFF to /tmp/results/pipeline/predictions__raw__feat_len_2__gene_len_30.gff
+2025-08-31 12:10:22,744 - INFO - Complete: 35857 records written
+2025-08-31 12:10:22,744 - INFO - Filter complete: 35857/35863 records retained
+python scripts/gff.py filter_to_valid_genes \
+  --input /tmp/results/pipeline/predictions__raw__feat_len_2__gene_len_30.gff \
+  --output /tmp/results/pipeline/predictions__raw__feat_len_2__gene_len_30__has_req_feats.gff \
+  --require-utrs yes
+2025-08-31 12:11:10,557 - INFO - Filtering /tmp/results/pipeline/predictions__raw__feat_len_2__gene_len_30.gff to keep only valid transcripts and genes
+2025-08-31 12:11:10,557 - INFO - Requiring five_prime_UTR, CDS, and three_prime_UTR for valid transcripts
+2025-08-31 12:11:10,557 - INFO - Loading GFF file /tmp/results/pipeline/predictions__raw__feat_len_2__gene_len_30.gff
+2025-08-31 12:11:10,618 - INFO - Loading complete: 35857 records found
+2025-08-31 12:11:10,623 - INFO - Found 3746 mRNA features
+2025-08-31 12:11:15,173 - INFO - Found 3605 valid mRNAs and 141 invalid mRNAs
+2025-08-31 12:11:15,181 - INFO - Removed 141 invalid mRNAs, 449 child features, 590 total features
+2025-08-31 12:11:15,182 - INFO - Found 3746 gene features
+2025-08-31 12:11:15,185 - INFO - Found 141 genes with no valid transcripts
+2025-08-31 12:11:15,190 - INFO - Removed 141 invalid genes, 0 child features, 141 total features
+2025-08-31 12:11:15,190 - INFO - Writing GFF to /tmp/results/pipeline/predictions__raw__feat_len_2__gene_len_30__has_req_feats.gff
+2025-08-31 12:11:15,263 - INFO - Complete: 35126 records written
+2025-08-31 12:11:15,264 - INFO - Filter complete: 35126/35857 records retained
+cp /tmp/results/pipeline/predictions__raw__feat_len_2__gene_len_30__has_req_feats.gff /tmp/results/predictions.gff

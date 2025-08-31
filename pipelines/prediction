@@ -1,11 +1,15 @@
 # Input variables
 INPUT_FILE ?=
 OUTPUT_DIR ?=
-REQUIRE_UTRS ?= true
+SPECIES_ID ?=
+CHR_ID ?=
+REQUIRE_UTRS ?= yes
 LAUNCHER ?= python
+PRED_BATCH_SIZE ?= 32
+PRED_DTYPE ?= bfloat16
 
 # Model configuration
-HEAD_MODEL_PATH ?=
+HEAD_MODEL_PATH ?= plantcad/GeneCAD-l8-d768-PC2-Small
 BASE_MODEL_PATH ?= kuleshov-group/PlantCAD2-Small-l24-d0768
 
 # Pipeline directory structure
@@ -30,20 +34,25 @@ help:
 	@echo "  clean - Remove all generated files"
 	@echo ""
 	@echo "Required variables:"
-	@echo "  INPUT_FILE - Path to input GFF file"
+	@echo "  INPUT_FILE - Path to input FASTA file"
+	@echo "  SPECIES_ID - Species identifier"
+	@echo "  CHR_ID - Chromosome identifier"
 	@echo "  HEAD_MODEL_PATH - Path to GeneCAD model checkpoint"
 	@echo "  OUTPUT_DIR - Output directory for results"
 	@echo ""
 	@echo "Optional variables:"
-	@echo "  REQUIRE_UTRS - Require UTRs in final output (default: true)"
+	@echo "  REQUIRE_UTRS - Require UTRs in final output (default: yes)"
 	@echo "  BASE_MODEL_PATH - Path to PlantCAD model checkpoint (default: kuleshov-group/PlantCAD2-Small-l24-d0768)"
 	@echo "  LAUNCHER - Command launcher for GPU jobs (default: python)"
+	@echo "  PRED_BATCH_SIZE - Batch size for prediction (default: 32)"
 
-# Extract sequences from input GFF
+# Extract sequences from input FASTA file
 $(PIPELINE_DIR)/sequences.zarr: $(INPUT_FILE)
 	@mkdir -p $(PIPELINE_DIR)
-	python scripts/extract.py extract_fasta_sequences \
-	  --input-file $(INPUT_FILE) \
+	python scripts/extract.py extract_fasta_file \
+	  --species-id $(SPECIES_ID) \
+	  --fasta-file $(INPUT_FILE) \
+	  --chrom-map "$(CHR_ID):$(CHR_ID)" \
 	  --tokenizer-path $(BASE_MODEL_PATH) \
 	  --output $(PIPELINE_DIR)/sequences.zarr
 
@@ -54,7 +63,10 @@ $(PIPELINE_DIR)/predictions.zarr: $(PIPELINE_DIR)/sequences.zarr
 	  --output-dir $(PIPELINE_DIR)/predictions.zarr \
 	  --model-path $(BASE_MODEL_PATH) \
 	  --model-checkpoint $(HEAD_MODEL_PATH) \
-	  --batch-size 32
+	  --species-id $(SPECIES_ID) \
+	  --chromosome-id $(CHR_ID) \
+	  --batch-size $(PRED_BATCH_SIZE) \
+	  --dtype $(PRED_DTYPE)
 
 # Detect feature intervals from token-level predictions
 $(PIPELINE_DIR)/intervals.zarr: $(PIPELINE_DIR)/predictions.zarr
@@ -88,7 +100,7 @@ $(PIPELINE_DIR)/predictions__raw__feat_len_2__gene_len_30.gff: $(PIPELINE_DIR)/p
 	  --output $(PIPELINE_DIR)/predictions__raw__feat_len_2__gene_len_30.gff \
 	  --min-length 30
 
-# Filter to genes with at least one CDS exon if configured, both a 5' and 3' UTR
+# Filter to genes with at least one CDS exon and if configured, both a 5' and 3' UTR
 $(PIPELINE_DIR)/predictions__raw__feat_len_2__gene_len_30__has_req_feats.gff: $(PIPELINE_DIR)/predictions__raw__feat_len_2__gene_len_30.gff
 	python scripts/gff.py filter_to_valid_genes \
 	  --input $(PIPELINE_DIR)/predictions__raw__feat_len_2__gene_len_30.gff \
