@@ -606,14 +606,14 @@ def get_evaluation_interval_metrics(intervals: pd.DataFrame) -> pd.Series:
 
 
 # -------------------------------------------------------------------------------------------------
-# Prediction utilities
+# Window utilities
 # -------------------------------------------------------------------------------------------------
 
 
 def create_sequence_windows(
     sequence: npt.ArrayLike, window_size: int, stride: int, pad_value: int = 0
 ) -> Iterator[tuple[npt.ArrayLike, tuple[int, int], tuple[int, int]]]:
-    """Create windows for strided prediction across a sequence.
+    """Create windows for mutually exclusive, collectively exhaustive operations on a sequence.
 
     Parameters
     ----------
@@ -628,7 +628,7 @@ def create_sequence_windows(
             - chunk: Sequence chunk of shape (window_size, ...) from first dimension slice of `sequence`;
                 this length is guaranteed for all chunks through the use of padding where necessary
             - local_window: The local window boundaries describing what part of `chunk` is valid; e.g.
-                all `chunk[slice(*local_window)]` subarrays are collectively exhaustive and mutually exclusive
+                all `chunk[slice(*local_window)]` subarrays are mutually exclusive and collectively exhaustive
                 across the original sequence
             - global_window: The global window boundaries describing what part of `chunk` is valid
                 within the context of the entire sequence; e.g. `sequence[slice(*global_window)]` is
@@ -642,7 +642,7 @@ def create_sequence_windows(
     padded_sequence = np.pad(
         sequence, pad_width=pad_width, mode="constant", constant_values=pad_value
     )
-    windows = create_prediction_windows(len(padded_sequence), window_size, stride)
+    windows = create_index_windows(len(padded_sequence), window_size, stride)
     global_bounds, local_bounds = windows.T[:2], windows.T[2:]
     local_bounds = np.clip(local_bounds, *bounds)
     for start, stop, v_start, v_stop in zip(*global_bounds, *local_bounds):
@@ -664,12 +664,12 @@ def create_sequence_windows(
         yield chunk, local_window, global_window
 
 
-def create_prediction_windows(
+def create_index_windows(
     sequence_length: int,
     window_size: int,
     stride: int,
 ) -> np.ndarray:
-    """Create windows for strided prediction across a sequence.
+    """Create indexes for mutually exclusive, collectively exhaustive operations on a sequence.
 
     Parameters
     ----------
@@ -687,7 +687,8 @@ def create_prediction_windows(
         Array of shape (n, 4) with columns: [starts, stops, v_starts, v_stops]
         where:
         - starts, stops: full window boundaries
-        - v_starts, v_stops: valid region boundaries within each window
+        - v_starts, v_stops: valid region boundaries within each window that cumulatively
+            define mutually exclusive, collectively exhaustive slices
     """
     if sequence_length % 2 != 0:
         raise ValueError(f"sequence_length must be even, got {sequence_length=}")
@@ -739,6 +740,189 @@ def create_prediction_windows(
 
     # Stack into a (n, 4) array
     return np.column_stack((starts, stops, v_starts, v_stops))
+
+
+def expand_sequence_slice(
+    start: int, stop: int, margin: int, sequence_length: int
+) -> tuple[tuple[int, int], tuple[int, int]]:
+    """Expand a slice on a sequence by a margin.
+
+    This is useful for "expanding" an existing slice on a sequence for operations requiring
+    overlapping windows.  The expansion in this case never pads the sequence but instead
+    truncates slices at sequence boundaries.
+
+    Parameters
+    ----------
+    start : int
+        Start index of the original slice (inclusive)
+    stop : int
+        Stop index of the original slice (exclusive)
+    margin : int
+        Number of positions to expand on each side
+    sequence_length : int
+        Total length of the sequence (for boundary checking)
+
+    Returns
+    -------
+    tuple[tuple[int, int], tuple[int, int]]
+        First tuple: (window_start, window_stop) - the expanded slice bounds for extracting from the sequence
+        Second tuple: (trim_start, trim_stop) - slice bounds within the extracted window to get back original slice
+
+    Examples
+    --------
+    Extract original slice [10:20] with margin=5 from a sequence of length 100:
+    >>> window_slice, trim_slice = expand_sequence_slice(10, 20, 5, 100)
+    >>> window_slice  # Extract sequence[5:25] (expanded by 5 on each side)
+    (5, 25)
+    >>> trim_slice    # Then take expanded_data[5:15] to get back original [10:20]
+    (5, 15)
+
+    When expansion hits left boundary (start=2, margin=5):
+    >>> window_slice, trim_slice = expand_sequence_slice(2, 8, 5, 100)
+    >>> window_slice  # Extract sequence[0:13] (can't expand past start)
+    (0, 13)
+    >>> trim_slice    # Then take expanded_data[2:8] to get back original [2:8]
+    (2, 8)
+
+    Usage pattern:
+    >>> start, stop, margin = 10, 20, 5
+    >>> window_slice, trim_slice = expand_sequence_slice(start, stop, margin, len(sequence))
+    >>> expanded_data = sequence[slice(*window_slice)]  # Get padded window
+    >>> original_data = expanded_data[slice(*trim_slice)]  # Trim back to original size
+    >>> # original_data is equivalent to sequence[start:stop]
+    """
+    # Expand the slice by margin, respecting sequence boundaries
+    padded_start = max(0, start - margin)
+    padded_stop = min(sequence_length, stop + margin)
+
+    # Calculate where to trim within the expanded slice to get back to original window
+    trim_start = start - padded_start
+    trim_stop = trim_start + (stop - start)
+
+    return (padded_start, padded_stop), (trim_start, trim_stop)
+
+
+# -------------------------------------------------------------------------------------------------
+# Partitioning utilities
+# -------------------------------------------------------------------------------------------------
+
+
+def partition_sequence(
+    separators: np.ndarray,
+    min_partition_length: int,
+    min_separator_length: int,
+) -> list[slice]:
+    """Partition a sequence based on separator regions.
+
+    Parameters
+    ----------
+    separators : np.ndarray
+        1D array containing only 0 or 1 values, where 1 indicates a position
+        that can be used to break the sequence apart (e.g. intergenic regions).
+    min_partition_length : int
+        Minimum length that a resulting partition can be.
+    min_separator_length : int
+        Minimum length of consecutive separators required to create a partition boundary.
+
+    Returns
+    -------
+    list[slice]
+        List of slice objects defining the partitions of the original sequence.
+
+    Examples
+    --------
+    >>> separators = np.array([0, 0, 1, 1, 1, 0, 0, 0, 1, 1, 0, 0])
+    >>> partition_sequence(separators, min_partition_length=4, min_separator_length=2)
+    [slice(0, 4, None), slice(4, 12, None)]
+    """
+    # Validate inputs
+    if separators.ndim != 1:
+        raise ValueError(f"separators must be 1D array, got shape {separators.shape}")
+
+    if not np.isin(separators, [0, 1]).all():
+        raise ValueError("separators must contain only 0 or 1 values")
+
+    if min_partition_length <= 0:
+        raise ValueError(
+            f"min_partition_length must be positive, got {min_partition_length}"
+        )
+
+    if min_separator_length <= 0:
+        raise ValueError(
+            f"min_separator_length must be positive, got {min_separator_length}"
+        )
+
+    sequence_length = len(separators)
+
+    # Find separator intervals and filter by minimum length
+    intervals = find_intervals(separators)
+    if intervals.size == 0:
+        return [slice(0, sequence_length)]
+
+    starts, ends = intervals
+    valid_separators = (ends - starts + 1) >= min_separator_length
+
+    if not valid_separators.any():
+        return [slice(0, sequence_length)]
+
+    # Get center points of valid separators as break points
+    valid_starts = starts[valid_separators]
+    valid_ends = ends[valid_separators]
+    break_points = (valid_starts + valid_ends + 1) // 2
+
+    # Create boundaries and ensure minimum partition lengths
+    boundaries = np.concatenate([[0], break_points, [sequence_length]])
+    boundaries = np.sort(np.unique(boundaries))
+
+    # Generate partitions using numba-accelerated function
+    partition_bounds = _merge_small_partitions(boundaries, min_partition_length)
+
+    # Convert to slices and validate
+    partitions = [slice(start, end) for start, end in partition_bounds]
+
+    # Ensure partitions are mutually exclusive and collectively exhaustive
+    if partitions:
+        assert partitions[0].start == 0, (
+            f"First partition must start at 0, got {partitions[0].start}"
+        )
+        assert partitions[-1].stop == sequence_length, (
+            f"Last partition must end at {sequence_length}, got {partitions[-1].stop}"
+        )
+
+        for i in range(1, len(partitions)):
+            assert partitions[i - 1].stop == partitions[i].start, (
+                f"Partitions must be contiguous: partition {i - 1} ends at {partitions[i - 1].stop}, "
+                f"partition {i} starts at {partitions[i].start}"
+            )
+
+    return partitions
+
+
+@njit
+def _merge_small_partitions(
+    boundaries: np.ndarray, min_partition_length: int
+) -> np.ndarray:
+    """Merge partitions that are too small using numba acceleration."""
+    partitions = []
+    start = 0
+
+    for i in range(1, len(boundaries)):
+        end = boundaries[i]
+        # Create partition if it's the last one or meets minimum length
+        if i == len(boundaries) - 1 or end - start >= min_partition_length:
+            partitions.append((start, end))
+            start = end
+
+    # Convert to numpy array
+    if len(partitions) == 0:
+        return np.empty((0, 2), dtype=np.int64)
+
+    result = np.empty((len(partitions), 2), dtype=np.int64)
+    for i, (start, end) in enumerate(partitions):
+        result[i, 0] = start
+        result[i, 1] = end
+
+    return result
 
 
 # -------------------------------------------------------------------------------------------------

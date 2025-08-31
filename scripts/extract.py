@@ -67,7 +67,10 @@ def is_longest_transcript(feature: SeqFeature) -> bool:
 
 
 def extract_gff_features(
-    input_dir: str, species_ids: list[str], output_path: str
+    input_dir: str,
+    species_ids: list[str],
+    output_path: str,
+    skip_exon_features: bool = True,
 ) -> None:
     """Extract data from GFF file(s) into a structured DataFrame.
 
@@ -81,6 +84,9 @@ def extract_gff_features(
         List of species IDs to process
     output_path : str
         Path to output parquet file
+    skip_exon_features : bool, optional
+        Whether to skip exon features during extraction (default: True).
+        Exon features are structural and not used for sequence modeling.
     """
     # Create output directory if it doesn't exist
     output_dir = os.path.dirname(output_path)
@@ -95,7 +101,7 @@ def extract_gff_features(
     for config in species_configs:
         input_path = os.path.join(input_dir, config.gff.filename)
         logger.info(f"Processing file for {config.name} ({config.id}): {input_path}")
-        df = _extract_gff_features(input_path, config)
+        df = _extract_gff_features(input_path, config, skip_exon_features)
         dfs.append(df)
         logger.info(f"Extracted {df.shape[0]} rows from {input_path}")
 
@@ -119,7 +125,9 @@ def extract_gff_features(
         logger.warning("No data was extracted from the input files")
 
 
-def _extract_gff_features(path: str, species_config: SpeciesConfig) -> pd.DataFrame:
+def _extract_gff_features(
+    path: str, species_config: SpeciesConfig, skip_exon_features: bool = True
+) -> pd.DataFrame:
     """Extract data from a single GFF file into a structured DataFrame."""
     logger.info(f"Parsing GFF file: {path}")
 
@@ -190,6 +198,10 @@ def _extract_gff_features(path: str, species_config: SpeciesConfig) -> pd.DataFr
 
                 # Process each feature
                 for feature in transcript.sub_features:
+                    # Skip exon features if requested (they are structural, not modeling features)
+                    if skip_exon_features and feature.type == "exon":
+                        continue
+
                     if feature.type not in [
                         GffFeatureType.FIVE_PRIME_UTR,
                         GffFeatureType.CDS,
@@ -789,6 +801,12 @@ def main():
     gff_parser.add_argument(
         "--output", required=True, help="Path to output parquet file"
     )
+    gff_parser.add_argument(
+        "--skip-exon-features",
+        choices=["yes", "no"],
+        default="yes",
+        help="Skip exon features during extraction (default: yes). Exon features are structural and not used for sequence modeling.",
+    )
 
     # Extract FASTA sequences command
     fasta_parser = subparsers.add_parser(
@@ -819,7 +837,12 @@ def main():
     args = parser.parse_args()
 
     if args.command == "extract_gff_features":
-        extract_gff_features(args.input_dir, args.species_id, args.output)
+        extract_gff_features(
+            args.input_dir,
+            args.species_id,
+            args.output,
+            args.skip_exon_features == "yes",
+        )
     elif args.command == "extract_fasta_sequences":
         extract_fasta_sequences(
             args.input_dir,

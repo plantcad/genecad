@@ -279,6 +279,7 @@ osativa_config = SpeciesConfig(
     split=DataSplitConfig(use_in_training=True, use_in_validation=True, use_in_evaluation=False)
 )
 
+# Ananas comosus (Pineapple) configuration
 acomosus_config = SpeciesConfig(
     id="Acomosus",
     name="Ananas comosus",
@@ -291,6 +292,7 @@ acomosus_config = SpeciesConfig(
     split=DataSplitConfig(use_in_training=True, use_in_validation=False, use_in_evaluation=False)
 )
 
+# Aquilegia coerulea (Columbine) configuration
 acoerulea_config = SpeciesConfig(
     id="Acoerulea",
     name="Aquilegia coerulea",
@@ -303,7 +305,7 @@ acoerulea_config = SpeciesConfig(
     split=DataSplitConfig(use_in_training=True, use_in_validation=False, use_in_evaluation=False)
 )
 
-# Asparagus officinalis configuration
+# Asparagus officinalis (Asparagus) configuration
 aofficinalis_config = SpeciesConfig(
     id="Aofficinalis",
     name="Asparagus officinalis",
@@ -316,7 +318,7 @@ aofficinalis_config = SpeciesConfig(
     split=DataSplitConfig(use_in_training=True, use_in_validation=False, use_in_evaluation=False)
 )
 
-# Betula platyphylla configuration
+# Betula platyphylla (Japanese white birch) configuration
 bplatyphylla_config = SpeciesConfig(
     id="Bplatyphylla",
     name="Betula platyphylla",
@@ -329,7 +331,7 @@ bplatyphylla_config = SpeciesConfig(
     split=DataSplitConfig(use_in_training=True, use_in_validation=False, use_in_evaluation=False)
 )
 
-# Beta vulgaris configuration
+# Beta vulgaris (Beet) configuration
 bvulgaris_config = SpeciesConfig(
     id="Bvulgaris",
     name="Beta vulgaris",
@@ -350,7 +352,7 @@ bvulgaris_config = SpeciesConfig(
     split=DataSplitConfig(use_in_training=True, use_in_validation=False, use_in_evaluation=False)
 )
 
-# Carya illinoinensis configuration
+# Carya illinoinensis (Pecan) configuration
 cillinoinensis_config = SpeciesConfig(
     id="Cillinoinensis",
     name="Carya illinoinensis",
@@ -362,6 +364,44 @@ cillinoinensis_config = SpeciesConfig(
     windows=SpeciesWindowsConfig(filename="Cillinoinensis_573_v1.0_windows.npy"),
     split=DataSplitConfig(use_in_training=True, use_in_validation=False, use_in_evaluation=False)
 )
+
+# Glycine max (Soybean) configuration
+gmax_config = SpeciesConfig(
+    id="Gmax",
+    name="Glycine max",
+    chromosome_map={
+        f"Gm{i:02d}": f"chr{i}" for i in range(1, 21)
+    },
+    gff=SpeciesGffConfig(filename="Gmax_880_Wm82.a6.v1.gene.gff3"),
+    fasta=SpeciesFastaConfig(filename="Gmax_880_v6.0.fa.gz"),
+    split=DataSplitConfig(use_in_training=True, use_in_validation=False, use_in_evaluation=False)
+)
+
+# Hordeum vulgare (Barley) configuration
+hvulgare_config = SpeciesConfig(
+    id="Hvulgare",
+    name="Hordeum vulgare",
+    chromosome_map={
+        **{f"chr{i}H": f"chr{i}" for i in range(1, 8)},
+        "chrUn": "chr8",
+    },
+    gff=SpeciesGffConfig(filename="HvulgareMorex_702_V3.gene.gff3"),
+    fasta=SpeciesFastaConfig(filename="HvulgareMorex_702_V3.fa.gz"),
+    split=DataSplitConfig(use_in_training=True, use_in_validation=False, use_in_evaluation=False)
+)
+
+# Populus trichocarpa (Black cottonwood) configuration
+ptrichocarpa_config = SpeciesConfig(
+    id="Ptrichocarpa",
+    name="Populus trichocarpa",
+    chromosome_map={
+        f"Chr{i:02d}": f"chr{i}" for i in range(1, 20)
+    },
+    gff=SpeciesGffConfig(filename="Ptrichocarpa_533_v4.1.gene.gff3"),
+    fasta=SpeciesFastaConfig(filename="Ptrichocarpa_533_v4.0.fa.gz"),
+    split=DataSplitConfig(use_in_training=True, use_in_validation=False, use_in_evaluation=False)
+)
+
 # fmt: on
 
 # Species configuration registry
@@ -380,4 +420,7 @@ SPECIES_CONFIGS = {
     "Bplatyphylla": bplatyphylla_config,
     "Bvulgaris": bvulgaris_config,
     "Cillinoinensis": cillinoinensis_config,
+    "Gmax": gmax_config,
+    "Hvulgare": hvulgare_config,
+    "Ptrichocarpa": ptrichocarpa_config,
 }

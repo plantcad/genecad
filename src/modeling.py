@@ -181,6 +181,7 @@ class GeneClassifierConfig:
     base_encoder_path: str | None = None
     base_encoder_revision: str | None = None
     base_encoder_frozen: bool = True
+    base_encoder_randomize: bool = False
 
     train_eval_frequency: Optional[int] = 250
     enable_visualization: bool = True
@@ -329,7 +330,9 @@ class GeneClassifier(L.LightningModule):
             # If path is not provided, base encoder embeddings will be required as inputs
             if not config.use_precomputed_base_encodings:
                 self.base_encoder = load_base_model(
-                    config.base_encoder_path, revision=config.base_encoder_revision
+                    config.base_encoder_path,
+                    revision=config.base_encoder_revision,
+                    randomize=config.base_encoder_randomize,
                 )
                 if config.base_encoder_frozen:
                     self.base_encoder = self.base_encoder.eval()

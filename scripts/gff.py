@@ -464,9 +464,7 @@ def filter_to_min_feature_length(
     logger.info(f"Found {len(small_feature_ids)} small features to remove")
 
     # Remove small features
-    features_filtered = features[
-        ~features.index.isin(features[small_features_mask].index)
-    ]
+    features_filtered = features[~small_features_mask]
 
     # Group features by gene and update boundaries
     genes = features_filtered[features_filtered["type"] == GffFeatureType.GENE.value]
@@ -541,11 +539,15 @@ def filter_to_min_feature_length(
 
     # Log statistics
     logger.info("Boundary updates:")
-    logger.info(
-        f"  - Genes: {genes_updated}/{total_genes} ({genes_updated / total_genes * 100:.1f}%) had boundaries updated"
+    genes_percentage = (genes_updated / total_genes * 100) if total_genes > 0 else 0
+    transcripts_percentage = (
+        (transcripts_updated / total_transcripts * 100) if total_transcripts > 0 else 0
     )
     logger.info(
-        f"  - Transcripts: {transcripts_updated}/{total_transcripts} ({transcripts_updated / total_transcripts * 100:.1f}%) had boundaries updated"
+        f"  - Genes: {genes_updated}/{total_genes} ({genes_percentage:.1f}%) had boundaries updated"
+    )
+    logger.info(
+        f"  - Transcripts: {transcripts_updated}/{total_transcripts} ({transcripts_percentage:.1f}%) had boundaries updated"
     )
 
     # Write filtered GFF
@@ -976,18 +978,25 @@ def evaluate_gff_files(
     logger.info("Evaluation complete")
 
 
-def summarize_gff(input_path: str) -> None:
+def summarize_gff(input_path: str, species_id: str = None) -> None:
     """Summarize the distribution of source and type fields in a GFF file.
 
     Parameters
     ----------
     input_path : str
         Path to input GFF file
+    species_id : str, optional
+        Species ID to use for getting attributes_to_drop configuration
     """
     logger.info(f"Summarizing GFF file: {input_path}")
 
+    # Get attributes to drop if species_id is provided
+    attributes_to_drop = None
+    if species_id and species_id in SPECIES_CONFIGS:
+        attributes_to_drop = SPECIES_CONFIGS[species_id].gff.attributes_to_drop
+
     # Read GFF file
-    features = load_gff(input_path)
+    features = load_gff(input_path, attributes_to_drop=attributes_to_drop)
 
     # Count source field distribution
     source_counts = features["source"].value_counts()
@@ -997,6 +1006,9 @@ def summarize_gff(input_path: str) -> None:
 
     # Count strand distribution
     strand_counts = features["strand"].value_counts()
+
+    # Count sequence ID distribution
+    seq_id_counts = features["seq_id"].value_counts()
 
     total_records = len(features)
 
@@ -1033,6 +1045,13 @@ def summarize_gff(input_path: str) -> None:
         strand_display = "+" if strand == "+" else "-" if strand == "-" else strand
         percentage = (count / total_records) * 100
         print(f"{strand_display:<10} {count:<10} {percentage:.2f}%")
+
+    print("\n=== Sequence ID Distribution ===")
+    print(f"{'Sequence ID':<30} {'Count':<10} {'Percentage':<10}")
+    print("-" * 50)
+    for seq_id, count in seq_id_counts.items():
+        percentage = (count / total_records) * 100
+        print(f"{seq_id:<30} {count:<10} {percentage:.2f}%")
 
     # Display source/strand/type combinations
     print("\n=== Source/Strand/Type Combinations ===")
@@ -1077,9 +1096,15 @@ def summarize_gff(input_path: str) -> None:
     transcript_counts[0] = len(genes_without_transcripts)
 
     # Sort by transcript count and display
-    for transcript_count, gene_count in sorted(transcript_counts.items()):
-        percentage = (gene_count / total_genes) * 100
-        print(f"{transcript_count:<20} {gene_count:<15} {percentage:.2f}%")
+    if total_genes == 0:
+        logger.warning(
+            "No gene features found in GFF file. Skipping transcript per gene distribution."
+        )
+        print("No gene features found - skipping transcript distribution analysis")
+    else:
+        for transcript_count, gene_count in sorted(transcript_counts.items()):
+            percentage = (gene_count / total_genes) * 100
+            print(f"{transcript_count:<20} {gene_count:<15} {percentage:.2f}%")
 
     # Calculate fraction of genes with a canonical transcript
     print("\n=== Canonical Transcript Annotation ===")
@@ -1347,6 +1372,213 @@ def clean_gff(
         )
 
 
+def filter_to_pc_quality_score_pass(
+    input_path: str | None = None,
+    output_path: str | None = None,
+    input_dir: str | None = None,
+    output_dir: str | None = None,
+    species_ids: list[str] | None = None,
+) -> None:
+    """Filter GFF file to remove genes and transcripts with passPlantCADFilter=0.
+
+    This function supports two interfaces:
+    1. Direct file paths (for evaluation scripts)
+    2. Directory + species_ids (for data preparation scripts)
+
+    Parameters
+    ----------
+    input_path : str, optional
+        Direct path to input GFF file
+    output_path : str, optional
+        Direct path to output GFF file
+    input_dir : str, optional
+        Directory containing input GFF files
+    output_dir : str, optional
+        Directory to write filtered GFF files
+    species_ids : list[str], optional
+        List of species IDs to determine filenames using species configuration
+    """
+    import os
+
+    # Determine which interface is being used
+    if input_path is not None and output_path is not None:
+        # Direct file path interface
+        logger.info("Using direct file path interface")
+        _apply_pc_quality_filter_to_file(input_path, output_path)
+
+    elif input_dir is not None and output_dir is not None and species_ids is not None:
+        # Species configuration interface
+        from src.config import get_species_config
+
+        logger.info(
+            f"Using species configuration interface for {len(species_ids)} species: {species_ids}"
+        )
+
+        # Create output directory if it doesn't exist
+        os.makedirs(output_dir, exist_ok=True)
+
+        # Process each species
+        for species_id in species_ids:
+            logger.info(f"Processing species: {species_id}")
+
+            # Get species configuration
+            config = get_species_config(species_id)
+
+            # Determine input and output paths using species configuration
+            # Input: from gff_tagged directory using species config filename
+            input_filename = config.gff.filename
+            final_input_path = os.path.join(input_dir, input_filename)
+
+            # Output: to gff_filtered directory using species config filename
+            output_filename = config.gff.filename
+            final_output_path = os.path.join(output_dir, output_filename)
+
+            logger.info(f"  Input: {final_input_path}")
+            logger.info(f"  Output: {final_output_path}")
+
+            # Apply PC quality filter to this species
+            _apply_pc_quality_filter_to_file(final_input_path, final_output_path)
+
+        logger.info(
+            f"Completed PC quality filtering for all {len(species_ids)} species"
+        )
+
+    else:
+        raise ValueError(
+            "Must provide either (input_path, output_path) for direct file interface "
+            "or (input_dir, output_dir, species_ids) for species configuration interface"
+        )
+
+
+def _apply_pc_quality_filter_to_file(input_path: str, output_path: str) -> None:
+    """Apply PC quality filter to a single GFF file.
+
+    Parameters
+    ----------
+    input_path : str
+        Path to input GFF file
+    output_path : str
+        Path to output GFF file
+    """
+    logger.info(
+        f"Filtering {input_path} to keep only features with passPlantCADFilter=1"
+    )
+    logger.info(f"Output will be saved to {output_path}")
+
+    # Read GFF file
+    features = load_gff(input_path)
+    original_count = features.shape[0]
+
+    # Check if passPlantCADFilter column exists
+    if "passplantcadfilter" not in features.columns:
+        raise ValueError(
+            "passPlantCADFilter column not found in GFF file. "
+            "Expected column name 'passplantcadfilter' (case-insensitive)."
+        )
+
+    # Log initial statistics
+    pc_filter_values = features["passplantcadfilter"].value_counts()
+    logger.info("Initial passPlantCADFilter distribution:")
+    for value, count in pc_filter_values.items():
+        percentage = (count / original_count) * 100
+        logger.info(f"  - passPlantCADFilter={value}: {count} ({percentage:.2f}%)")
+
+    # Step 1: Remove genes where passPlantCADFilter=0
+    genes = features[features["type"] == GffFeatureType.GENE.value]
+    genes_with_filter = genes[genes["passplantcadfilter"].notna()]
+
+    if genes_with_filter.empty:
+        logger.warning("No gene features found with passPlantCADFilter annotations")
+        genes_to_remove = set()
+    else:
+        bad_genes = genes_with_filter[genes_with_filter["passplantcadfilter"] == "0"]
+        genes_to_remove = set(bad_genes["id"].dropna())
+        logger.info(f"Found {len(genes_to_remove)} genes with passPlantCADFilter=0")
+
+    # Step 2: Remove transcripts where passPlantCADFilter=0
+    mrnas = features[features["type"] == GffFeatureType.MRNA.value]
+    mrnas_with_filter = mrnas[mrnas["passplantcadfilter"].notna()]
+
+    if mrnas_with_filter.empty:
+        logger.warning("No mRNA features found with passPlantCADFilter annotations")
+        transcripts_to_remove = set()
+    else:
+        bad_transcripts = mrnas_with_filter[
+            mrnas_with_filter["passplantcadfilter"] == "0"
+        ]
+        transcripts_to_remove = set(bad_transcripts["id"].dropna())
+        logger.info(
+            f"Found {len(transcripts_to_remove)} transcripts with passPlantCADFilter=0"
+        )
+
+    # Combine all features to remove initially
+    features_to_remove = genes_to_remove | transcripts_to_remove
+
+    # Step 3: Remove features and handle cascading removals
+    if features_to_remove:
+        features, removed_count, indirect_count = remove_features_by_id(
+            features, features_to_remove
+        )
+
+        logger.info(
+            f"Removed {len(genes_to_remove)} genes directly (passPlantCADFilter=0)"
+        )
+        logger.info(
+            f"Removed {len(transcripts_to_remove)} transcripts directly (passPlantCADFilter=0)"
+        )
+        logger.info(f"Removed {indirect_count} features indirectly (cascading removal)")
+        logger.info(f"Total features removed: {removed_count}")
+    else:
+        logger.info("No features to remove based on passPlantCADFilter")
+
+    # Step 4: Additional cascading cleanup for orphaned genes
+    # Check for genes that now have no mRNA children
+    remaining_genes = features[features["type"] == GffFeatureType.GENE.value]
+    remaining_mrnas = features[features["type"] == GffFeatureType.MRNA.value]
+
+    # Get gene IDs that have mRNA children
+    genes_with_mrnas = set(remaining_mrnas["parent"].dropna())
+
+    # Find genes without any mRNA children
+    all_gene_ids = set(remaining_genes["id"].dropna())
+    orphaned_genes = all_gene_ids - genes_with_mrnas
+
+    if orphaned_genes:
+        logger.info(
+            f"Found {len(orphaned_genes)} orphaned genes (no valid transcripts)"
+        )
+
+        # Remove orphaned genes
+        features, orphan_removed_count, orphan_indirect_count = remove_features_by_id(
+            features, orphaned_genes
+        )
+
+        logger.info(f"Removed {len(orphaned_genes)} orphaned genes")
+        logger.info(
+            f"Removed {orphan_indirect_count} features indirectly (orphaned gene cleanup)"
+        )
+        logger.info(f"Additional features removed: {orphan_removed_count}")
+
+    # Write filtered GFF
+    save_gff(output_path, features)
+
+    final_count = features.shape[0]
+    total_removed = original_count - final_count
+    removal_percentage = (total_removed / original_count) * 100
+
+    logger.info("PC quality filter complete:")
+    logger.info(f"  - Original features: {original_count}")
+    logger.info(f"  - Final features: {final_count}")
+    logger.info(f"  - Total removed: {total_removed} ({removal_percentage:.2f}%)")
+
+    # Log final feature type distribution
+    final_type_counts = features["type"].value_counts()
+    logger.info("Final feature type distribution:")
+    for feature_type, count in final_type_counts.items():
+        percentage = (count / final_count) * 100 if final_count > 0 else 0
+        logger.info(f"  - {feature_type}: {count} ({percentage:.2f}%)")
+
+
 def main() -> None:
     """Parse command line arguments and execute the appropriate function."""
     logging.basicConfig(
@@ -1537,6 +1769,11 @@ def main() -> None:
         help="Summarize the distribution of source and type fields in a GFF file",
     )
     summarize_parser.add_argument("--input", required=True, help="Input GFF file")
+    summarize_parser.add_argument(
+        "--species-id",
+        default=None,
+        help="Species ID for getting attributes_to_drop configuration",
+    )
 
     # Collect results command
     collect_parser = subparsers.add_parser(
@@ -1570,6 +1807,32 @@ def main() -> None:
         choices=["yes", "no"],
         default="yes",
         help="Remove records where end < start",
+    )
+
+    # PC quality filter command
+    pc_filter_parser = subparsers.add_parser(
+        "filter_to_pc_quality_score_pass",
+        help="Filter GFF file to remove genes and transcripts with passPlantCADFilter=0",
+    )
+    # Support both direct file paths and species configuration interfaces
+    pc_filter_parser.add_argument(
+        "--input", help="Input GFF file (direct file interface)"
+    )
+    pc_filter_parser.add_argument(
+        "--output", help="Output GFF file (direct file interface)"
+    )
+    pc_filter_parser.add_argument(
+        "--input-dir",
+        help="Directory containing input GFF files (species config interface)",
+    )
+    pc_filter_parser.add_argument(
+        "--output-dir",
+        help="Directory to write filtered GFF files (species config interface)",
+    )
+    pc_filter_parser.add_argument(
+        "--species-ids",
+        nargs="+",
+        help="List of species IDs to determine filenames (species config interface)",
     )
 
     args = parser.parse_args()
@@ -1610,7 +1873,7 @@ def main() -> None:
             args.as_percentage == "yes",
         )
     elif args.command == "summarize":
-        summarize_gff(args.input)
+        summarize_gff(args.input, species_id=args.species_id)
     elif args.command == "collect_results":
         collect_results(args.input, args.output)
     elif args.command == "clean":
@@ -1619,6 +1882,14 @@ def main() -> None:
             args.output,
             args.sort_by_start == "yes",
             args.remove_invalid_interval == "yes",
+        )
+    elif args.command == "filter_to_pc_quality_score_pass":
+        filter_to_pc_quality_score_pass(
+            input_path=args.input,
+            output_path=args.output,
+            input_dir=args.input_dir,
+            output_dir=args.output_dir,
+            species_ids=args.species_ids,
         )
     else:
         parser.print_help()

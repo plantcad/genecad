@@ -18,6 +18,7 @@ alwaysApply: true
 - This project will always run within the context of an HPC cluster, which means that by default you will be working on a login node
 - Always run scripts or other operations on the login node unless prompted to use a compute node
 - If prompted to allocate a **new** compute node, create an interactive session in the background via `idev -p gg -N 1 -n 1 -t 2:00:00 &`, potentially with instructions to use a different time limit
+- Do NOT wait for allocations with a `sleep`; begin checking for the compute node immediately
 - If prompted to use an **existing** compute node, find one via `squeue -u eczech` and use only nodes where `PARTITION` is "gg"
 - Use the same `squeue` command to find any newly allocated compute nodes; if you are ever unsure about whether to allocate a new node, check for one first using that `squeue` command
 - Execute any commands from that point on via `ssh NODE "bash -l -c 'source ~/.bashrc && source ~/.projectrc && COMMAND'"`

@@ -3,15 +3,22 @@ import argparse
 import os
 import logging
 from dataclasses import dataclass, asdict
+from concurrent.futures import ProcessPoolExecutor
 from src.dataset import (
     DEFAULT_SEQUENCE_CHUNK_SIZE,
     open_datatree,
+    list_species_contig_datatree,
     set_dimension_chunks,
     info_str,
 )
-from src.sequence import find_overlapping_intervals, convert_entity_intervals_to_labels
 import numpy as np
 from src.schema import FeatureLevel, FilterReason, RegionType, GffFeatureType
+from src.sampling import extract_label_dataset
+from src.sequence import (
+    find_overlapping_intervals,
+    convert_entity_intervals_to_labels,
+    expand_sequence_slice,
+)
 import xarray as xr
 
 logger = logging.getLogger(__name__)
@@ -917,8 +924,132 @@ def create_labels(
 # -------------------------------------------------------------------------------------------------
 
 
+def _create_sequence_dataset_group(task):
+    """Worker function to process a single group in parallel.
+
+    Parameters
+    ----------
+    task : tuple
+        Tuple containing (group_path, species_id, chrom_id, input_labels_path, input_tokens_path, output_path, chunk_size, task_id, total_tasks)
+
+    Returns
+    -------
+    dict
+        Processing statistics for this group
+    """
+    (
+        group_path,
+        species_id,
+        chrom_id,
+        input_labels_path,
+        input_tokens_path,
+        output_path,
+        chunk_size,
+        task_id,
+        total_tasks,
+    ) = task
+    prefix = f"[{species_id}/{chrom_id}]"
+    logger.info(f"{prefix} Starting processing (group {task_id}/{total_tasks})")
+
+    # Load datasets for this group on demand
+    logger.info(f"{prefix} Loading label dataset")
+    label_ds = xr.open_zarr(input_labels_path, group=group_path)
+
+    logger.info(f"{prefix} Loading token dataset")
+    token_ds = xr.open_zarr(input_tokens_path, group=group_path)
+
+    # Ensure that sequence tokens always span a longer range than labels
+    if token_ds.sizes["sequence"] < label_ds.sizes["sequence"]:
+        raise ValueError(
+            f"Group {group_path}: More labels ({label_ds.sizes['sequence']}) than tokens ({token_ds.sizes['sequence']})"
+        )
+
+    # Process in chunks for memory efficiency
+    output_group = f"{species_id}/{chrom_id}"
+    seq_size = label_ds.sizes["sequence"]
+    logger.info(
+        f"{prefix} Processing {seq_size:,} base pairs in chunks of {chunk_size:,}"
+    )
+
+    for chunk_idx, start_idx in enumerate(range(0, seq_size, chunk_size)):
+        end_idx = min(start_idx + chunk_size, seq_size)
+        logger.info(f"{prefix} Processing chunk {start_idx:,} to {end_idx:,}")
+
+        # Extract chunk from both datasets
+        raw_label_chunk = label_ds.isel(sequence=slice(start_idx, end_idx))
+        token_chunk = token_ds.isel(sequence=slice(start_idx, end_idx))
+
+        # Extract labels with padding for BILUO context, then trim back
+        window_slice, trim_slice = expand_sequence_slice(
+            start_idx, end_idx, margin=1, sequence_length=seq_size
+        )
+        padded_labels = extract_label_dataset(
+            label_ds.isel(sequence=slice(*window_slice))
+        )
+        label_chunk = padded_labels.isel(sequence=slice(*trim_slice))
+
+        # Ensure trimmed chunk has same size as original window
+        assert label_chunk.sizes["sequence"] == raw_label_chunk.sizes["sequence"], (
+            f"Label chunk size {label_chunk.sizes['sequence']} != raw chunk size {raw_label_chunk.sizes['sequence']}"
+        )
+
+        # Combine original and computed label information
+        label_chunk = xr.merge(
+            [
+                raw_label_chunk[["label_masks"]].rename(
+                    {
+                        "label_masks": "label_mask_reasons",
+                    }
+                ),
+                label_chunk,
+            ],
+            combine_attrs="drop_conflicts",
+            join="exact",
+        )
+
+        # Left join labels to tokens, implicitly dropping unannotated regions
+        # of contigs past the last known annotation
+        merged_chunk = xr.merge(
+            [label_chunk, token_chunk], combine_attrs="drop_conflicts", join="left"
+        )
+        # Ensure that the join was complete on both sides
+        assert merged_chunk.sizes["sequence"] == label_chunk.sizes["sequence"]
+
+        # Write chunk to zarr
+        # Only use append_dim for chunks after the first chunk of each group
+        if chunk_idx == 0:
+            # First chunk of this group - create new group
+            logger.info(f"{prefix} Saving chunk to {output_path}/{output_group}")
+            merged_chunk.to_zarr(
+                output_path, group=output_group, zarr_format=2, consolidated=True
+            )
+        else:
+            # Subsequent chunks of this group - append to existing group
+            logger.info(f"{prefix} Appending chunk to {output_path}/{output_group}")
+            merged_chunk.to_zarr(
+                output_path,
+                group=output_group,
+                zarr_format=2,
+                append_dim="sequence",
+                consolidated=True,
+            )
+
+    return {
+        "group": group_path,
+        "processed": True,
+        "species_id": species_id,
+        "chrom_id": chrom_id,
+        "sequence_length": seq_size,
+        "chunks_processed": len(range(0, seq_size, chunk_size)),
+    }
+
+
 def create_sequence_dataset(
-    input_labels_path: str, input_tokens_path: str, output_path: str
+    input_labels_path: str,
+    input_tokens_path: str,
+    output_path: str,
+    chunk_size: int = 100_000_000,
+    num_workers: int | None = None,
 ) -> None:
     """Merge token and label datasets into a unified dataset.
 
@@ -930,73 +1061,92 @@ def create_sequence_dataset(
         Path to input zarr file containing tokenized sequences
     output_path : str
         Path to output zarr file for the merged dataset
+    chunk_size : int, optional
+        Number of base pairs in one sequence to process per chunk for memory efficiency (default: 100M)
+    num_workers : int | None, optional
+        Number of processes to use for parallel processing (default: None for sequential processing)
     """
-    # Load both datasets using DataTree
-    logger.info(f"Loading labels from {input_labels_path}")
-    labels = open_datatree(input_labels_path)
+    # Get shared species/contig combinations from both datasets
+    logger.info("Finding shared species/contig combinations")
+    label_groups = list_species_contig_datatree(input_labels_path)
+    token_groups = list_species_contig_datatree(input_tokens_path)
 
-    logger.info(f"Loading tokens from {input_tokens_path}")
-    tokens = open_datatree(input_tokens_path)
+    # Create sets of group paths for intersection
+    label_group_paths = {group["group_path"] for group in label_groups}
+    token_group_paths = {group["group_path"] for group in token_groups}
+    shared_group_paths = label_group_paths & token_group_paths
 
-    # Filter datasets to only include common groups
-    label_groups = set(labels.groups)
-    token_groups = set(tokens.groups)
-    shared_groups = label_groups & token_groups
+    # Filter to only shared groups
+    shared_groups = [
+        group for group in label_groups if group["group_path"] in shared_group_paths
+    ]
 
-    # Identify shared groups and summarize those dropped
+    # Log statistics
     logger.info("Group statistics:")
     logger.info(f"  Labels dataset: {len(label_groups)} groups")
     logger.info(f"  Tokens dataset: {len(token_groups)} groups")
     logger.info(f"  Shared groups: {len(shared_groups)} groups")
-    dropped_label_groups = label_groups - shared_groups
-    dropped_token_groups = token_groups - shared_groups
 
-    if dropped_label_groups:
+    dropped_label_count = len(label_groups) - len(shared_groups)
+    dropped_token_count = len(token_groups) - len(shared_groups)
+    if dropped_label_count > 0:
         logger.warning(
-            f"  Dropping {len(dropped_label_groups)} unshared groups from labels dataset: {dropped_label_groups}"
+            f"  Dropping {dropped_label_count} unshared groups from labels dataset"
         )
-    if dropped_token_groups:
+    if dropped_token_count > 0:
         logger.warning(
-            f"  Dropping {len(dropped_token_groups)} unshared groups from tokens dataset: {dropped_token_groups}"
+            f"  Dropping {dropped_token_count} unshared groups from tokens dataset"
         )
 
-    # Process each shared group individually
-    for group in shared_groups:
-        # Extract species_id and chrom_id from group path (handle leading /)
-        parts = group.strip("/").split("/")
-        if len(parts) > 2:
-            raise ValueError(f"Found invalid group: {group}")
-        if len(parts) < 2:
-            continue
-        species_id, chrom_id = parts
-        logger.info(f"Processing group: {species_id}/{chrom_id}")
+    # Determine number of processes to use
+    if num_workers is None or num_workers == 0:
+        n_processes = None
+        logger.info("Using sequential processing (no multiprocessing)")
+    else:
+        n_processes = num_workers
+        logger.info(f"Using {n_processes} workers for parallel processing")
 
-        # Get datasets for this group
-        label_ds = labels[group].ds
-        token_ds = tokens[group].ds
-
-        # Ensure that sequence tokens always span a longer range than labels
-        if token_ds.sizes["sequence"] < label_ds.sizes["sequence"]:
-            raise ValueError(
-                f"Group {group}: More labels ({label_ds.sizes['sequence']}) than tokens ({token_ds.sizes['sequence']})"
-            )
-
-        # Left join labels to tokens
-        merged_ds = xr.merge(
-            [label_ds, token_ds], combine_attrs="drop_conflicts", join="left"
+    # Prepare arguments for worker processes
+    task_args = [
+        (
+            group["group_path"],
+            group["species_id"],
+            group["chrom_id"],
+            input_labels_path,
+            input_tokens_path,
+            output_path,
+            chunk_size,
+            i + 1,
+            len(shared_groups),
         )
-        assert merged_ds.sizes["sequence"] == label_ds.sizes["sequence"]
+        for i, group in enumerate(shared_groups)
+    ]
 
-        # Write the merged dataset to its group
-        output_group = f"{species_id}/{chrom_id}"
-        logger.info(f"  Saving to {output_path}/{output_group}")
-        merged_ds.to_zarr(
-            output_path, group=output_group, zarr_format=2, consolidated=True, mode="w"
+    # Process groups in parallel or sequentially
+    logger.info("Starting group processing...")
+    all_stats = []
+
+    if n_processes is None:
+        # Sequential processing
+        results = map(_create_sequence_dataset_group, task_args)
+    else:
+        # Parallel processing
+        with ProcessPoolExecutor(max_workers=n_processes) as executor:
+            results = executor.map(_create_sequence_dataset_group, task_args)
+
+    # Collect results
+    all_stats = list(results)
+
+    # Log processing summary
+    processed_groups = [s for s in all_stats if s["processed"]]
+    logger.info(
+        f"Successfully processed {len(processed_groups)}/{len(shared_groups)} groups"
+    )
+    for stats in processed_groups:
+        logger.info(
+            f"  {stats['species_id']}/{stats['chrom_id']}: {stats['sequence_length']:,} bp in {stats['chunks_processed']} chunks"
         )
 
-    # Load and print the full datatree
-    dt = open_datatree(output_path)
-    logger.info(f"Final data tree:\n{dt}")
     logger.info("Done")
 
 
@@ -1105,6 +1255,18 @@ def main():
         required=True,
         help="Path to output zarr file for the merged dataset",
     )
+    sequence_parser.add_argument(
+        "--chunk-size",
+        type=int,
+        default=100_000_000,
+        help="Number of base pairs in one sequence to process per chunk for memory efficiency (default: 100M)",
+    )
+    sequence_parser.add_argument(
+        "--num-workers",
+        type=int,
+        default=None,
+        help="Number of processes to use for parallel processing (default: None for sequential processing)",
+    )
 
     args = parser.parse_args()
 
@@ -1125,7 +1287,13 @@ def main():
             boundary_mask_size=(args.upstream_mask_size, args.downstream_mask_size),
         )
     elif args.command == "create_sequence_dataset":
-        create_sequence_dataset(args.input_labels, args.input_tokens, args.output_path)
+        create_sequence_dataset(
+            args.input_labels,
+            args.input_tokens,
+            args.output_path,
+            args.chunk_size,
+            args.num_workers,
+        )
     else:
         parser.print_help()
 
