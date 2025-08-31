@@ -9,9 +9,7 @@ This script analyzes the results from the PC quality filter experiment by:
 """
 
 import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
-import seaborn as sns
+import plotnine as pn
 from pathlib import Path
 import logging
 import warnings
@@ -30,8 +28,13 @@ PIPE_DIR = (
     "/scratch/10459/eczech/data/dna/plant_caduceus_genome_annotation_task/pipeline"
 )
 SPECIES_LIST = ["jregia", "pvulgaris", "carabica", "zmays", "ntabacum", "nsylvestris"]
-MODEL_VERSIONS = ["1.0", "1.1", "1.2"]
-GROUND_TRUTH_VARIANTS = ["0", "1"]  # 0=original, 1=pc-filtered
+MODEL_VERSIONS = ["1.0", "1.1", "1.2", "1.3"]
+GROUND_TRUTH_VARIANTS = [
+    "0",
+    "1",
+    "2",
+    "3",
+]  # 0=original/viterbi, 1=pc-filtered/viterbi, 2=original/direct, 3=pc-filtered/direct
 CHR_ID = "chr1"
 
 # Target combinations to filter for
@@ -92,12 +95,26 @@ def load_all_csv_files() -> pd.DataFrame:
                         df["species"] = species
                         df["version"] = f"v{version}.{variant}"
                         df["major_version"] = f"v{version}"
-                        df["label_filter"] = int(variant)  # 0=no filter, 1=pc-zs-filter
+                        # Map variants to ground truth and decoding method
+                        if variant == "0":
+                            df["ground_truth"] = "original"
+                            df["decoding_method"] = "viterbi"
+                        elif variant == "1":
+                            df["ground_truth"] = "pc-filtered"
+                            df["decoding_method"] = "viterbi"
+                        elif variant == "2":
+                            df["ground_truth"] = "original"
+                            df["decoding_method"] = "direct"
+                        elif variant == "3":
+                            df["ground_truth"] = "pc-filtered"
+                            df["decoding_method"] = "direct"
                         data_frames.append(df)
                     except Exception as e:
                         logger.warning(f"Failed to load {csv_path}: {e}")
                 else:
-                    logger.warning(f"File not found: {csv_path}")
+                    # Warn only for these variants where sparsity in results is unexpected
+                    if variant in ["0", "1"]:
+                        logger.warning(f"File not found: {csv_path}")
 
     if not data_frames:
         raise ValueError("No CSV files were successfully loaded!")
@@ -140,276 +157,277 @@ def filter_and_process_data(df: pd.DataFrame) -> pd.DataFrame:
 
     # Add display names
     df_filtered["species_display"] = df_filtered["species"].map(SPECIES_DISPLAY_NAMES)
-    df_filtered["label_filter_name"] = df_filtered["label_filter"].map(
-        {0: "Original", 1: "PC-filtered"}
+    df_filtered["training_data"] = df_filtered["major_version"].map(
+        {
+            "v1.0": "1x-genome",
+            "v1.1": "2x-genome",
+            "v1.2": "5x-genome",
+            "v1.3": "2x-genome",  # Same as v1.1 but with randomized base encoder
+        }
     )
+    df_filtered["model_architecture"] = df_filtered["major_version"].map(
+        {
+            "v1.0": "plantcad+bert",
+            "v1.1": "plantcad+bert",
+            "v1.2": "plantcad+bert",
+            "v1.3": "random_plantcad+bert",
+        }
+    )
+    assert df_filtered["training_data"].notnull().all()
+    assert df_filtered["model_architecture"].notnull().all()
+
+    # Check primary key uniqueness
+    primary_key = [
+        "species",
+        "training_data",
+        "model_architecture",
+        "ground_truth",
+        "decoding_method",
+        "level",
+        "tool",
+        "post_processing_method",
+    ]
+
+    # Assert no duplicates in primary key
+    duplicates = df_filtered.duplicated(subset=primary_key)
+    if duplicates.any():
+        duplicate_rows = df_filtered[duplicates][primary_key]
+        logger.error(
+            f"Found {duplicates.sum()} duplicate records based on primary key:"
+        )
+        logger.error(f"\n{duplicate_rows.to_string()}")
+        raise ValueError(
+            f"Primary key violation: {duplicates.sum()} duplicate records found"
+        )
+    logger.info(f"Primary key validation passed: no duplicates found in {primary_key}")
+
+    # Add primary key as dataframe attribute
+    df_filtered.attrs["primary_key"] = primary_key
+    df_filtered.attrs["metrics"] = ["sensitivity", "precision", "f1_score"]
 
     return df_filtered
 
 
-def create_comprehensive_visualization(df: pd.DataFrame, output_dir: Path) -> None:
-    """Create a comprehensive visualization of all results with fixed scales."""
+def create_visualization(df: pd.DataFrame, output_dir: Path) -> None:
+    """Create three focused visualizations using plotnine."""
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Set up the plotting style
-    plt.style.use("default")
-    sns.set_palette("husl")
+    # Filter to transcript-level results only
+    transcript_df = df[
+        (df["level"] == "Transcript")
+        & (df["tool"] == "gffcompare")
+        & (df["post_processing_method"] == "precision-optimized")
+    ].copy()
 
-    # Get unique combinations for faceting
-    unique_combinations = df[
-        ["level", "tool", "post_processing_method"]
-    ].drop_duplicates()
-    n_combinations = len(unique_combinations)
+    # 1. Training scale impact: F1 by training_data (viterbi + original), shape by species
+    plot1_data = transcript_df[
+        (transcript_df["decoding_method"] == "viterbi")
+        & (transcript_df["ground_truth"] == "original")
+        & (transcript_df["model_architecture"] == "plantcad+bert")
+    ].copy()
 
-    # Create subplots - arrange in a grid
-    n_cols = 2
-    n_rows = (n_combinations + n_cols - 1) // n_cols
-
-    fig, axes = plt.subplots(n_rows, n_cols, figsize=(16, 3 * n_rows))
-    if n_rows == 1:
-        axes = [axes] if n_cols == 1 else axes
-    else:
-        axes = axes.flatten()
-
-    # Hide extra subplots if needed
-    for i in range(n_combinations, len(axes)):
-        axes[i].set_visible(False)
-
-    # Create a plot for each combination
-    for idx, (_, combo) in enumerate(unique_combinations.iterrows()):
-        level = combo["level"]
-        tool = combo["tool"]
-        method = combo["post_processing_method"]
-
-        # Filter data for this combination
-        combo_data = df[
-            (df["level"] == level)
-            & (df["tool"] == tool)
-            & (df["post_processing_method"] == method)
-        ]
-
-        if combo_data.empty:
-            logger.warning(f"No data for combination: {level}, {tool}, {method}")
-            continue
-
-        ax = axes[idx]
-
-        # Plot for each species
-        species_list = sorted(combo_data["species_display"].unique())
-        colors = plt.cm.Set3(np.linspace(0, 1, len(species_list)))
-
-        for i, species in enumerate(species_list):
-            species_data = combo_data[combo_data["species_display"] == species]
-
-            # Group by major version and label filter
-            for label_filter in [0, 1]:
-                filter_data = species_data[species_data["label_filter"] == label_filter]
-                if filter_data.empty:
-                    continue
-
-                # Sort by major version for proper line connection
-                filter_data = filter_data.sort_values("major_version")
-
-                label_name = "Original" if label_filter == 0 else "PC-filtered"
-                linestyle = "-" if label_filter == 0 else "--"
-                marker = "o" if label_filter == 0 else "s"
-
-                ax.plot(
-                    filter_data["major_version"],
-                    filter_data["f1_score"],
-                    marker=marker,
-                    linestyle=linestyle,
-                    color=colors[i],
-                    label=f"{species} ({label_name})",
-                    linewidth=2,
-                    markersize=8,
-                )
-
-        # Customize the subplot
-        ax.set_xlabel("Model Version", fontsize=10, fontweight="bold")
-        ax.set_ylabel("F1 Score", fontsize=10, fontweight="bold")
-        ax.set_title(f"{level} - {tool} - {method}", fontsize=12, fontweight="bold")
-        ax.grid(True, alpha=0.3)
-
-        # Let each subplot have its own optimal y-scale starting just below minimum
-        if not combo_data.empty:
-            min_val = combo_data["f1_score"].min()
-            margin = (combo_data["f1_score"].max() - min_val) * 0.05  # 5% margin
-            ax.set_ylim(bottom=max(0, min_val - margin))  # Don't go below 0
-        ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda y, _: f"{y:.1f}"))
-
-    # Collect all legend handles and labels from all subplots
-    handles, labels = [], []
-    for ax in axes[:n_combinations]:
-        h, lab = ax.get_legend_handles_labels()
-        handles.extend(h)
-        labels.extend(lab)
-
-    # Remove duplicates while preserving order
-    unique_labels = []
-    unique_handles = []
-    for handle, label in zip(handles, labels):
-        if label not in unique_labels:
-            unique_labels.append(label)
-            unique_handles.append(handle)
-
-    plt.tight_layout()
-
-    # Add a single legend to the right of the entire figure
-    fig.legend(
-        unique_handles,
-        unique_labels,
-        bbox_to_anchor=(1.02, 0.5),
-        loc="center left",
-        fontsize=10,
-    )
-
-    # Save the comprehensive plot as PDF
-    output_path = output_dir / "pc_quality_experiment_comprehensive.pdf"
-    plt.savefig(output_path, dpi=300, bbox_inches="tight", format="pdf")
-    logger.info(f"Saved comprehensive plot: {output_path}")
-    plt.close()
-
-
-def create_focused_visualization(df: pd.DataFrame, output_dir: Path) -> None:
-    """Create a focused visualization with only transcript-level results."""
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    # Set up the plotting style
-    plt.style.use("default")
-    sns.set_palette("husl")
-
-    # Define the 4 specific combinations we want
-    target_combinations = [
-        ("Transcript", "gffcompare", "precision-optimized"),
-        ("Transcript", "gffcompare", "recall-optimized"),
-        ("transcript_cds", "gffeval", "precision-optimized"),
-        ("transcript_cds", "gffeval", "recall-optimized"),
-    ]
-
-    # Create 2x2 subplot layout (narrower to give more space to legends)
-    fig, axes = plt.subplots(2, 2, figsize=(12, 12))
-    axes = axes.flatten()
-
-    # Filter data to only include target combinations
-    focused_df = df[
-        df[["level", "tool", "post_processing_method"]].apply(
-            lambda row: (row["level"], row["tool"], row["post_processing_method"])
-            in target_combinations,
-            axis=1,
+    plot1 = (
+        pn.ggplot(
+            plot1_data, pn.aes(x="training_data", y="f1_score", shape="species_display")
         )
-    ]
-
-    # Create a plot for each target combination
-    for idx, (level, tool, method) in enumerate(target_combinations):
-        # Filter data for this combination
-        combo_data = focused_df[
-            (focused_df["level"] == level)
-            & (focused_df["tool"] == tool)
-            & (focused_df["post_processing_method"] == method)
-        ]
-
-        if combo_data.empty:
-            logger.warning(f"No data for combination: {level}, {tool}, {method}")
-            continue
-
-        ax = axes[idx]
-
-        # Plot for each species
-        species_list = sorted(combo_data["species_display"].unique())
-        colors = plt.cm.Set3(np.linspace(0, 1, len(species_list)))
-
-        for i, species in enumerate(species_list):
-            species_data = combo_data[combo_data["species_display"] == species]
-
-            # Group by major version and label filter
-            for label_filter in [0, 1]:
-                filter_data = species_data[species_data["label_filter"] == label_filter]
-                if filter_data.empty:
-                    continue
-
-                # Sort by major version for proper line connection
-                filter_data = filter_data.sort_values("major_version")
-
-                label_name = "Original" if label_filter == 0 else "PC-filtered"
-                linestyle = "-" if label_filter == 0 else "--"
-                marker = "o" if label_filter == 0 else "s"
-
-                ax.plot(
-                    filter_data["major_version"],
-                    filter_data["f1_score"],
-                    marker=marker,
-                    linestyle=linestyle,
-                    color=colors[i],
-                    label=f"{species} ({label_name})",
-                    linewidth=2,
-                    markersize=10,
-                )
-
-        # Customize the subplot
-        ax.set_xlabel("Model Version", fontsize=12, fontweight="bold")
-        ax.set_ylabel("F1 Score", fontsize=12, fontweight="bold")
-        ax.set_title(f"{level} - {tool} - {method}", fontsize=14, fontweight="bold")
-        ax.grid(True, alpha=0.3)
-
-        # Let each subplot have its own optimal y-scale starting just below minimum
-        if not combo_data.empty:
-            min_val = combo_data["f1_score"].min()
-            margin = (combo_data["f1_score"].max() - min_val) * 0.05  # 5% margin
-            ax.set_ylim(bottom=max(0, min_val - margin))  # Don't go below 0
-        ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda y, _: f"{y:.1f}"))
-
-    # Collect all legend handles and labels from all subplots
-    handles, labels = [], []
-    for ax in axes:
-        h, lab = ax.get_legend_handles_labels()
-        handles.extend(h)
-        labels.extend(lab)
-
-    # Remove duplicates while preserving order
-    unique_labels = []
-    unique_handles = []
-    for handle, label in zip(handles, labels):
-        if label not in unique_labels:
-            unique_labels.append(label)
-            unique_handles.append(handle)
-
-    plt.tight_layout()
-
-    # Add a single legend to the right of the entire figure
-    fig.legend(
-        unique_handles,
-        unique_labels,
-        bbox_to_anchor=(1.02, 0.75),
-        loc="upper left",
-        fontsize=14,
+        + pn.geom_point(size=3, alpha=0.8)
+        + pn.labs(
+            title="Training Scale Impact on Gene Annotation Performance",
+            x="Training Data",
+            y="F1 Score",
+            shape="Species",
+        )
+        + pn.theme_minimal()
+        + pn.theme(axis_text_x=pn.element_text(angle=45, hjust=1))
     )
 
-    # Add training data information
-    training_info = [
-        "Training Data Scale:",
-        "",
-        "v1.0 → 1 genome / 357M tokens (1x scale)",
-        "v1.1 → 2 genomes / 1.68B tokens (4.7x scale)",
-        "v1.2 → 5 genomes / 8.3B tokens (23.3x scale)",
-    ]
+    # 2. Ground truth filtering impact: F1 by ground_truth (viterbi), shape by species, color by training_data
+    plot2_data = transcript_df[
+        (transcript_df["decoding_method"] == "viterbi")
+        & (transcript_df["model_architecture"] == "plantcad+bert")
+    ].copy()
 
-    # Create text without background box
-    textstr = "\n".join(training_info)
-    fig.text(
-        1.02,
-        0.3,
-        textstr,
-        transform=fig.transFigure,
-        fontsize=14,
-        verticalalignment="top",
+    plot2 = (
+        pn.ggplot(plot2_data, pn.aes(x="ground_truth", y="f1_score"))
+        + pn.geom_boxplot(alpha=0.2)
+        + pn.geom_point(
+            mapping=pn.aes(shape="species_display", color="training_data"),
+            position=pn.position_jitter(width=0.2, height=0, random_state=42),
+            size=3,
+            alpha=0.8,
+        )
+        + pn.labs(
+            title="Ground Truth Filtering Impact on Gene Annotation Performance",
+            x="Ground Truth Type",
+            y="F1 Score",
+            shape="Species",
+            color="Training Data",
+        )
+        + pn.theme_minimal()
+        + pn.theme(axis_text_x=pn.element_text(angle=45, hjust=1))
     )
 
-    # Save the focused plot as PDF
-    output_path = output_dir / "pc_quality_experiment_focused.pdf"
-    plt.savefig(output_path, dpi=300, bbox_inches="tight", format="pdf")
-    logger.info(f"Saved focused plot: {output_path}")
-    plt.close()
+    # 3. Decoding method impact: F1 by decoding method (original + 2x-genome), shape by species
+    plot3_data = transcript_df[
+        (transcript_df["ground_truth"] == "original")
+        & (transcript_df["training_data"] == "2x-genome")
+        & (transcript_df["model_architecture"] == "plantcad+bert")
+    ].copy()
+
+    plot3 = (
+        pn.ggplot(
+            plot3_data,
+            pn.aes(x="decoding_method", y="f1_score", shape="species_display"),
+        )
+        + pn.geom_point(size=3, alpha=0.8)
+        + pn.labs(
+            title="Decoding Method Impact on Gene Annotation Performance",
+            x="Decoding Method",
+            y="F1 Score",
+            shape="Species",
+        )
+        + pn.theme_minimal()
+        + pn.theme(axis_text_x=pn.element_text(angle=45, hjust=1))
+    )
+
+    # 4. Model architecture impact: F1 by model_architecture (original + 2x-genome + viterbi), shape by species
+    plot4_data = transcript_df[
+        (transcript_df["ground_truth"] == "original")
+        & (transcript_df["training_data"] == "2x-genome")
+        & (transcript_df["decoding_method"] == "viterbi")
+    ].copy()
+
+    plot4 = (
+        pn.ggplot(
+            plot4_data,
+            pn.aes(x="model_architecture", y="f1_score", shape="species_display"),
+        )
+        + pn.geom_point(size=3, alpha=0.8)
+        + pn.labs(
+            title="Model Architecture Impact on Gene Annotation Performance",
+            x="Model Architecture",
+            y="F1 Score",
+            shape="Species",
+        )
+        + pn.theme_minimal()
+        + pn.theme(axis_text_x=pn.element_text(angle=45, hjust=1))
+    )
+
+    # 5. Ablation results: F1 by ablation configuration, shape by species
+    # Create ablation configuration labels by filtering and concatenating subsets
+    config1 = df[
+        (df["ground_truth"] == "original")
+        & (df["decoding_method"] == "viterbi")
+        & (df["model_architecture"] == "random_plantcad+bert")
+        & (df["training_data"] == "2x-genome")
+        & (df["level"] == "Transcript")
+        & (df["tool"] == "gffcompare")
+        & (df["post_processing_method"] == "precision-optimized")
+    ].assign(ablation_config="Baseline")
+
+    config2 = df[
+        (df["ground_truth"] == "original")
+        & (df["decoding_method"] == "direct")
+        & (df["model_architecture"] == "plantcad+bert")
+        & (df["training_data"] == "2x-genome")
+        & (df["level"] == "Transcript")
+        & (df["tool"] == "gffcompare")
+        & (df["post_processing_method"] == "precision-optimized")
+    ].assign(ablation_config="+ PlantCAD")
+
+    config3 = df[
+        (df["ground_truth"] == "original")
+        & (df["decoding_method"] == "viterbi")
+        & (df["model_architecture"] == "plantcad+bert")
+        & (df["training_data"] == "2x-genome")
+        & (df["level"] == "Transcript")
+        & (df["tool"] == "gffcompare")
+        & (df["post_processing_method"] == "precision-optimized")
+    ].assign(ablation_config="+ CRF")
+
+    config4 = df[
+        (df["ground_truth"] == "pc-filtered")
+        & (df["decoding_method"] == "viterbi")
+        & (df["model_architecture"] == "plantcad+bert")
+        & (df["training_data"] == "2x-genome")
+        & (df["level"] == "Transcript")
+        & (df["tool"] == "gffcompare")
+        & (df["post_processing_method"] == "precision-optimized")
+    ].assign(ablation_config="+ 0-shot filter")
+
+    config5 = df[
+        (df["ground_truth"] == "pc-filtered")
+        & (df["decoding_method"] == "viterbi")
+        & (df["model_architecture"] == "plantcad+bert")
+        & (df["training_data"] == "5x-genome")
+        & (df["level"] == "Transcript")
+        & (df["tool"] == "gffcompare")
+        & (df["post_processing_method"] == "precision-optimized")
+    ].assign(ablation_config="+ 5x train genomes")
+
+    config6 = df[
+        (df["ground_truth"] == "pc-filtered")
+        & (df["decoding_method"] == "viterbi")
+        & (df["model_architecture"] == "plantcad+bert")
+        & (df["training_data"] == "5x-genome")
+        & (df["level"] == "transcript_cds")
+        & (df["tool"] == "gffeval")
+        & (df["post_processing_method"] == "precision-optimized")
+    ].assign(ablation_config="+ CDS-only eval")
+
+    # Concatenate all configurations
+    plot5_data = pd.concat(
+        [config1, config2, config3, config4, config5, config6], ignore_index=True
+    )
+
+    # Convert to ordered categorical
+    ablation_order = [
+        "Baseline",
+        "+ PlantCAD",
+        "+ CRF",
+        "+ 0-shot filter",
+        "+ 5x train genomes",
+        "+ CDS-only eval",
+    ]
+    plot5_data["ablation_config"] = pd.Categorical(
+        plot5_data["ablation_config"], categories=ablation_order, ordered=True
+    )
+
+    plot5 = (
+        pn.ggplot(plot5_data, pn.aes(x="ablation_config", y="f1_score"))
+        + pn.geom_boxplot(
+            alpha=0.2, width=0.1, position=pn.position_nudge(x=-0.3), outlier_size=0.2
+        )
+        + pn.geom_point(
+            mapping=pn.aes(shape="species_display"),
+            position=pn.position_jitter(width=0.1, height=0, random_state=0),
+            size=2,
+            alpha=0.8,
+        )
+        + pn.labs(
+            title="Ablation Results", x="Configuration", y="F1 Score", shape="Species"
+        )
+        + pn.theme_minimal()
+        + pn.theme(axis_text_x=pn.element_text(angle=25, hjust=1))
+    )
+
+    # Save individual plots
+    plot1.save(output_dir / "genecad_training_scale.pdf", width=8, height=4, dpi=300)
+    plot2.save(
+        output_dir / "genecad_ground_truth_filter.pdf", width=8, height=4, dpi=300
+    )
+    plot3.save(output_dir / "genecad_decoding_method.pdf", width=8, height=4, dpi=300)
+    plot4.save(
+        output_dir / "genecad_model_architecture.pdf", width=8, height=4, dpi=300
+    )
+    plot5.save(output_dir / "genecad_ablation_results.pdf", width=8, height=4, dpi=300)
+
+    logger.info(f"Saved 5 plots to: {output_dir}")
+    logger.info("  - genecad_training_scale.pdf")
+    logger.info("  - genecad_ground_truth_filter.pdf")
+    logger.info("  - genecad_decoding_method.pdf")
+    logger.info("  - genecad_model_architecture.pdf")
+    logger.info("  - genecad_ablation_results.pdf")
 
 
 def print_summary_statistics(df: pd.DataFrame) -> None:
@@ -421,21 +439,35 @@ def print_summary_statistics(df: pd.DataFrame) -> None:
     print(f"Total records: {len(df)}")
     print(f"Species: {', '.join(sorted(df['species_display'].unique()))}")
     print(f"Versions: {', '.join(sorted(df['major_version'].unique()))}")
+    print(f"Ground Truth Types: {', '.join(sorted(df['ground_truth'].unique()))}")
+    print(f"Decoding Methods: {', '.join(sorted(df['decoding_method'].unique()))}")
 
     # Simple pivot showing F1 scores
     print("\n" + "=" * 80)
-    print("F1 SCORES BY VERSION AND FILTER TYPE")
+    print("F1 SCORES BY VERSION AND METHOD COMBINATION")
     print("=" * 80)
 
-    # Create a combined column for version and filter type
-    df["version_filter"] = df["major_version"] + "_" + df["label_filter_name"]
+    # Create version and ground truth combination for columns
+    df = df.copy()
+    df["version_ground_truth"] = df["major_version"] + "_" + df["ground_truth"]
 
     # Use pivot to avoid any aggregation
-    pivot = df.pivot(
-        index=["species_display", "level", "tool", "post_processing_method"],
-        columns="version_filter",
-        values="f1_score",
-    ).round(1)
+    pivot = (
+        df.pivot(
+            index=[
+                "decoding_method",
+                "species_display",
+                "level",
+                "tool",
+                "post_processing_method",
+            ],
+            columns="version_ground_truth",
+            values="f1_score",
+        )
+        .sort_index(ascending=False)
+        .round(1)
+        .fillna("")
+    )
 
     print(pivot.to_string())
 
@@ -453,26 +485,28 @@ def main():
         raw_data = load_all_csv_files()
         processed_data = filter_and_process_data(raw_data)
 
-        # Save data to CSV files as requested
+        # Save data to CSV and parquet files as requested
         raw_data_path = output_dir / "all_evaluation_statistics.csv"
         processed_data_path = output_dir / "primary_evaluation_statistics.csv"
+        processed_data_parquet_path = (
+            output_dir / "primary_evaluation_statistics.parquet"
+        )
 
         raw_data.to_csv(raw_data_path, sep="\t", index=False)
         processed_data.to_csv(processed_data_path, sep="\t", index=False)
+        processed_data.to_parquet(processed_data_parquet_path, index=False)
 
         logger.info(f"Saved raw data to: {raw_data_path}")
         logger.info(f"Saved processed data to: {processed_data_path}")
+        logger.info(f"Saved processed data to: {processed_data_parquet_path}")
 
-        # Create both visualizations
-        create_comprehensive_visualization(processed_data, output_dir)
-        create_focused_visualization(processed_data, output_dir)
+        # Create visualization
+        create_visualization(processed_data, output_dir)
 
         # Print summary statistics to console
         print_summary_statistics(processed_data)
 
-        logger.info(
-            f"Analysis complete! Plots saved to: {output_dir}/pc_quality_experiment_comprehensive.pdf and {output_dir}/pc_quality_experiment_focused.pdf"
-        )
+        logger.info("Analysis complete")
 
     except Exception as e:
         logger.error(f"Analysis failed: {e}")

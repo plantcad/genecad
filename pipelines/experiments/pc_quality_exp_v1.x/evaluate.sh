@@ -6,28 +6,32 @@
 #SBATCH -t 2:00:00
 
 # PC Quality Filter Experiment - Unified Evaluation Script
-# Usage: ./evaluate.sh {1.0|1.1|1.2} {original|pc-filtered}
+# Usage: ./evaluate.sh {1.0|1.1|1.2|1.3} {original|pc-filtered} {viterbi|direct}
 
 set -euo pipefail
 
 # Parse arguments
-if [ $# -ne 2 ]; then
-    echo "Usage: $0 {1.0|1.1|1.2} {original|pc-filtered}"
+if [ $# -ne 3 ]; then
+    echo "Usage: $0 {1.0|1.1|1.2|1.3} {original|pc-filtered} {viterbi|direct}"
     echo "  1.0          - Use v1.0 model (Athaliana only)"
     echo "  1.1          - Use v1.1 model (Athaliana + Osativa)"
     echo "  1.2          - Use v1.2 model (All 5 species from v1.1 checkpoint)"
+    echo "  1.3          - Use v1.3 model (Athaliana + Osativa with randomized base encoder)"
     echo "  original     - Use original (unfiltered) ground truth"
     echo "  pc-filtered  - Use PC-filtered ground truth"
+    echo "  viterbi      - Use viterbi decoding for predictions"
+    echo "  direct       - Use 'direct' decoding, i.e. use raw predictions"
     exit 1
 fi
 
 MODEL_VERSION="$1"
 GROUND_TRUTH_TYPE="$2"
+DECODING_METHOD="$3"
 
 # Validate model version
-if [ "$MODEL_VERSION" != "1.0" ] && [ "$MODEL_VERSION" != "1.1" ] && [ "$MODEL_VERSION" != "1.2" ]; then
+if [ "$MODEL_VERSION" != "1.0" ] && [ "$MODEL_VERSION" != "1.1" ] && [ "$MODEL_VERSION" != "1.2" ] && [ "$MODEL_VERSION" != "1.3" ]; then
     echo "ERROR: Invalid model version '$MODEL_VERSION'"
-    echo "Must be '1.0', '1.1', or '1.2'"
+    echo "Must be '1.0', '1.1', '1.2', or '1.3'"
     exit 1
 fi
 
@@ -38,36 +42,60 @@ if [ "$GROUND_TRUTH_TYPE" != "original" ] && [ "$GROUND_TRUTH_TYPE" != "pc-filte
     exit 1
 fi
 
+# Validate decoding method
+if [ "$DECODING_METHOD" != "viterbi" ] && [ "$DECODING_METHOD" != "direct" ]; then
+    echo "ERROR: Invalid decoding method '$DECODING_METHOD'"
+    echo "Must be 'viterbi' or 'direct'"
+    exit 1
+fi
+
 # Set model-specific configurations
 case "$MODEL_VERSION" in
     "1.0")
         MODEL_DESCRIPTION="v1.0 (Athaliana only)"
-        SWEEP_DIR="sweep-v1.0__cfg_013__arch_all__frzn_yes__lr_1e-04"
+        SWEEP_DIR="sweep-v1.0__cfg_013__rand_no__arch_all__frzn_yes__lr_1e-04"
         ;;
     "1.1")
         MODEL_DESCRIPTION="v1.1 (Athaliana + Osativa)"
-        SWEEP_DIR="sweep-v1.1__cfg_013__arch_all__frzn_yes__lr_1e-04"
+        SWEEP_DIR="sweep-v1.1__cfg_013__rand_no__arch_all__frzn_yes__lr_1e-04"
         ;;
     "1.2")
-        MODEL_DESCRIPTION="v1.2 (All 5 species fresh start)"
-        SWEEP_DIR="sweep-v1.2__cfg_013__arch_all__frzn_yes__lr_1e-04"
+        MODEL_DESCRIPTION="v1.2 (All 5 species from v1.1 checkpoint)"
+        SWEEP_DIR="sweep-v1.2__cfg_013__rand_no__arch_all__frzn_yes__lr_1e-04"
+        ;;
+    "1.3")
+        MODEL_DESCRIPTION="v1.3 (Athaliana + Osativa with randomized base encoder)"
+        SWEEP_DIR="sweep-v1.3__cfg_016__rand_yes__arch_all__frzn_yes__lr_1e-04"
         ;;
 esac
 
-# Set version and description based on ground truth type
-# Predictions use only model version, results use extended version with ground truth type
+# Set version and description based on ground truth type and decoding method
+# Predictions use only model version, results use extended version with ground truth type and decoding method
 PREDICTION_VERSION="v$MODEL_VERSION"
-if [ "$GROUND_TRUTH_TYPE" = "original" ]; then
-    RUN_VERSION="v$MODEL_VERSION.0"
-    GT_DESCRIPTION="Original (unfiltered)"
+if [ "$DECODING_METHOD" = "viterbi" ]; then
+    # Viterbi decoding uses existing version scheme
+    if [ "$GROUND_TRUTH_TYPE" = "original" ]; then
+        RUN_VERSION="v$MODEL_VERSION.0"
+        GT_DESCRIPTION="Original (unfiltered)"
+    else
+        RUN_VERSION="v$MODEL_VERSION.1"
+        GT_DESCRIPTION="PC-filtered (passPlantCADFilter=1 only)"
+    fi
 else
-    RUN_VERSION="v$MODEL_VERSION.1"
-    GT_DESCRIPTION="PC-filtered (passPlantCADFilter=1 only)"
+    # Direct decoding uses new version scheme
+    if [ "$GROUND_TRUTH_TYPE" = "original" ]; then
+        RUN_VERSION="v$MODEL_VERSION.2"
+        GT_DESCRIPTION="Original (unfiltered)"
+    else
+        RUN_VERSION="v$MODEL_VERSION.3"
+        GT_DESCRIPTION="PC-filtered (passPlantCADFilter=1 only)"
+    fi
 fi
 
 echo "Starting PC Quality Filter Experiment - Evaluation $RUN_VERSION"
 echo "Model: $MODEL_DESCRIPTION"
 echo "Ground Truth: $GT_DESCRIPTION"
+echo "Decoding Method: $DECODING_METHOD"
 echo "Species: jregia, pvulgaris, carabica, zmays, ntabacum, nsylvestris"
 echo "$(date): Beginning evaluation (assumes predictions already generated)"
 
@@ -133,7 +161,7 @@ for SPECIES in $SPECIES_LIST; do
         python scripts/predict.py export_gff \
           --input "$SPECIES_DIR/intervals.zarr" \
           --output "$SPECIES_DIR/gff/predictions.gff" \
-          --decoding-method viterbi \
+          --decoding-method "$DECODING_METHOD" \
           --min-transcript-length 3 \
           --strip-introns yes
     fi

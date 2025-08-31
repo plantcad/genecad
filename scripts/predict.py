@@ -37,20 +37,24 @@ def batched(input_list: list[Any], batch_size: int) -> list[list[Any]]:
 
 def load_classifier(args: Args) -> GeneClassifier:
     logger.info(f"Loading model from {args.model_checkpoint}")
+    dtype = getattr(torch, args.dtype)
     model = GeneClassifier.load_from_checkpoint(
         args.model_checkpoint, map_location=args.device
     )
     model = model.eval()
+    model = model.to(args.device, dtype=dtype)
     return model
 
 
 def load_base_model(args: Args) -> AutoModel:
     logger.info(f"Loading base embedding model from {args.model_path}")
     config = AutoConfig.from_pretrained(args.model_path, trust_remote_code=True)
+    dtype = getattr(torch, args.dtype)
     base_model = AutoModel.from_pretrained(
-        args.model_path, config=config, trust_remote_code=True, dtype=torch.bfloat16
+        args.model_path, config=config, trust_remote_code=True, dtype=dtype
     )
-    base_model = base_model.eval().to(args.device)
+    base_model = base_model.eval()
+    base_model = base_model.to(args.device, dtype=dtype)
     return base_model
 
 
@@ -245,8 +249,8 @@ def _create_predictions(
                 num_feature_classes,
             )
 
-            token_logits = token_logits.cpu().numpy()
-            feature_logits = feature_logits.cpu().numpy()
+            token_logits = token_logits.float().cpu().numpy()
+            feature_logits = feature_logits.float().cpu().numpy()
 
             # Extract valid regions from the processed windows
             token_logits_arrays, feature_logits_arrays, sequence_coord_arrays = (
@@ -951,6 +955,13 @@ def main():
         choices=["yes", "no"],
         default="yes",
         help="Whether to suppress torch dynamo errors (default: yes)",
+    )
+    inference_parser.add_argument(
+        "--dtype",
+        type=str,
+        default="float32",
+        choices=["float32", "float16", "bfloat16", "float64", "double", "half"],
+        help="Data type for model inference (default: bfloat16)",
     )
 
     # Detect intervals command

@@ -464,9 +464,7 @@ def filter_to_min_feature_length(
     logger.info(f"Found {len(small_feature_ids)} small features to remove")
 
     # Remove small features
-    features_filtered = features[
-        ~features.index.isin(features[small_features_mask].index)
-    ]
+    features_filtered = features[~small_features_mask]
 
     # Group features by gene and update boundaries
     genes = features_filtered[features_filtered["type"] == GffFeatureType.GENE.value]

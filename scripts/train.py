@@ -188,6 +188,13 @@ def parse_args(args: Optional[list[str]] = None) -> Args:
         choices=["yes", "no"],
         help="Enable torch.compile for model optimization",
     )
+    parser.add_argument(
+        "--randomize-base",
+        type=str,
+        default="no",
+        choices=["yes", "no"],
+        help="Randomize the base encoder model instead of loading pretrained weights",
+    )
     return parser.parse_args(args)
 
 
@@ -317,6 +324,7 @@ def train(args: Args) -> None:
             base_encoder_path=args.base_encoder_path,
             enable_visualization=args.enable_visualization == "yes",
             base_encoder_frozen=args.base_encoder_frozen == "yes",
+            base_encoder_randomize=args.randomize_base == "yes",
         )
         model = GeneClassifier(
             config,

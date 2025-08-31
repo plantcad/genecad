@@ -13,19 +13,26 @@ def get_configurations() -> list[dict]:
     configs = []
 
     # Base parameters
+    randomize_base = ["no", "yes"]  # Put first, starts with "no"
     architectures = ["encoder-only", "sequence-only", "classifier-only", "all"]
     learning_rates = [1e-5, 1e-4, 1e-3]
     frozen_options = ["yes", "no"]
 
-    # Generate all combinations, skipping sequence-only with unfrozen base encoder
-    for arch, lr, frzn in itertools.product(
-        architectures, learning_rates, frozen_options
+    # Generate all combinations, with filtering rules
+    for rand, arch, lr, frzn in itertools.product(
+        randomize_base, architectures, learning_rates, frozen_options
     ):
+        # Skip sequence-only, encoder-only, and all with unfrozen base encoder
         if arch in ["sequence-only", "encoder-only", "all"] and frzn == "no":
+            continue
+
+        # Skip all configurations where randomize_base=yes except where frzn=yes and architecture=all
+        if rand == "yes" and not (frzn == "yes" and arch == "all"):
             continue
 
         configs.append(
             {
+                "randomize_base": rand,
                 "architecture": arch,
                 "learning_rate": lr,
                 "base_encoder_frozen": frzn,
@@ -89,6 +96,7 @@ def get_run_name(sweep_args, config_idx, config):
         [
             sweep_args.run_name,
             f"cfg_{config_idx:03d}",
+            f"rand_{config['randomize_base']}",
             f"arch_{config['architecture']}",
             f"frzn_{config['base_encoder_frozen']}",
             f"lr_{config['learning_rate']:.0e}",
@@ -184,7 +192,7 @@ def setup_parser() -> ArgumentParser:
 
 def main() -> None:
     parser = setup_parser()
-    args, unknown = parser.parse_known_args()
+    args, _ = parser.parse_known_args()
 
     if args.command == "run":
         cmd_run(sys.argv[2:])  # Skip 'sweep.py run'

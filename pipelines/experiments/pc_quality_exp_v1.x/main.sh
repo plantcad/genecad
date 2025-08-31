@@ -17,7 +17,7 @@ source $EXPERIMENT_DIR/init.sh
 LOG_DIR="local/logs/pc_quality_exp"
 
 # Define model versions to process
-MODEL_VERSIONS="1.0 1.1 1.2"
+MODEL_VERSIONS="1.0 1.1 1.2 1.3"
 # -------------------------------------------------
 
 echo "Starting PC Quality Filter Experiment Pipeline"
@@ -31,9 +31,12 @@ echo "$(date): PHASE 1: Data Preparation"
 echo "$(date): =================================="
 
 for version in $MODEL_VERSIONS; do
-sbatch -p gg -N 1 -n 1 -t 2:00:00 \
-    --output $LOG_DIR/prepare_v${version}.log --error $LOG_DIR/prepare_v${version}.log \
-    $EXPERIMENT_DIR/prepare.sh $version
+# Skip v1.3 because it uses the same training data as v1.1
+if [ "$version" != "1.3" ]; then
+    sbatch -p gg -N 1 -n 1 -t 2:00:00 \
+        --output $LOG_DIR/prepare_v${version}.log --error $LOG_DIR/prepare_v${version}.log \
+        $EXPERIMENT_DIR/prepare.sh $version
+fi
 done
 
 echo "$(date): Data preparation phase completed successfully!"
@@ -42,14 +45,17 @@ echo "$(date): =================================="
 echo "$(date): PHASE 2: Training"
 echo "$(date): =================================="
 
-# Training v1.0 (Athaliana only - 3 epochs, 2 hours)
+# Training v1.0 (Athaliana only - 3 epochs, 1.75 hr)
 $EXPERIMENT_DIR/train.sh 1.0
 
-# Training v1.1 (Athaliana + Osativa - 3 epochs, 2 hours)
+# Training v1.1 (Athaliana + Osativa - 3 epochs, 1.75 hr)
 $EXPERIMENT_DIR/train.sh 1.1
 
 # Training v1.2 (All 5 species from v1.1 checkpoint - 1 epoch, 3 hours)
 $EXPERIMENT_DIR/train.sh 1.2
+
+# Training v1.3 (Athaliana + Osativa with randomized base encoder - 3 epochs, 1.75 hr)
+$EXPERIMENT_DIR/train.sh 1.3
 
 echo "$(date): Training phase completed successfully!"
 
@@ -60,7 +66,7 @@ echo "$(date): =================================="
 # Allocate compute node for sequence extraction
 idev -p gg -N 1 -n 1 -t 2:00:00
 
-# Extract FASTA sequences for testing species (jregia, pvulgaris)
+# Extract FASTA sequences for testing species
 $EXPERIMENT_DIR/extract.sh 2>&1 | tee -a $LOG_DIR/extract.log
 
 echo "$(date): Sequence extraction phase completed successfully!"
@@ -85,7 +91,7 @@ for version in $MODEL_VERSIONS; do
 for ground_truth in original pc-filtered; do
 sbatch -p gg -N 1 -n 1 -t 2:00:00 \
     --output $LOG_DIR/evaluate_v${version}_${ground_truth}.log --error $LOG_DIR/evaluate_v${version}_${ground_truth}.log \
-    $EXPERIMENT_DIR/evaluate.sh $version $ground_truth
+    $EXPERIMENT_DIR/evaluate.sh $version $ground_truth viterbi
 done
 done
 
