@@ -1,0 +1,104 @@
+# Input variables
+INPUT_FILE ?=
+OUTPUT_DIR ?=
+REQUIRE_UTRS ?= true
+LAUNCHER ?= python
+
+# Model configuration
+HEAD_MODEL_PATH ?=
+BASE_MODEL_PATH ?= kuleshov-group/PlantCAD2-Small-l24-d0768
+
+# Pipeline directory structure
+PIPELINE_DIR = $(OUTPUT_DIR)/pipeline
+
+# Define all pipeline targets
+.PHONY: all clean help sequences predictions annotations
+all: $(OUTPUT_DIR)/predictions.gff
+
+# Convenient aliases
+sequences: $(PIPELINE_DIR)/sequences.zarr     # Requires CPU-only
+predictions: $(PIPELINE_DIR)/predictions.zarr # Requires CPU + GPU
+annotations: $(OUTPUT_DIR)/predictions.gff    # Requires CPU-only
+
+# Help target
+help:
+	@echo "Available targets:"
+	@echo "  all - Run complete prediction pipeline"
+	@echo "  sequences - Extract sequences only"
+	@echo "  predictions - Generate predictions only"
+	@echo "  annotations - Run complete pipeline (alias for all)"
+	@echo "  clean - Remove all generated files"
+	@echo ""
+	@echo "Required variables:"
+	@echo "  INPUT_FILE - Path to input GFF file"
+	@echo "  HEAD_MODEL_PATH - Path to GeneCAD model checkpoint"
+	@echo "  OUTPUT_DIR - Output directory for results"
+	@echo ""
+	@echo "Optional variables:"
+	@echo "  REQUIRE_UTRS - Require UTRs in final output (default: true)"
+	@echo "  BASE_MODEL_PATH - Path to PlantCAD model checkpoint (default: kuleshov-group/PlantCAD2-Small-l24-d0768)"
+	@echo "  LAUNCHER - Command launcher for GPU jobs (default: python)"
+
+# Extract sequences from input GFF
+$(PIPELINE_DIR)/sequences.zarr: $(INPUT_FILE)
+	@mkdir -p $(PIPELINE_DIR)
+	python scripts/extract.py extract_fasta_sequences \
+	  --input-file $(INPUT_FILE) \
+	  --tokenizer-path $(BASE_MODEL_PATH) \
+	  --output $(PIPELINE_DIR)/sequences.zarr
+
+# Generate predictions from pre-trained model
+$(PIPELINE_DIR)/predictions.zarr: $(PIPELINE_DIR)/sequences.zarr
+	$(LAUNCHER) scripts/predict.py create_predictions \
+	  --input $(PIPELINE_DIR)/sequences.zarr \
+	  --output-dir $(PIPELINE_DIR)/predictions.zarr \
+	  --model-path $(BASE_MODEL_PATH) \
+	  --model-checkpoint $(HEAD_MODEL_PATH) \
+	  --batch-size 32
+
+# Detect feature intervals from token-level predictions
+$(PIPELINE_DIR)/intervals.zarr: $(PIPELINE_DIR)/predictions.zarr
+	python scripts/predict.py detect_intervals \
+	  --input-dir $(PIPELINE_DIR)/predictions.zarr \
+	  --output $(PIPELINE_DIR)/intervals.zarr \
+	  --decoding-methods "direct,viterbi" \
+	  --remove-incomplete-features yes
+
+# Export raw GFF
+$(PIPELINE_DIR)/predictions__raw.gff: $(PIPELINE_DIR)/intervals.zarr
+	python scripts/predict.py export_gff \
+	  --input $(PIPELINE_DIR)/intervals.zarr \
+	  --output $(PIPELINE_DIR)/predictions__raw.gff \
+	  --decoding-method viterbi \
+	  --min-transcript-length 3 \
+	  --strip-introns yes
+
+# Remove implausibly small features (1 bp in size) and reconstruct gene/mRNA boundaries
+$(PIPELINE_DIR)/predictions__raw__feat_len_2.gff: $(PIPELINE_DIR)/predictions__raw.gff
+	python scripts/gff.py filter_to_min_feature_length \
+	  --input $(PIPELINE_DIR)/predictions__raw.gff \
+	  --output $(PIPELINE_DIR)/predictions__raw__feat_len_2.gff \
+	  --feature-types "five_prime_UTR,three_prime_UTR,CDS" \
+	  --min-length 2
+
+# Remove genes/transcripts below a certain length (30bp)
+$(PIPELINE_DIR)/predictions__raw__feat_len_2__gene_len_30.gff: $(PIPELINE_DIR)/predictions__raw__feat_len_2.gff
+	python scripts/gff.py filter_to_min_gene_length \
+	  --input $(PIPELINE_DIR)/predictions__raw__feat_len_2.gff \
+	  --output $(PIPELINE_DIR)/predictions__raw__feat_len_2__gene_len_30.gff \
+	  --min-length 30
+
+# Filter to genes with at least one CDS exon if configured, both a 5' and 3' UTR
+$(PIPELINE_DIR)/predictions__raw__feat_len_2__gene_len_30__has_req_feats.gff: $(PIPELINE_DIR)/predictions__raw__feat_len_2__gene_len_30.gff
+	python scripts/gff.py filter_to_valid_genes \
+	  --input $(PIPELINE_DIR)/predictions__raw__feat_len_2__gene_len_30.gff \
+	  --output $(PIPELINE_DIR)/predictions__raw__feat_len_2__gene_len_30__has_req_feats.gff \
+	  --require-utrs $(REQUIRE_UTRS)
+
+# Copy to final predictions file
+$(OUTPUT_DIR)/predictions.gff: $(PIPELINE_DIR)/predictions__raw__feat_len_2__gene_len_30__has_req_feats.gff
+	cp $(PIPELINE_DIR)/predictions__raw__feat_len_2__gene_len_30__has_req_feats.gff $(OUTPUT_DIR)/predictions.gff
+
+# Clean target
+clean:
+	rm -rf $(OUTPUT_DIR)
