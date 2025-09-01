@@ -6,17 +6,19 @@
 #SBATCH -t 2:00:00
 
 # PC Quality Filter Experiment - Unified Evaluation Script
-# Usage: ./evaluate.sh {1.0|1.1|1.2|1.3} {original|pc-filtered} {viterbi|direct}
+# Usage: ./evaluate.sh {1.0|1.1|1.2|1.3|1.4|1.5} {original|pc-filtered} {viterbi|direct}
 
 set -euo pipefail
 
 # Parse arguments
 if [ $# -ne 3 ]; then
-    echo "Usage: $0 {1.0|1.1|1.2|1.3} {original|pc-filtered} {viterbi|direct}"
+    echo "Usage: $0 {1.0|1.1|1.2|1.3|1.4|1.5} {original|pc-filtered} {viterbi|direct}"
     echo "  1.0          - Use v1.0 model (Athaliana only)"
     echo "  1.1          - Use v1.1 model (Athaliana + Osativa)"
     echo "  1.2          - Use v1.2 model (All 5 species from v1.1 checkpoint)"
     echo "  1.3          - Use v1.3 model (Athaliana + Osativa with randomized base encoder)"
+    echo "  1.4          - Use v1.4 model (Athaliana + Osativa with large PlantCAD base model)"
+    echo "  1.5          - Use v1.5 model (All 5 species from v1.4 checkpoint, large base model)"
     echo "  original     - Use original (unfiltered) ground truth"
     echo "  pc-filtered  - Use PC-filtered ground truth"
     echo "  viterbi      - Use viterbi decoding for predictions"
@@ -29,9 +31,9 @@ GROUND_TRUTH_TYPE="$2"
 DECODING_METHOD="$3"
 
 # Validate model version
-if [ "$MODEL_VERSION" != "1.0" ] && [ "$MODEL_VERSION" != "1.1" ] && [ "$MODEL_VERSION" != "1.2" ] && [ "$MODEL_VERSION" != "1.3" ]; then
+if [ "$MODEL_VERSION" != "1.0" ] && [ "$MODEL_VERSION" != "1.1" ] && [ "$MODEL_VERSION" != "1.2" ] && [ "$MODEL_VERSION" != "1.3" ] && [ "$MODEL_VERSION" != "1.4" ] && [ "$MODEL_VERSION" != "1.5" ]; then
     echo "ERROR: Invalid model version '$MODEL_VERSION'"
-    echo "Must be '1.0', '1.1', '1.2', or '1.3'"
+    echo "Must be '1.0', '1.1', '1.2', '1.3', '1.4', or '1.5'"
     exit 1
 fi
 
@@ -67,6 +69,14 @@ case "$MODEL_VERSION" in
         MODEL_DESCRIPTION="v1.3 (Athaliana + Osativa with randomized base encoder)"
         SWEEP_DIR="sweep-v1.3__cfg_016__rand_yes__arch_all__frzn_yes__lr_1e-04"
         ;;
+    "1.4")
+        MODEL_DESCRIPTION="v1.4 (Athaliana + Osativa with large PlantCAD base model)"
+        SWEEP_DIR="sweep-v1.4__cfg_013__rand_no__arch_all__frzn_yes__lr_1e-04"
+        ;;
+    "1.5")
+        MODEL_DESCRIPTION="v1.5 (All 5 species from v1.4 checkpoint, large base model)"
+        SWEEP_DIR="sweep-v1.5__cfg_013__rand_no__arch_all__frzn_yes__lr_1e-04"
+        ;;
 esac
 
 # Set version and description based on ground truth type and decoding method
@@ -92,13 +102,6 @@ else
     fi
 fi
 
-echo "Starting PC Quality Filter Experiment - Evaluation $RUN_VERSION"
-echo "Model: $MODEL_DESCRIPTION"
-echo "Ground Truth: $GT_DESCRIPTION"
-echo "Decoding Method: $DECODING_METHOD"
-echo "Species: jregia, pvulgaris, carabica, zmays, ntabacum, nsylvestris"
-echo "$(date): Beginning evaluation (assumes predictions already generated)"
-
 # Define paths
 RAW_DIR="$DATA_DIR/testing_data"
 PREDICT_DIR="$PIPE_DIR/predict"
@@ -106,6 +109,14 @@ PREDICT_DIR="$PIPE_DIR/predict"
 # Define species to evaluate
 SPECIES_LIST="jregia pvulgaris carabica zmays ntabacum nsylvestris"
 CHR_ID="chr1"
+
+echo "Starting PC Quality Filter Experiment - Evaluation $RUN_VERSION"
+echo "Model: $MODEL_DESCRIPTION"
+echo "Ground Truth: $GT_DESCRIPTION"
+echo "Decoding Method: $DECODING_METHOD"
+echo "Species: $(echo $SPECIES_LIST | sed 's/ /, /g')"
+echo "Chromosome: $CHR_ID"
+echo "$(date): Beginning evaluation (assumes predictions already generated)"
 
 echo "Prediction directory: $PREDICT_DIR"
 

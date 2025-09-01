@@ -27,7 +27,23 @@ make -f pipelines/prediction all
 
 For convenience, see [genecad_inference_pipeline.log](docs/logs/genecad_inference_pipeline.log) for logs from a complete run of this example.
 
-### Details
+### Steps
+
+The inference pipeline consists of 3 main steps:
+
+1. Extract sequences from the input FASTA file
+2. Generate token and feature logits from the GeneCAD classifier
+3. Generate gene/transcript/feature annotations from the token and feature logits (as GFF)
+
+Each of these has an associated `make` target, i.e. `make sequences`, `make predictions`, `make annotations` (respectively).
+
+### Dry run
+
+The shell commands run by `make` can be seen with either the `--dry-run` or `-n` flags, each of which does the same thing.  This tells `make` to print all the commands that *would* be executed, which can be helpful for debugging or clarity on what the pipeline actually does.
+
+Additionally, this can be very useful for determining what targets already exist.  I.e. if you run `make predictions` instead of `make all`, the pipeline will only run up to the target for generating token logits from the GeneCAD classifier.  Running `make -n annotations` (or `make -n all`, which is an alias), would then show that only the GFF export needs to be run rather than the whole pipeline.
+
+### Outputs
 
 The inference pipeline will generate results (in `$OUTPUT_DIR`) with the following structure:
 

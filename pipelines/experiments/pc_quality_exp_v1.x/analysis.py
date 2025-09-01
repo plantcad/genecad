@@ -28,7 +28,7 @@ PIPE_DIR = (
     "/scratch/10459/eczech/data/dna/plant_caduceus_genome_annotation_task/pipeline"
 )
 SPECIES_LIST = ["jregia", "pvulgaris", "carabica", "zmays", "ntabacum", "nsylvestris"]
-MODEL_VERSIONS = ["1.0", "1.1", "1.2", "1.3"]
+MODEL_VERSIONS = ["1.0", "1.1", "1.2", "1.3", "1.4", "1.5"]
 GROUND_TRUTH_VARIANTS = [
     "0",
     "1",
@@ -163,6 +163,8 @@ def filter_and_process_data(df: pd.DataFrame) -> pd.DataFrame:
             "v1.1": "2x-genome",
             "v1.2": "5x-genome",
             "v1.3": "2x-genome",  # Same as v1.1 but with randomized base encoder
+            "v1.4": "2x-genome",  # Same as v1.1 but with large PlantCAD base model
+            "v1.5": "5x-genome",  # Same as v1.2 but starts from v1.4 checkpoint with large base model
         }
     )
     df_filtered["model_architecture"] = df_filtered["major_version"].map(
@@ -171,16 +173,30 @@ def filter_and_process_data(df: pd.DataFrame) -> pd.DataFrame:
             "v1.1": "plantcad+bert",
             "v1.2": "plantcad+bert",
             "v1.3": "random_plantcad+bert",
+            "v1.4": "plantcad+bert",
+            "v1.5": "plantcad+bert",
+        }
+    )
+    df_filtered["base_model"] = df_filtered["major_version"].map(
+        {
+            "v1.0": "PlantCAD2-Small",
+            "v1.1": "PlantCAD2-Small",
+            "v1.2": "PlantCAD2-Small",
+            "v1.3": "PlantCAD2-Small",
+            "v1.4": "PlantCAD2-Large",
+            "v1.5": "PlantCAD2-Large",
         }
     )
     assert df_filtered["training_data"].notnull().all()
     assert df_filtered["model_architecture"].notnull().all()
+    assert df_filtered["base_model"].notnull().all()
 
     # Check primary key uniqueness
     primary_key = [
         "species",
         "training_data",
         "model_architecture",
+        "base_model",
         "ground_truth",
         "decoding_method",
         "level",
@@ -224,17 +240,33 @@ def create_visualization(df: pd.DataFrame, output_dir: Path) -> None:
         (transcript_df["decoding_method"] == "viterbi")
         & (transcript_df["ground_truth"] == "original")
         & (transcript_df["model_architecture"] == "plantcad+bert")
+        & (transcript_df["base_model"] == "PlantCAD2-Small")
     ].copy()
 
     plot1 = (
         pn.ggplot(
-            plot1_data, pn.aes(x="training_data", y="f1_score", shape="species_display")
+            plot1_data.assign(
+                training_data=lambda df: pd.Categorical(
+                    df["training_data"],
+                    categories=(
+                        df.groupby("training_data")["f1_score"]
+                        .median()
+                        .sort_values()
+                        .index
+                    ),
+                    ordered=True,
+                )
+            ),
+            pn.aes(x="training_data", y="f1_score"),
         )
-        + pn.geom_point(size=3, alpha=0.8)
+        + pn.geom_point(mapping=pn.aes(shape="species_display"), size=3, alpha=0.8)
+        + pn.geom_boxplot(
+            alpha=0.2, width=0.1, position=pn.position_nudge(x=-0.2), outlier_size=0.2
+        )
         + pn.labs(
             title="Training Scale Impact on Gene Annotation Performance",
             x="Training Data",
-            y="F1 Score",
+            y="Transcript F1",
             shape="Species",
         )
         + pn.theme_minimal()
@@ -245,21 +277,38 @@ def create_visualization(df: pd.DataFrame, output_dir: Path) -> None:
     plot2_data = transcript_df[
         (transcript_df["decoding_method"] == "viterbi")
         & (transcript_df["model_architecture"] == "plantcad+bert")
+        & (transcript_df["base_model"] == "PlantCAD2-Small")
     ].copy()
 
     plot2 = (
-        pn.ggplot(plot2_data, pn.aes(x="ground_truth", y="f1_score"))
-        + pn.geom_boxplot(alpha=0.2)
+        pn.ggplot(
+            plot2_data.assign(
+                ground_truth=lambda df: pd.Categorical(
+                    df["ground_truth"],
+                    categories=(
+                        df.groupby("ground_truth")["f1_score"]
+                        .median()
+                        .sort_values()
+                        .index
+                    ),
+                    ordered=True,
+                )
+            ),
+            pn.aes(x="ground_truth", y="f1_score"),
+        )
+        + pn.geom_boxplot(
+            alpha=0.2, width=0.1, position=pn.position_nudge(x=-0.2), outlier_size=0.2
+        )
         + pn.geom_point(
             mapping=pn.aes(shape="species_display", color="training_data"),
-            position=pn.position_jitter(width=0.2, height=0, random_state=42),
+            position=pn.position_jitter(width=0.1, height=0, random_state=42),
             size=3,
             alpha=0.8,
         )
         + pn.labs(
             title="Ground Truth Filtering Impact on Gene Annotation Performance",
             x="Ground Truth Type",
-            y="F1 Score",
+            y="Transcript F1",
             shape="Species",
             color="Training Data",
         )
@@ -272,18 +321,33 @@ def create_visualization(df: pd.DataFrame, output_dir: Path) -> None:
         (transcript_df["ground_truth"] == "original")
         & (transcript_df["training_data"] == "2x-genome")
         & (transcript_df["model_architecture"] == "plantcad+bert")
+        & (transcript_df["base_model"] == "PlantCAD2-Small")
     ].copy()
 
     plot3 = (
         pn.ggplot(
-            plot3_data,
-            pn.aes(x="decoding_method", y="f1_score", shape="species_display"),
+            plot3_data.assign(
+                decoding_method=lambda df: pd.Categorical(
+                    df["decoding_method"],
+                    categories=(
+                        df.groupby("decoding_method")["f1_score"]
+                        .median()
+                        .sort_values()
+                        .index
+                    ),
+                    ordered=True,
+                )
+            ),
+            pn.aes(x="decoding_method", y="f1_score"),
         )
-        + pn.geom_point(size=3, alpha=0.8)
+        + pn.geom_boxplot(
+            alpha=0.2, width=0.1, position=pn.position_nudge(x=-0.2), outlier_size=0.2
+        )
+        + pn.geom_point(mapping=pn.aes(shape="species_display"), size=3, alpha=0.8)
         + pn.labs(
             title="Decoding Method Impact on Gene Annotation Performance",
             x="Decoding Method",
-            y="F1 Score",
+            y="Transcript F1",
             shape="Species",
         )
         + pn.theme_minimal()
@@ -295,34 +359,88 @@ def create_visualization(df: pd.DataFrame, output_dir: Path) -> None:
         (transcript_df["ground_truth"] == "original")
         & (transcript_df["training_data"] == "2x-genome")
         & (transcript_df["decoding_method"] == "viterbi")
+        & (transcript_df["base_model"] == "PlantCAD2-Small")
     ].copy()
 
     plot4 = (
         pn.ggplot(
-            plot4_data,
-            pn.aes(x="model_architecture", y="f1_score", shape="species_display"),
+            plot4_data.assign(
+                model_architecture=lambda df: pd.Categorical(
+                    df["model_architecture"],
+                    categories=(
+                        df.groupby("model_architecture")["f1_score"]
+                        .median()
+                        .sort_values()
+                        .index
+                    ),
+                    ordered=True,
+                )
+            ),
+            pn.aes(x="model_architecture", y="f1_score"),
         )
-        + pn.geom_point(size=3, alpha=0.8)
+        + pn.geom_boxplot(
+            alpha=0.2, width=0.1, position=pn.position_nudge(x=-0.2), outlier_size=0.2
+        )
+        + pn.geom_point(mapping=pn.aes(shape="species_display"), size=3, alpha=0.8)
         + pn.labs(
             title="Model Architecture Impact on Gene Annotation Performance",
             x="Model Architecture",
-            y="F1 Score",
+            y="Transcript F1",
             shape="Species",
         )
         + pn.theme_minimal()
         + pn.theme(axis_text_x=pn.element_text(angle=45, hjust=1))
     )
 
-    # 5. Ablation results: F1 by ablation configuration, shape by species
+    # 5. Base model impact: F1 by base_model (original + 2x-genome + viterbi + plantcad+bert), shape by species
+    plot5_data = transcript_df[
+        (transcript_df["ground_truth"] == "original")
+        & (transcript_df["training_data"] == "2x-genome")
+        & (transcript_df["decoding_method"] == "viterbi")
+        & (transcript_df["model_architecture"] == "plantcad+bert")
+    ].copy()
+
+    plot5 = (
+        pn.ggplot(
+            plot5_data.assign(
+                base_model=lambda df: pd.Categorical(
+                    df["base_model"],
+                    categories=(
+                        df.groupby("base_model")["f1_score"]
+                        .median()
+                        .sort_values()
+                        .index
+                    ),
+                    ordered=True,
+                )
+            ),
+            pn.aes(x="base_model", y="f1_score"),
+        )
+        + pn.geom_point(mapping=pn.aes(shape="species_display"), size=3, alpha=0.8)
+        + pn.geom_boxplot(
+            alpha=0.2, width=0.1, position=pn.position_nudge(x=-0.2), outlier_size=0.2
+        )
+        + pn.labs(
+            title="Base Model Impact on Gene Annotation Performance",
+            x="Base Model",
+            y="Transcript F1",
+            shape="Species",
+        )
+        + pn.theme_minimal()
+        + pn.theme(axis_text_x=pn.element_text(angle=45, hjust=1))
+    )
+
+    # 6. Ablation results: F1 by ablation configuration, shape by species
     # Create ablation configuration labels by filtering and concatenating subsets
     config1 = df[
         (df["ground_truth"] == "original")
-        & (df["decoding_method"] == "viterbi")
+        & (df["decoding_method"] == "direct")
         & (df["model_architecture"] == "random_plantcad+bert")
         & (df["training_data"] == "2x-genome")
         & (df["level"] == "Transcript")
         & (df["tool"] == "gffcompare")
         & (df["post_processing_method"] == "precision-optimized")
+        & (df["base_model"] == "PlantCAD2-Small")
     ].assign(ablation_config="Baseline")
 
     config2 = df[
@@ -333,9 +451,21 @@ def create_visualization(df: pd.DataFrame, output_dir: Path) -> None:
         & (df["level"] == "Transcript")
         & (df["tool"] == "gffcompare")
         & (df["post_processing_method"] == "precision-optimized")
-    ].assign(ablation_config="+ PlantCAD")
+        & (df["base_model"] == "PlantCAD2-Small")
+    ].assign(ablation_config="+ PlantCAD-Small")
 
     config3 = df[
+        (df["ground_truth"] == "original")
+        & (df["decoding_method"] == "direct")
+        & (df["model_architecture"] == "plantcad+bert")
+        & (df["training_data"] == "2x-genome")
+        & (df["level"] == "Transcript")
+        & (df["tool"] == "gffcompare")
+        & (df["post_processing_method"] == "precision-optimized")
+        & (df["base_model"] == "PlantCAD2-Large")
+    ].assign(ablation_config="+ PlantCAD-Large")
+
+    config4 = df[
         (df["ground_truth"] == "original")
         & (df["decoding_method"] == "viterbi")
         & (df["model_architecture"] == "plantcad+bert")
@@ -343,26 +473,18 @@ def create_visualization(df: pd.DataFrame, output_dir: Path) -> None:
         & (df["level"] == "Transcript")
         & (df["tool"] == "gffcompare")
         & (df["post_processing_method"] == "precision-optimized")
+        & (df["base_model"] == "PlantCAD2-Large")
     ].assign(ablation_config="+ CRF")
 
-    config4 = df[
-        (df["ground_truth"] == "pc-filtered")
-        & (df["decoding_method"] == "viterbi")
-        & (df["model_architecture"] == "plantcad+bert")
-        & (df["training_data"] == "2x-genome")
-        & (df["level"] == "Transcript")
-        & (df["tool"] == "gffcompare")
-        & (df["post_processing_method"] == "precision-optimized")
-    ].assign(ablation_config="+ 0-shot filter")
-
     config5 = df[
-        (df["ground_truth"] == "pc-filtered")
+        (df["ground_truth"] == "original")
         & (df["decoding_method"] == "viterbi")
         & (df["model_architecture"] == "plantcad+bert")
         & (df["training_data"] == "5x-genome")
         & (df["level"] == "Transcript")
         & (df["tool"] == "gffcompare")
         & (df["post_processing_method"] == "precision-optimized")
+        & (df["base_model"] == "PlantCAD2-Large")
     ].assign(ablation_config="+ 5x train genomes")
 
     config6 = df[
@@ -370,31 +492,45 @@ def create_visualization(df: pd.DataFrame, output_dir: Path) -> None:
         & (df["decoding_method"] == "viterbi")
         & (df["model_architecture"] == "plantcad+bert")
         & (df["training_data"] == "5x-genome")
+        & (df["level"] == "Transcript")
+        & (df["tool"] == "gffcompare")
+        & (df["post_processing_method"] == "precision-optimized")
+        & (df["base_model"] == "PlantCAD2-Large")
+    ].assign(ablation_config="+ 0-shot filter")
+
+    config7 = df[
+        (df["ground_truth"] == "pc-filtered")
+        & (df["decoding_method"] == "viterbi")
+        & (df["model_architecture"] == "plantcad+bert")
+        & (df["training_data"] == "5x-genome")
         & (df["level"] == "transcript_cds")
         & (df["tool"] == "gffeval")
         & (df["post_processing_method"] == "precision-optimized")
+        & (df["base_model"] == "PlantCAD2-Large")
     ].assign(ablation_config="+ CDS-only eval")
 
     # Concatenate all configurations
-    plot5_data = pd.concat(
-        [config1, config2, config3, config4, config5, config6], ignore_index=True
+    plot6_data = pd.concat(
+        [config1, config2, config3, config4, config5, config6, config7],
+        ignore_index=True,
     )
 
     # Convert to ordered categorical
     ablation_order = [
         "Baseline",
-        "+ PlantCAD",
+        "+ PlantCAD-Small",
+        "+ PlantCAD-Large",
         "+ CRF",
-        "+ 0-shot filter",
         "+ 5x train genomes",
+        "+ 0-shot filter",
         "+ CDS-only eval",
     ]
-    plot5_data["ablation_config"] = pd.Categorical(
-        plot5_data["ablation_config"], categories=ablation_order, ordered=True
+    plot6_data["ablation_config"] = pd.Categorical(
+        plot6_data["ablation_config"], categories=ablation_order, ordered=True
     )
 
-    plot5 = (
-        pn.ggplot(plot5_data, pn.aes(x="ablation_config", y="f1_score"))
+    plot6 = (
+        pn.ggplot(plot6_data, pn.aes(x="ablation_config", y="f1_score"))
         + pn.geom_boxplot(
             alpha=0.2, width=0.1, position=pn.position_nudge(x=-0.3), outlier_size=0.2
         )
@@ -405,7 +541,10 @@ def create_visualization(df: pd.DataFrame, output_dir: Path) -> None:
             alpha=0.8,
         )
         + pn.labs(
-            title="Ablation Results", x="Configuration", y="F1 Score", shape="Species"
+            title="Ablation Results",
+            x="Configuration",
+            y="Transcript F1",
+            shape="Species",
         )
         + pn.theme_minimal()
         + pn.theme(axis_text_x=pn.element_text(angle=25, hjust=1))
@@ -420,13 +559,15 @@ def create_visualization(df: pd.DataFrame, output_dir: Path) -> None:
     plot4.save(
         output_dir / "genecad_model_architecture.pdf", width=8, height=4, dpi=300
     )
-    plot5.save(output_dir / "genecad_ablation_results.pdf", width=8, height=4, dpi=300)
+    plot5.save(output_dir / "genecad_base_model.pdf", width=8, height=4, dpi=300)
+    plot6.save(output_dir / "genecad_ablation_results.pdf", width=8, height=4, dpi=300)
 
-    logger.info(f"Saved 5 plots to: {output_dir}")
+    logger.info(f"Saved 6 plots to: {output_dir}")
     logger.info("  - genecad_training_scale.pdf")
     logger.info("  - genecad_ground_truth_filter.pdf")
     logger.info("  - genecad_decoding_method.pdf")
     logger.info("  - genecad_model_architecture.pdf")
+    logger.info("  - genecad_base_model.pdf")
     logger.info("  - genecad_ablation_results.pdf")
 
 
@@ -459,6 +600,7 @@ def print_summary_statistics(df: pd.DataFrame) -> None:
                 "species_display",
                 "level",
                 "tool",
+                "base_model",
                 "post_processing_method",
             ],
             columns="version_ground_truth",
