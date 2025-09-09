@@ -35,7 +35,7 @@ for SPECIES_LOWER in $SPECIES_LIST; do
         python scripts/extract.py extract_fasta_sequences \
           --input-dir "$RAW_DIR" \
           --species-id "$SPECIES_ID" \
-          --tokenizer-path "$MODEL_PATH" \
+          --tokenizer-path "$TOKENIZER_MODEL_PATH" \
           --output "$PREDICT_DIR/$SPECIES_LOWER/sequences.zarr"
     else
         echo "Sequences already exist for $SPECIES_LOWER, skipping"

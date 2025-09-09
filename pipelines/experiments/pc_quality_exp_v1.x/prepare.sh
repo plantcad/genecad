@@ -101,7 +101,7 @@ echo "$(date): Step 6 - Extracting FASTA sequences"
 python scripts/extract.py extract_fasta_sequences \
   --input-dir "$RAW_DIR/fasta" \
   --species-id $SPECIES_LIST \
-  --tokenizer-path "$MODEL_PATH" \
+  --tokenizer-path "$TOKENIZER_MODEL_PATH" \
   --output "$EXTRACT_DIR/tokens.zarr"
 
 # Step 7: Create sequence dataset

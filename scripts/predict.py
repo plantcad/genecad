@@ -37,9 +37,23 @@ def batched(input_list: list[Any], batch_size: int) -> list[list[Any]]:
 
 def load_classifier(args: Args) -> GeneClassifier:
     logger.info(f"Loading model from {args.model_checkpoint}")
+    if not hasattr(torch, args.dtype):
+        raise ValueError(f"Invalid torch dtype: {args.dtype}")
     dtype = getattr(torch, args.dtype)
+
+    # If checkpoint is not local, assume it is a Hugging Face path
+    model_checkpoint = args.model_checkpoint
+    if not os.path.exists(model_checkpoint):
+        logger.info(
+            f"Local path for classifier {model_checkpoint} not found; attempting Hugging Face download ..."
+        )
+        from huggingface_hub import hf_hub_download
+
+        model_checkpoint = hf_hub_download(args.model_checkpoint, filename="model.ckpt")
+        logger.info(f"Downloaded classifier to {model_checkpoint}")
+
     model = GeneClassifier.load_from_checkpoint(
-        args.model_checkpoint, map_location=args.device
+        model_checkpoint, map_location=args.device
     )
     model = model.eval()
     model = model.to(args.device, dtype=dtype)
@@ -701,6 +715,7 @@ def generate_gff(
     chrom_id: str,
     output_path: str,
     strip_introns: bool = True,
+    source: str = "GeneCAD",
 ) -> None:
     """
     Generate a GFF3 file from grouped gene intervals.
@@ -715,11 +730,12 @@ def generate_gff(
         Path to write the GFF3 output file.
     strip_introns : bool, default True
         Whether to remove intron features before calculating gene boundaries.
+    source : str, default "GeneCAD"
+        The source of the GFF records.
     """
     logger.info(f"Generating GFF3 output for {len(genes)} genes on {chrom_id}")
     gff_records = []
     gene_counter = 0
-    source = "plantCaduceus"  # GFF source field
 
     gff_feature_map = {
         "cds": GffFeatureType.CDS.value,

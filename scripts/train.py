@@ -12,6 +12,7 @@ from lightning.pytorch.loggers import WandbLogger, CSVLogger
 from lightning.pytorch.callbacks import ModelCheckpoint, LearningRateMonitor
 from argparse import Namespace as Args
 from typing import Optional
+from transformers import AutoConfig
 from src.dataset import XarrayDataset
 from src.config import WINDOW_SIZE
 from src.modeling import GeneClassifier, GeneClassifierConfig, ThroughputMonitor
@@ -313,7 +314,14 @@ def train(args: Args) -> None:
         config = model.config
     else:
         logger.info(
-            f"Creating new model (architecture={args.architecture}, head_encoder_layers={args.head_encoder_layers})"
+            f"Creating new model (architecture={args.architecture}, base_encoder_path={args.base_encoder_path})"
+        )
+        base_encoder_dim = (
+            AutoConfig.from_pretrained(args.base_encoder_path, trust_remote_code=True)
+            # Classifier excepts dimension of embeddings, which is double the configured hidden
+            # size for Caduceus models (forward + reverse-complement sequences)
+            .d_model
+            * 2
         )
         config = GeneClassifierConfig(
             architecture=args.architecture,
@@ -322,6 +330,7 @@ def train(args: Args) -> None:
             train_eval_frequency=args.train_eval_frequency,
             head_encoder_layers=args.head_encoder_layers,
             base_encoder_path=args.base_encoder_path,
+            base_encoder_dim=base_encoder_dim,
             enable_visualization=args.enable_visualization == "yes",
             base_encoder_frozen=args.base_encoder_frozen == "yes",
             base_encoder_randomize=args.randomize_base == "yes",

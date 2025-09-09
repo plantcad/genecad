@@ -25,11 +25,6 @@ class DataSplitConfig:
 
 
 @dataclass
-class SpeciesWindowsConfig:
-    filename: str
-
-
-@dataclass
 class SpeciesConfig:
     """Configuration for a specific species genome and annotation data.
 
@@ -47,8 +42,6 @@ class SpeciesConfig:
         Configuration for FASTA file handling for this species
     split : DataSplitConfig
         Configuration for data splits (training/validation/evaluation)
-    windows : SpeciesWindowsConfig
-        Configuration for windows file handling for this species
     """
 
     id: str
@@ -57,7 +50,6 @@ class SpeciesConfig:
     gff: SpeciesGffConfig
     fasta: SpeciesFastaConfig
     split: DataSplitConfig
-    windows: SpeciesWindowsConfig | None = None
 
     @classmethod
     def parse_chromosome_number(cls, chrom_id: str) -> int | None:
@@ -260,7 +252,6 @@ athaliana_config = SpeciesConfig(
     },
     gff=SpeciesGffConfig(filename="Athaliana_447_Araport11.gene.gff3"),
     fasta=SpeciesFastaConfig(filename="Athaliana_447.fasta"),
-    windows=SpeciesWindowsConfig(filename="Athaliana_447_crf_windows.npy"),
     split=DataSplitConfig(use_in_training=True, use_in_validation=True, use_in_evaluation=False)
 )
 
@@ -275,7 +266,6 @@ osativa_config = SpeciesConfig(
     },
     gff=SpeciesGffConfig(filename="Osativa_323_v7.0.gene.gff3"),
     fasta=SpeciesFastaConfig(filename="Osativa_323.fasta"),
-    windows=SpeciesWindowsConfig(filename="Osativa_323_crf_windows.npy"),
     split=DataSplitConfig(use_in_training=True, use_in_validation=True, use_in_evaluation=False)
 )
 
@@ -288,7 +278,6 @@ acomosus_config = SpeciesConfig(
     },
     gff=SpeciesGffConfig(filename="Acomosus_321_v3.gene.no_scaffold.gff3.gz"),
     fasta=SpeciesFastaConfig(filename="Acomosus_321_v3.no_scaffold.fa.gz"),
-    windows=SpeciesWindowsConfig(filename="Acomosus_321_v3_windows.npy"),
     split=DataSplitConfig(use_in_training=True, use_in_validation=False, use_in_evaluation=False)
 )
 
@@ -301,7 +290,6 @@ acoerulea_config = SpeciesConfig(
     },
     gff=SpeciesGffConfig(filename="Acoerulea_322_v3.1.gene.no_scaffold.gff3.gz"),
     fasta=SpeciesFastaConfig(filename="Acoerulea_322_v3.no_scaffold.fa.gz"),
-    windows=SpeciesWindowsConfig(filename="Acoerulea_322_v3_windows.npy"),
     split=DataSplitConfig(use_in_training=True, use_in_validation=False, use_in_evaluation=False)
 )
 
@@ -314,7 +302,6 @@ aofficinalis_config = SpeciesConfig(
     },
     gff=SpeciesGffConfig(filename="Aofficinalis_498_V1.1.gene.no_scaffold.gff3.gz"),
     fasta=SpeciesFastaConfig(filename="Aofficinalis_498_Aspof.V1.no_scaffold.fa.gz"),
-    windows=SpeciesWindowsConfig(filename="Aofficinalis_498_Aspof.V1_windows.npy"),
     split=DataSplitConfig(use_in_training=True, use_in_validation=False, use_in_evaluation=False)
 )
 
@@ -327,7 +314,6 @@ bplatyphylla_config = SpeciesConfig(
     },
     gff=SpeciesGffConfig(filename="Bplatyphylla_679_v1.1.gene.no_scaffold.gff3.gz"),
     fasta=SpeciesFastaConfig(filename="Bplatyphylla_679_v1.0.no_scaffold.fa.gz"),
-    windows=SpeciesWindowsConfig(filename="Bplatyphylla_679_v1.0_windows.npy"),
     split=DataSplitConfig(use_in_training=True, use_in_validation=False, use_in_evaluation=False)
 )
 
@@ -348,7 +334,6 @@ bvulgaris_config = SpeciesConfig(
     },
     gff=SpeciesGffConfig(filename="Bvulgaris_548_EL10_1.0.gene.no_scaffold.gff3.gz"),
     fasta=SpeciesFastaConfig(filename="Bvulgaris_548_EL10_1.0.no_scaffold.fa.gz"),
-    windows=SpeciesWindowsConfig(filename="Bvulgaris_548_EL10_1.0_windows.npy"),
     split=DataSplitConfig(use_in_training=True, use_in_validation=False, use_in_evaluation=False)
 )
 
@@ -361,7 +346,6 @@ cillinoinensis_config = SpeciesConfig(
     },
     gff=SpeciesGffConfig(filename="Cillinoinensis_573_v1.1.gene.no_scaffold.gff3.gz"),
     fasta=SpeciesFastaConfig(filename="Cillinoinensis_573_v1.0.no_scaffold.fa.gz"),
-    windows=SpeciesWindowsConfig(filename="Cillinoinensis_573_v1.0_windows.npy"),
     split=DataSplitConfig(use_in_training=True, use_in_validation=False, use_in_evaluation=False)
 )
 
