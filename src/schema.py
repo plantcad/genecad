@@ -9,6 +9,28 @@ from src.sequence import BILUO_TAGS
 # -------------------------------------------------------------------------------------------------
 
 
+class TokenBiluoClass(StrEnum):
+    """Token classification labels for sequence modeling."""
+
+    INTERGENIC = "intergenic"
+    B_INTRON = "B-intron"
+    I_INTRON = "I-intron"
+    L_INTRON = "L-intron"
+    U_INTRON = "U-intron"
+    B_FIVE_PRIME_UTR = "B-five_prime_utr"
+    I_FIVE_PRIME_UTR = "I-five_prime_utr"
+    L_FIVE_PRIME_UTR = "L-five_prime_utr"
+    U_FIVE_PRIME_UTR = "U-five_prime_utr"
+    B_CDS = "B-cds"
+    I_CDS = "I-cds"
+    L_CDS = "L-cds"
+    U_CDS = "U-cds"
+    B_THREE_PRIME_UTR = "B-three_prime_utr"
+    I_THREE_PRIME_UTR = "I-three_prime_utr"
+    L_THREE_PRIME_UTR = "L-three_prime_utr"
+    U_THREE_PRIME_UTR = "U-three_prime_utr"
+
+
 class FilterReason(StrEnum):
     """Reasons for GFF feature filtering typically used to generate training masks"""
 
@@ -49,6 +71,7 @@ class ModelingFeatureType(StrEnum):
     THREE_PRIME_UTR = "three_prime_utr"
 
 
+# pyrefly: ignore[not-iterable]
 SEQUENCE_MODELING_FEATURES = [e.value for e in ModelingFeatureType]
 
 BILUO_TAG_CLASS_INFO = [
@@ -76,6 +99,7 @@ MODELING_FEATURE_CLASS_INFO = [
     {"name": SentinelType.MASK.value, "index": -1, "feature": None},
 ] + [
     {"name": feature.value, "index": i, "feature": feature}
+    # pyrefly: ignore[bad-argument-type]
     for i, feature in enumerate(ModelingFeatureType)
 ]
 
@@ -103,6 +127,7 @@ class RegionType(StrEnum):
 
     @classmethod
     def value_to_index(cls) -> dict["RegionType", int]:
+        # pyrefly: ignore[bad-argument-type]
         return {ft: i for i, ft in enumerate(RegionType)}
 
     @classmethod
@@ -138,6 +163,7 @@ class GffFeatureType(StrEnum):
 
     @classmethod
     def value_to_index(cls) -> dict["GffFeatureType", int]:
+        # pyrefly: ignore[bad-argument-type]
         return {ft: i for i, ft in enumerate(GffFeatureType)}
 
     @classmethod
@@ -153,6 +179,7 @@ class GffFeatureType(StrEnum):
             GffFeatureType.CDS: FeatureLevel.ANNOTATION.value,
             GffFeatureType.THREE_PRIME_UTR: FeatureLevel.ANNOTATION.value,
         }
+        # pyrefly: ignore[no-matching-overload]
         assert set(GffFeatureType) == set(mapping.keys())
         return mapping
 
@@ -165,12 +192,14 @@ class GffFeatureType(StrEnum):
             GffFeatureType.CDS: "cds",
             GffFeatureType.THREE_PRIME_UTR: "three_prime_utr",
         }
+        # pyrefly: ignore[no-matching-overload]
         assert set(GffFeatureType) == set(mapping.keys())
         return mapping
 
     @classmethod
     def get_values(cls, level: int) -> list["GffFeatureType"]:
         mapping = cls.value_to_level()
+        # pyrefly: ignore  # not-iterable
         return [ft for ft in GffFeatureType if mapping[ft] == level]
 
     def get_index(self) -> int:

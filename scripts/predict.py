@@ -209,7 +209,7 @@ def _create_predictions(
             sequence_coordinates = flip(sequence_coordinates)
 
         # Create windows of input ids to process
-        windows = list(
+        windows: list[tuple[npt.ArrayLike, tuple[int, int], tuple[int, int]]] = list(
             create_sequence_windows(
                 sequence_input_ids,
                 window_size=args.window_size,
@@ -219,7 +219,9 @@ def _create_predictions(
         )
 
         # Select windows for this rank
+        # pyrefly: ignore  # bad-assignment
         windows = np.array(windows, dtype=object)
+        # pyrefly: ignore  # no-matching-overload
         windows = np.array_split(windows, world_size)[rank]
 
         # Batch windows together
@@ -243,11 +245,13 @@ def _create_predictions(
             # Generate embeddings, if necessary
             inputs_embeds = None
             if classifier.config.use_precomputed_base_encodings:
+                # pyrefly: ignore  # not-callable
                 inputs_embeds = base_model(input_ids=input_ids).last_hidden_state
                 assert inputs_embeds.ndim == 3
                 assert inputs_embeds.shape[:2] == (current_batch_size, args.window_size)
 
             # Get predictions from classifier
+            # pyrefly: ignore  # not-callable
             token_logits = classifier(input_ids=input_ids, inputs_embeds=inputs_embeds)
             assert token_logits.shape == (
                 current_batch_size,
@@ -280,7 +284,9 @@ def _create_predictions(
                 feature_logits_window = feature_logits[
                     i, local_window[0] : local_window[1], :
                 ]
+                # pyrefly: ignore  # index-error
                 sequence_coords_window = sequence_coordinates[
+                    # pyrefly: ignore  # index-error
                     global_window[0] : global_window[1]
                 ]
                 token_logits_arrays.append(token_logits_window)
@@ -325,6 +331,7 @@ def _create_predictions(
             # Chunk in sequence dim only and save
             result = set_dimension_chunks(result, "sequence", result.sizes["sequence"])
             os.makedirs(args.output_dir, exist_ok=True)
+            # pyrefly: ignore  # no-matching-overload
             result.to_zarr(
                 dataset_path,
                 group=f"/{strand}",
@@ -432,7 +439,7 @@ def _detect_intervals(
 
     logger.info(f"Running decoding methods: {decoding_methods}")
 
-    # TODO: Fetch the label properties necessary from attributions stored in the predictions
+    # TODO: Fetch the label properties necessary from attributes stored in the predictions
     # datasets rather than from the configuration files, or from the original model checkpoint.
     config = GeneClassifierConfig()
     region_intervals = []
@@ -466,6 +473,7 @@ def _detect_intervals(
         )
 
         assert labels.ndim == 1
+        # pyrefly: ignore  # bad-argument-type
         assert len(labels) == len(logits)
         return labels
 
@@ -499,7 +507,9 @@ def _detect_intervals(
                 )
 
             intervals = convert_entity_labels_to_intervals(
-                labels=viterbi_labels, class_groups=config.interval_entity_classes
+                # pyrefly: ignore  # bad-argument-type
+                labels=viterbi_labels,
+                class_groups=config.interval_entity_classes,
             )
             region_intervals.append(intervals.assign(strand=strand, decoding="viterbi"))
 
@@ -582,7 +592,9 @@ class GffRecord(BaseModel):
     seqid: str = Field(..., description="Sequence identifier (e.g., chromosome name)")
     source: str = Field(..., description="Source of the feature (e.g., program name)")
     type: str = Field(..., description="Type of the feature (e.g., gene, CDS)")
+    # pyrefly: ignore  # no-matching-overload
     start: int = Field(..., description="Start position (1-based, inclusive)", gt=0)
+    # pyrefly: ignore  # no-matching-overload
     end: int = Field(..., description="End position (1-based, inclusive)", gt=0)
     score: float | None = Field(default=None, description="Score of the feature")
     strand: Literal["+", "-"] = Field(..., description="Strand: '+' or '-'")
@@ -700,6 +712,7 @@ def group_intervals_by_transcript(
 
     results = [
         process_single_transcript(row, feature_intervals)
+        # pyrefly: ignore  # not-iterable
         for _, row in tqdm.tqdm(
             transcript_intervals.iterrows(), total=len(transcript_intervals)
         )

@@ -173,7 +173,7 @@ def parse_args(args: Optional[list[str]] = None) -> Args:
         "--base-encoder-path",
         type=str,
         default=None,
-        help='Path to the base encoder model to use, e.g. "kuleshov-group/compo-cad2-l24-dna-chtk-c8192-v2-b2-NpnkD-ba240000"',
+        help='Path to the base encoder model to use, e.g. "kuleshov-group/PlantCAD2-Small-l24-d0768"',
     )
     parser.add_argument(
         "--base-encoder-frozen",

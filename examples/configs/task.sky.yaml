@@ -1,0 +1,5 @@
+workdir: .
+run: |
+  # Run example prediction pipeline and evaluation
+  docker run --rm --gpus all -v $(pwd):/workspace -w /workspace eczech/genecad:latest \
+    bash -c "bash examples/scripts/run_inference.sh && bash examples/scripts/run_evaluation.sh"

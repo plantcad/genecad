@@ -20,6 +20,7 @@ SAVE_DIR = "local/logs/train"
 # Utility Functions
 # -------------------------------------------------------------------------
 
+
 def set_visualization_save_dir(save_dir: str) -> None:
     """Set the global save directory for visualizations.
 
@@ -121,6 +122,7 @@ def _resolve_sample_info(
     default_index: Callable[[], int] | None = None,
 ) -> tuple[int, str]:
     if sample_index is None:
+        assert default_index is not None
         sample_index = default_index()
     if sample_name is None:
         sample_name = f"batch[{sample_index}]"
@@ -434,6 +436,7 @@ def visualize_entity_predictions(
     )
 
     # Adjust layout
+    # pyrefly: ignore  # bad-argument-type
     plt.tight_layout(rect=[0, 0.08, 1, 0.95])
 
     # Save and log the figure
@@ -459,6 +462,7 @@ def visualize_entity_intervals(
     sample_index, sample_name = _resolve_sample_info(
         sample_index=sample_index,
         sample_name=sample_name,
+        # pyrefly: ignore  # no-matching-overload
         default_index=lambda: int(
             entity_intervals["sample_index"].value_counts().idxmax()
         ),
@@ -610,6 +614,7 @@ def visualize_entity_intervals(
         f"Entity Intervals Visualization (Step {module.global_step}, Sample {sample_name})",
         fontsize=16,
     )
+    # pyrefly: ignore  # bad-argument-type
     plt.tight_layout(rect=[0, 0, 1, 0.95])
 
     # Save and log the figure

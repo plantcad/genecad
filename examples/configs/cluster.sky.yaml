@@ -1,0 +1,29 @@
+resources:
+  ordered:
+
+    # Prefer inexpensive options on Lambda up to 2xH100s
+    - infra: lambda
+      accelerators: A10
+    - infra: lambda
+      accelerators: A100
+    - infra: lambda
+      accelerators: A100-80GB
+    - infra: lambda
+      accelerators: H100
+    - infra: lambda
+      accelerators: A100:2
+    - infra: lambda
+      accelerators: H100:2
+
+    # Cheapest compatiable options on AWS and GCP:
+    # - infra: aws
+    #   accelerators: A10G
+    #   instance_type: g5.8xlarge
+    # - infra: gcp
+    #   accelerators: L4
+    #   instance_type: g2-standard-32
+
+  disk_size: 100
+workdir: .
+setup: |
+  uv sync --extra torch --extra mamba

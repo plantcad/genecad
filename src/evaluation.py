@@ -1,11 +1,15 @@
-"""Interval evaluation functions from https://github.com/maize-genetics/reelAnnote-dev/pull/2"""
+"""Interval evaluation functions from https://github.com/maize-genetics/GeneCAD-dev/pull/2"""
 
+import itertools
 import numpy as np
+import portion as P
 from Bio import SeqFeature
 from numba import njit
-import src.portion as P
 from dataclasses import dataclass
-import itertools
+from typing import Type, cast as cast_type
+
+# Supress pyrefly error: "Expected a type form, got instance of `Module[Bio.SeqFeature]` [not-a-type]"
+SeqFeature = cast_type(Type, SeqFeature)
 
 
 @dataclass

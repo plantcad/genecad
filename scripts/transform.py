@@ -4,6 +4,7 @@ import os
 import logging
 from dataclasses import dataclass, asdict
 from concurrent.futures import ProcessPoolExecutor
+from typing import cast as cast_type
 from src.dataset import (
     DEFAULT_SEQUENCE_CHUNK_SIZE,
     open_datatree,
@@ -41,10 +42,10 @@ def create_filters(df: pd.DataFrame, reason: str) -> list[Filter]:
     """Create Filter objects resulting from a shared cause."""
     return [
         Filter(
-            species_id=row["species_id"],
-            chromosome_id=row["chromosome_id"],
-            gene_id=row["gene_id"],
-            strand=row["strand"],
+            species_id=cast_type(str, row["species_id"]),
+            chromosome_id=cast_type(str, row["chromosome_id"]),
+            gene_id=cast_type(str, row["gene_id"]),
+            strand=cast_type(str, row["strand"]),
             reason=reason,
         )
         for _, row in (
@@ -506,6 +507,7 @@ def _create_feature_intervals(group: pd.DataFrame) -> tuple[pd.DataFrame, list[s
     # Filter to lowest level features like CDS, 5' UTR, 3' UTR, etc.
     annotation_features = [
         ft
+        # pyrefly: ignore  # not-iterable
         for ft in GffFeatureType
         if GffFeatureType.value_to_level()[ft] == FeatureLevel.ANNOTATION
     ]
@@ -545,6 +547,7 @@ def _create_region_labels(
     group: pd.DataFrame, domain: tuple[int, int]
 ) -> tuple[np.ndarray, list[str]]:
     domain_size = domain[1] - domain[0]
+    # pyrefly: ignore  # no-matching-overload
     region_coords: list[str] = list(RegionType)
     num_region_types = len(region_coords)
 
@@ -652,7 +655,11 @@ def _create_boundary_intervals(
 
     boundary_data = []
     for _, row in filters_df.iterrows():
-        gene_start, gene_stop, reason = row["start"], row["stop"], row["reason"]
+        gene_start, gene_stop, reason = (
+            cast_type(int, row["start"]),
+            cast_type(int, row["stop"]),
+            cast_type(str, row["reason"]),
+        )
 
         # Upstream mask: constrain by end of nearest upstream feature
         upstream_start = gene_start - up_buffer
@@ -704,7 +711,9 @@ def _generate_label_masks(
 
     # Assign buffers based on strand (upstream becomes downstream on negative strand)
     boundary_mask_size = (
-        boundary_mask_size if strand == "positive" else boundary_mask_size[::-1]
+        boundary_mask_size
+        if strand == "positive"
+        else cast_type(tuple[int, int], boundary_mask_size[::-1])
     )
 
     # Standardize group_filters: rename columns and deduplicate early
@@ -727,6 +736,7 @@ def _generate_label_masks(
     # Split filters into three categories: boundary-only, both, and interior-only
     is_boundary_only = standardized_filters["reason"].isin(boundary_filter_reasons)
     is_both = standardized_filters["reason"].isin(both_filter_reasons)
+    # pyrefly: ignore  # unsupported-operation
     is_interior_only = ~(is_boundary_only | is_both)
 
     boundary_only_filters = standardized_filters[is_boundary_only]

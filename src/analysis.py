@@ -122,7 +122,10 @@ def load_feature_length_distributions(
     dict[str, pd.Series]
         Dictionary mapping feature name to length probability Series with length values as index
     """
-    from scipy.ndimage import gaussian_filter1d
+    from scipy.ndimage import (
+        # pyrefly: ignore[missing-module-attribute]
+        gaussian_filter1d,
+    )
 
     df = pd.read_parquet(path)
 
@@ -152,6 +155,7 @@ def load_feature_length_distributions(
     length_probs = {}
 
     for feature in feature_labels:
+        # pyrefly: ignore  # no-matching-overload
         feature_data = df[df["class_name"] == feature].sort_values("length")
         if len(feature_data) == 0:
             raise ValueError(f"No length data found for feature: {feature}")

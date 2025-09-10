@@ -1,3 +1,4 @@
+# pyrefly: ignore-errors
 # Copied from: https://github.com/chapmanb/bcbb/blob/320353c64ee0dc938113ca36f19b2e6de6b597be/gff/BCBio/GFF/GFFParser.py
 """Parse GFF files into features attached to Biopython SeqRecord objects.
 

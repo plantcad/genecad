@@ -1,10 +1,12 @@
 import pytest
+import os
 import numpy as np
-from src.dataset import XarrayDataset
 import xarray as xr
 import tempfile
-import os
 from unittest.mock import patch
+
+pytest.importorskip("torch")
+from src.dataset import XarrayDataset
 
 
 def test_xarray_dataset():

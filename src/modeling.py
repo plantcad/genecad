@@ -1,17 +1,17 @@
 import math
 import time
 import pandas as pd
-from typing import Literal, Optional
 import lightning as L
 import torch
 import torch.nn as nn
 import numpy as np
 from torch import Tensor
 import torch.nn.functional as F
+from typing import Any, Literal, Optional, cast as cast_type
 from torchmetrics.functional.classification import multiclass_f1_score
 from lightning.pytorch.utilities import grad_norm
 from lightning.pytorch.callbacks import Callback
-from transformers import ModernBertConfig, ModernBertModel
+from transformers import ModernBertConfig, ModernBertModel, AutoModel
 from src.sequence import (
     N_BILUO_TAGS,
     create_entity_evaluation_intervals,
@@ -25,6 +25,7 @@ from src.schema import (
     ModelingFeatureType as MFT,
     RegionType,
     SentinelType as ST,
+    TokenBiluoClass,
 )
 from src.visualization import (
     visualize_entities,
@@ -64,7 +65,7 @@ class MLP(nn.Module):
 class ThroughputMonitor(Callback):
     def __init__(self):
         super().__init__()
-        self.start_time = None
+        self.start_time: float | None = None
         self.total_batches = 0
 
     def on_train_start(self, trainer, pl_module):
@@ -73,6 +74,8 @@ class ThroughputMonitor(Callback):
 
     def on_train_batch_end(self, trainer, pl_module, outputs, batch, batch_idx):
         self.total_batches += 1
+        if self.start_time is None:
+            raise ValueError("start_time is not set (must call `on_train_start` first)")
         elapsed_time = time.time() - self.start_time
         batch_per_sec = self.total_batches / elapsed_time
         sample_per_sec = batch_per_sec * batch["input_ids"].shape[0]
@@ -126,26 +129,25 @@ TOKEN_CLASS_NAMES = [
     for i in range(TOKEN_NUM_CLASSES)
 ]
 # fmt: off
-# TODO: Add BILUO tag enum to schema for use cases like this
 TOKEN_CLASS_FREQUENCIES: dict[str, float] = {
     # Computed from https://github.com/Open-Athena/oa-cornell-dna/issues/50#issuecomment-2986102331
-    "intergenic": 7.531898e-01, # [0]
-    "B-intron": 3.422340e-04, # [1]
-    "I-intron": 1.071083e-01, # [2]
-    "L-intron": 3.426275e-04, # [3]
-    "U-intron": 2.781372e-08, # [4]
-    "B-five_prime_utr": 9.035149e-05, # [5]
-    "I-five_prime_utr": 1.633261e-02, # [6]
-    "L-five_prime_utr": 9.067691e-05, # [7]
-    "U-five_prime_utr": 2.447608e-07, # [8]
-    "B-cds": 3.960827e-04, # [9]
-    "I-cds": 9.466096e-02, # [10]
-    "L-cds": 3.961328e-04, # [11]
-    "U-cds": 2.781372e-08, # [12]
-    "B-three_prime_utr": 8.391818e-05, # [13]
-    "I-three_prime_utr": 2.688256e-02, # [14]
-    "L-three_prime_utr": 8.319502e-05, # [15]
-    "U-three_prime_utr": 2.072122e-07, # [16]
+    TokenBiluoClass.INTERGENIC.value: 7.531898e-01, # [0]
+    TokenBiluoClass.B_INTRON.value: 3.422340e-04, # [1]
+    TokenBiluoClass.I_INTRON.value: 1.071083e-01, # [2]
+    TokenBiluoClass.L_INTRON.value: 3.426275e-04, # [3]
+    TokenBiluoClass.U_INTRON.value: 2.781372e-08, # [4]
+    TokenBiluoClass.B_FIVE_PRIME_UTR.value: 9.035149e-05, # [5]
+    TokenBiluoClass.I_FIVE_PRIME_UTR.value: 1.633261e-02, # [6]
+    TokenBiluoClass.L_FIVE_PRIME_UTR.value: 9.067691e-05, # [7]
+    TokenBiluoClass.U_FIVE_PRIME_UTR.value: 2.447608e-07, # [8]
+    TokenBiluoClass.B_CDS.value: 3.960827e-04, # [9]
+    TokenBiluoClass.I_CDS.value: 9.466096e-02, # [10]
+    TokenBiluoClass.L_CDS.value: 3.961328e-04, # [11]
+    TokenBiluoClass.U_CDS.value: 2.781372e-08, # [12]
+    TokenBiluoClass.B_THREE_PRIME_UTR.value: 8.391818e-05, # [13]
+    TokenBiluoClass.I_THREE_PRIME_UTR.value: 2.688256e-02, # [14]
+    TokenBiluoClass.L_THREE_PRIME_UTR.value: 8.319502e-05, # [15]
+    TokenBiluoClass.U_THREE_PRIME_UTR.value: 2.072122e-07, # [16]
 }
 # fmt: on
 # Assert equality of pre-calculated frequency classes until support for dynamic configuration is necessary
@@ -153,7 +155,7 @@ assert TOKEN_CLASS_NAMES == list(TOKEN_CLASS_FREQUENCIES.keys())
 assert (
     len(
         set(TOKEN_CLASS_FREQUENCIES.keys())
-        - set(r["name"] for r in BILUO_TAG_CLASS_INFO)
+        - set(cast_type(str, r["name"]) for r in BILUO_TAG_CLASS_INFO)
     )
     == 0
 )
@@ -187,7 +189,7 @@ class GeneClassifierConfig:
     enable_visualization: bool = True
     token_entity_names: list[str] = field(default_factory=lambda: TOKEN_ENTITY_NAMES)
     token_class_names: list[str] = field(default_factory=lambda: TOKEN_CLASS_NAMES)
-    token_class_frequencies: list[float] | None = field(
+    token_class_frequencies: dict[str, float] = field(
         default_factory=lambda: TOKEN_CLASS_FREQUENCIES
     )
     interval_entity_classes: list[list[int]] = field(
@@ -309,8 +311,8 @@ class GeneClassifier(L.LightningModule):
             dropout=self.config.dropout,
         )
 
-        self.head_config = None
-        self.head_encoder = None
+        self.head_config: ModernBertConfig | None = None
+        self.head_encoder: ModernBertModel | None = None
         if config.use_head_encoder:
             self.head_config = ModernBertConfig(
                 vocab_size=config.vocab_size,
@@ -325,10 +327,14 @@ class GeneClassifier(L.LightningModule):
             )
             self.head_encoder = ModernBertModel(self.head_config)
 
-        self.base_encoder = None
+        self.base_encoder: AutoModel | None = None
         if config.use_base_encoder:
             # If path is not provided, base encoder embeddings will be required as inputs
             if not config.use_precomputed_base_encodings:
+                if config.base_encoder_path is None:
+                    raise ValueError(
+                        "base_encoder_path must be provided when using base encoder embeddings"
+                    )
                 self.base_encoder = load_base_model(
                     config.base_encoder_path,
                     revision=config.base_encoder_revision,
@@ -341,7 +347,7 @@ class GeneClassifier(L.LightningModule):
                 else:
                     self.base_encoder = self.base_encoder.train()
 
-        self.token_embedding = None
+        self.token_embedding: nn.Embedding | None = None
         if config.use_token_embedding:
             # With no base encoder, expand token embedding dim to hidden size
             token_embedding_dim = (
@@ -351,7 +357,7 @@ class GeneClassifier(L.LightningModule):
             )
             self.token_embedding = nn.Embedding(config.vocab_size, token_embedding_dim)
 
-        self.embedding_projection = None
+        self.embedding_projection: nn.Linear | None = None
         self.embedding_projection_dim = config.hidden_size - (
             0 if self.token_embedding is None else self.token_embedding.embedding_dim
         )
@@ -459,7 +465,9 @@ class GeneClassifier(L.LightningModule):
                     )
 
         scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
-        scheduler_config = dict(scheduler=scheduler, interval="step", frequency=1)
+        scheduler_config: dict[str, Any] = dict(
+            scheduler=scheduler, interval="step", frequency=1
+        )
         return [optimizer], [scheduler_config]
 
     # -------------------------------------------------------------------------
@@ -490,12 +498,13 @@ class GeneClassifier(L.LightningModule):
         B, S, H = input_ids.shape[0], input_ids.shape[1], self.config.hidden_size
 
         # Compute token embeddings
-        token_embedding = None
+        token_embedding: Tensor | None = None
         if self.config.use_token_embedding:
+            # pyrefly: ignore[not-callable]
             token_embedding = self.token_embedding(input_ids)
 
         # Compute base embedding
-        base_embedding = None
+        base_embedding: Tensor | None = None
         if self.config.use_base_encoder:
             if self.base_encoder is None and inputs_embeds is None:
                 raise ValueError(
@@ -504,6 +513,7 @@ class GeneClassifier(L.LightningModule):
             if self.base_encoder is None:
                 base_embedding = inputs_embeds
             else:
+                # pyrefly: ignore  # not-callable
                 base_embedding = self.base_encoder(
                     input_ids=input_ids
                 ).last_hidden_state
@@ -511,6 +521,7 @@ class GeneClassifier(L.LightningModule):
 
         # Project base embedding
         if self.embedding_projection is not None:
+            # pyrefly: ignore  # not-callable
             base_embedding = self.embedding_projection(base_embedding)
             assert base_embedding.shape == (B, S, self.embedding_projection_dim)
 
@@ -522,6 +533,7 @@ class GeneClassifier(L.LightningModule):
 
         # Compute head encoding
         if self.config.use_head_encoder:
+            # pyrefly: ignore  # not-callable
             hidden_states = self.head_encoder(
                 inputs_embeds=hidden_states
             ).last_hidden_state
@@ -530,6 +542,7 @@ class GeneClassifier(L.LightningModule):
 
     def _token_logits(self, hidden_states: Tensor) -> Tensor:
         B, S, C = hidden_states.shape[0], hidden_states.shape[1], self.num_labels
+        # pyrefly: ignore  # not-callable
         logits = self.bias + self.classifier(hidden_states)
         assert logits.shape == (B, S, C)
         return logits
@@ -661,7 +674,7 @@ class GeneClassifier(L.LightningModule):
             totals = {"f1": [], "precision": [], "recall": []}
             for entity, group in eval_intervals.groupby("entity"):
                 stats = get_evaluation_interval_metrics(group)
-                entity_name = self.config.interval_entity_name(entity)
+                entity_name = self.config.interval_entity_name(cast_type(int, entity))
                 for k, v in stats.items():
                     metrics[
                         f"{prefix}__entity__classes/{k}/{entity:02d}-{entity_name}"
@@ -743,6 +756,8 @@ def token_transition_probs(remove_incomplete_features: bool = True) -> pd.DataFr
     )
     return pd.DataFrame(
         data=probs,
+        # pyrefly: ignore  # bad-argument-type
         index=SEQUENCE_MODELING_FEATURES,
+        # pyrefly: ignore  # bad-argument-type
         columns=SEQUENCE_MODELING_FEATURES,
     )

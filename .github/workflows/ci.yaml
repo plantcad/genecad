@@ -1,0 +1,30 @@
+# CI: lint and test
+name: ci
+
+on:
+  pull_request:
+    branches: [ main ]
+
+  push:
+    branches: [ main ]
+
+jobs:
+  ci:
+    name: Lint & Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4.1.5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+      - name: Install dependencies
+        run: |
+          uv sync --group dev
+      - name: Run pre-commit
+        run: |
+          uv run pre-commit run --all-files
+      - name: Run tests
+        run: |
+          uv run pytest

@@ -219,7 +219,7 @@ def merge_gff_files(input_paths: list[str], output_path: str) -> None:
 
 
 def filter_to_chromosome(
-    input_path: str, output_path: str, chromosome_id: str, species_id: str = None
+    input_path: str, output_path: str, chromosome_id: str, species_id: str | None = None
 ) -> None:
     """Filter GFF file to include only entries from a specific chromosome.
 
@@ -439,6 +439,7 @@ def filter_to_min_feature_length(
     original_count = features.shape[0]
 
     # Validate feature types against schema
+    # pyrefly: ignore  # no-matching-overload
     valid_types = set(GffFeatureType)
     requested_types = set(feature_types)
     invalid_types = requested_types - valid_types
@@ -978,7 +979,7 @@ def evaluate_gff_files(
     logger.info("Evaluation complete")
 
 
-def summarize_gff(input_path: str, species_id: str = None) -> None:
+def summarize_gff(input_path: str, species_id: str | None = None) -> None:
     """Summarize the distribution of source and type fields in a GFF file.
 
     Parameters
@@ -1191,7 +1192,7 @@ def summarize_gff(input_path: str, species_id: str = None) -> None:
         print(f"{combo_str:<50} {count:<15} {percentage:.2f}%")
 
 
-def collect_results(input_dir: str, output_path: str = None) -> None:
+def collect_results(input_dir: str, output_path: str | None = None) -> None:
     """Collect and consolidate gffcompare.stats.csv and gffeval.stats.tsv files from subdirectories.
 
     Parameters
