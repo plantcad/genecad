@@ -8,3 +8,4 @@ local/
 logs/train*
 .ruff_cache
 .specstory/
+data/

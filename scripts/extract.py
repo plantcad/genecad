@@ -625,6 +625,7 @@ def _extract_fasta_sequences(
                 # or added as a special case by FASTA_OOV_TOKENS
                 if np.any(token_ids < 0):
                     bad_tokens = pd.Series(
+                        # pyrefly: ignore  # bad-argument-type
                         np.char.decode(token_ids[token_ids < 0])
                     ).value_counts()
                     raise ValueError(
@@ -774,7 +775,8 @@ def validate_configs(data_dir: str) -> None:
 
         # Check that lexical sort of chrom_map keys matches numerical sort of values;
         # This is not strictly necessary, but the warning here is helpful to identify
-        # new genomes that might become problematic (particularly for MultisampleSequenceDatasetLabeled)
+        # new genomes that might become problematic (particularly for the deprecated
+        # MultisampleSequenceDatasetLabeled torch Dataset)
         logger.info(f"[species={species_id}] Checking chromosome id ordering")
 
         # Filter to only keys with numeric components in their chromosome IDs

@@ -1,0 +1,101 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "genecad"
+version = "1.0.0"
+description = "GeneCAD: A long-context genome annotation model built on PlantCAD2"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  "transformers~=4.49.0",
+  "pandas~=2.2.3",
+  "numpy~=2.1.2",
+  "scikit-learn~=1.6.1",
+  "xarray==2025.1.2",
+  "zarr~=3.0.4",
+  "universal-pathlib~=0.2.6",
+  "matplotlib~=3.10.1",
+  "biopython~=1.85",
+  "portion~=2.6.1",
+  "numba~=0.61.0",
+  "tqdm~=4.67.1",
+  "six~=1.17.0",
+  "pydantic~=2.10.6",
+]
+
+[project.optional-dependencies]
+torch = [
+  "torch==2.7.1",
+  "lightning~=2.5.1",
+  "torchmetrics~=1.7.0",
+]
+mamba = [
+  "causal-conv1d==1.5.0.post8",
+  "mamba-ssm==2.2.4",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu128" }
+
+# Force build from source for mamba and causal-conv1d
+mamba-ssm = { git = "https://github.com/state-spaces/mamba", tag = "v2.2.4" }
+causal-conv1d = { git = "https://github.com/Dao-AILab/causal-conv1d", tag = "v1.5.0.post8" }
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[tool.uv]
+no-build-isolation-package = ["mamba-ssm", "causal-conv1d"]
+
+[[tool.uv.dependency-metadata]]
+name = "mamba-ssm"
+version = "2.2.4"
+requires-dist = ["torch", "einops"]
+
+[[tool.uv.dependency-metadata]]
+name = "causal-conv1d"
+version = "1.5.0.post8"
+requires-dist = ["torch", "einops"]
+
+[tool.pyrefly]
+project-includes = ["src", "scripts"]
+project-excludes = [
+  "**/node_modules",
+  "**/__pycache__",
+  "**/*venv/**/*",
+]
+python-platform = "linux"
+ignore-missing-source = true
+replace-imports-with-any = [
+  "torch.*",
+  "lightning.*",
+  "numba.*",
+  "pandas.*",
+  "portion.*",
+  "torchmetrics.*",
+  "Bio.*",
+]
+
+# a table mapping error codes to an `is-enabled` boolean
+[tool.pyrefly.errors]
+# bad-assignment = false
+bad-return = false
+missing-attribute = false
+
+[tool.pytest.ini_options]
+testpaths = ["src"]
+
+[dependency-groups]
+dev = [
+  "pytest>=8.3.4",
+  "ruff>=0.11.13",
+  "pre-commit>=4.2.0",
+  "pyrefly>=0.32.0",
+]

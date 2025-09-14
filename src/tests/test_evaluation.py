@@ -1,4 +1,4 @@
-import src.portion as P
+import portion as P
 import src.evaluation as ev
 from Bio.SeqFeature import SeqFeature, FeatureLocation
 

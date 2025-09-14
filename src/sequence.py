@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 import numpy.typing as npt
 from numba import njit
-from typing import Iterator, Literal
+from typing import Iterator, Literal, cast as cast_type
 import logging
 import itertools
 
@@ -59,7 +59,11 @@ def convert_entity_intervals_to_labels(
 
     # Ensure all values are integers
     for col in ["start", "stop", "label"]:
-        if not np.issubdtype(intervals[col].dtype, np.integer):
+        if not np.issubdtype(
+            # pyrefly: ignore[bad-argument-type]
+            intervals[col].dtype,
+            np.integer,
+        ):
             raise ValueError(f"Column '{col}' must contain integers")
 
     # Check for duplicated rows
@@ -353,7 +357,11 @@ def convert_entity_labels_to_intervals(
                     "stop": int(stop),
                 }
             )
-    result = pd.DataFrame(result, columns=["entity", "start", "stop"])
+    result = pd.DataFrame(
+        result,
+        # pyrefly: ignore[bad-argument-type]
+        columns=["entity", "start", "stop"],
+    )
     assert not result.duplicated().any()
     return result
 
@@ -634,8 +642,9 @@ def create_sequence_windows(
                 within the context of the entire sequence; e.g. `sequence[slice(*global_window)]` is
                 equivalent to `chunk[slice(*local_window)]`
     """
-    bounds = (0, len(sequence))
-    pad = (window_size - len(sequence) % window_size) % window_size
+    sequence_length = len(sequence)  # pyrefly: ignore[bad-argument-type]
+    bounds = (0, sequence_length)
+    pad = (window_size - sequence_length % window_size) % window_size
     pad_width = [(0, pad)] + [
         (0, 0) for _ in range(sequence.ndim - 1)
     ]  # pad the first dimension only
@@ -955,19 +964,19 @@ def transition_matrix_stationary_distribution(
 
 
 def _validate_decode_inputs(
-    emission_probs: np.ndarray,
-    transition_matrix: np.ndarray,
-    initial_probs: np.ndarray | None,
+    emission_probs: npt.ArrayLike,
+    transition_matrix: npt.ArrayLike,
+    initial_probs: npt.ArrayLike | None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Validate inputs for decoding algorithms and compute initial probabilities if needed.
 
     Parameters
     ----------
-    emission_probs : np.ndarray
+    emission_probs : npt.ArrayLike
         Matrix of shape (T, N) where T is sequence length and N is number of states.
-    transition_matrix : np.ndarray
+    transition_matrix : npt.ArrayLike
         Matrix of shape (N, N) where element (i, j) represents P(state j | state i).
-    initial_probs : np.ndarray | None
+    initial_probs : npt.ArrayLike | None
         Vector of length N representing initial state probabilities.
 
     Returns
@@ -1172,7 +1181,10 @@ def regularize_transition_matrix(
         raise ValueError(
             f"Transition matrix must be a 2D array; got shape {transition_matrix.shape}"
         )
-    transition_matrix = transition_matrix + alpha
+    transition_matrix = (
+        # pyrefly: ignore[unsupported-operation]
+        transition_matrix + alpha
+    )
     transition_matrix = transition_matrix / transition_matrix.sum(axis=1, keepdims=True)
     assert np.allclose(transition_matrix.sum(axis=1), 1)
     return transition_matrix
@@ -1212,7 +1224,7 @@ def viterbi_decode(
     if alpha is not None:
         transition_matrix = regularize_transition_matrix(transition_matrix, alpha)
     if epsilon is None:
-        epsilon = np.finfo(float).eps
+        epsilon = cast_type(float, np.finfo(float).eps)
     if not 0 <= epsilon <= 1:
         raise ValueError(f"Epsilon must be between 0 and 1; got {epsilon}")
 

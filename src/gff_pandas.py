@@ -11,8 +11,10 @@ https://github.com/the-sequence-ontology/specifications/blob/master/gff3.md
 """
 
 import pandas as pd
+from pandas.core.arrays.integer import IntegerArray
 import gzip
 from pathlib import Path
+from typing import cast as cast_type
 
 PathLike = str | Path
 
@@ -30,6 +32,7 @@ GFF3_SPEC = [
 """GFF3 column specification; see: https://github.com/the-sequence-ontology/specifications/blob/master/gff3.md"""
 
 GFF3_COLUMNS = [col for col, _ in GFF3_SPEC]
+# pyrefly: ignore  # no-matching-overload
 GFF3_DTYPES = dict(GFF3_SPEC)
 
 
@@ -226,14 +229,16 @@ def write_gff3(
             f"DataFrame does not contain required 'header' attribute; {df.attrs=}"
         )
     header = df.attrs.get("header", "")
-    df = df[GFF3_COLUMNS].copy()
+    df = cast_type(pd.DataFrame, df[GFF3_COLUMNS].copy())
     if fill_missing:
         for col in df.columns:
-            if isinstance(df[col].values, pd.core.arrays.integer.IntegerArray):
+            if isinstance(df[col].values, IntegerArray):
+                # Handle corner case with nullable integers
                 df[col] = df[col].astype(str).where(df[col].notna(), ".")
             else:
                 df[col] = df[col].fillna(".")
     validate_gff3(df)
+    # pyrefly: ignore  # no-matching-overload
     data = df.to_csv(sep="\t", index=False, header=None)
     with open(path, "w") as fh:
         fh.write(header)

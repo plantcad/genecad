@@ -1,6 +1,7 @@
 import logging
 import numpy as np
 import xarray as xr
+from typing import cast as cast_type
 
 from src.analysis import get_sequence_modeling_labels
 from src.sequence import convert_to_biluo_labels
@@ -122,7 +123,7 @@ def extract_label_dataset(
         raise ValueError(f"Invalid class labels dimensions: {actual} != {expected}")
 
     # Convert to BILUO labels for both masked and unmasked versions
-    def convert_class_labels_to_biluo(class_labels_input):
+    def convert_class_labels_to_biluo(class_labels_input: xr.DataArray) -> xr.DataArray:
         tags_list = []
         for strand_name in class_labels_input.strand.values:
             values = class_labels_input.sel(strand=strand_name, drop=True).values
@@ -143,8 +144,12 @@ def extract_label_dataset(
             },
         )
 
-    tag_labels_masked = convert_class_labels_to_biluo(class_labels_masked)
-    tag_labels = convert_class_labels_to_biluo(class_labels_unmasked)
+    tag_labels_masked = convert_class_labels_to_biluo(
+        cast_type(xr.DataArray, class_labels_masked)
+    )
+    tag_labels = convert_class_labels_to_biluo(
+        cast_type(xr.DataArray, class_labels_unmasked)
+    )
     assert tag_labels_masked.shape == class_labels_unmasked.shape
     assert tag_labels.shape == class_labels_unmasked.shape
 

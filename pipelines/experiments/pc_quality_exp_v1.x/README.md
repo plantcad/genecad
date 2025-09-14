@@ -26,6 +26,14 @@ W&B runs:
 - `1.4`: https://wandb.ai/eric-czech/pc-genome-annot/runs/b8f91ykv
 - `1.5`: https://wandb.ai/eric-czech/pc-genome-annot/runs/w4zu84wh
 
+
+### Model Checkpoints
+
+The 5x genome models for each base PlantCAD model have checkpoints here in TACC:
+
+- `v1.3`: `/work/10459/eczech/vista/data/dna/plant_caduceus_genome_annotation_task/pipeline/sweep/sweep-v1.3__cfg_016__rand_yes__arch_all__frzn_yes__lr_1e-04/checkpoints/last.ckpt`
+- `v1.5`: `/work/10459/eczech/vista/data/dna/plant_caduceus_genome_annotation_task/pipeline/sweep/sweep-v1.5__cfg_013__rand_no__arch_all__frzn_yes__lr_1e-04/checkpoints/last.ckpt`
+
 ### Model Configurations
 
 For `v1.{0,1,2,4,5}`, here is the configuration used from [scripts/sweep.py](../../scripts/sweep.py):
@@ -142,6 +150,23 @@ GeneClassifier(
   (token_embedding): Embedding(16, 128)
   (embedding_projection): Linear(in_features=1536, out_features=640, bias=True)
 )
+
+  | Name                 | Type             | Params | Mode
+------------------------------------------------------------------
+0 | criterion            | CrossEntropyLoss | 0      | train
+1 | classifier           | MLP              | 4.8 M  | train
+2 | head_encoder         | ModernBertModel  | 75.5 M | train
+3 | base_encoder         | Caduceus         | 88.2 M | eval
+4 | token_embedding      | Embedding        | 2.0 K  | train
+5 | embedding_projection | Linear           | 983 K  | train
+  | other params         | n/a              | 17     | n/a
+------------------------------------------------------------------
+81.3 M    Trainable params
+88.2 M    Non-trainable params
+169 M     Total params
+678.095   Total estimated model params size (MB)
+118       Modules in train mode
+391       Modules in eval mode
 ```
 
 The architecture with the larger base (`v1.{4,5}`) is:
@@ -249,4 +274,24 @@ GeneClassifier(
 5,876.430 Total estimated model params size (MB)
 118       Modules in train mode
 775       Modules in eval mode
+```
+
+
+## Data Sync
+
+Code for syncing data to Hugging Face:
+
+```bash
+ssh tacc
+
+cd /work/10459/eczech/vista/data/dna/plant_caduceus_genome_annotation_task/data_share_20250326/testing_data/fasta
+for file in *; do
+    echo "huggingface-cli upload --repo-type dataset plantcad/genecad-dev $file data/fasta/$file"
+done
+
+cd /work/10459/eczech/vista/data/dna/plant_caduceus_genome_annotation_task/data_share_20250326/testing_data/gff
+for file in *; do
+    echo "huggingface-cli upload --repo-type dataset plantcad/genecad-dev $file data/gff/$file"
+done
+```
 ```

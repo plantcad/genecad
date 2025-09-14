@@ -61,6 +61,7 @@ predict-%: $(PREDICT_DIR)/%/sequences.zarr
 	  --model-checkpoint $(MODEL_CHECKPOINT) \
 	  --species-id $(call capitalize,$*) \
 	  --chromosome-id $(CHR_ID) \
+	  --dtype bfloat16 \
 	  --batch-size 32
 
 # Process results (detect intervals, export GFF, filter, compare, etc.)

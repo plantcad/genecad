@@ -670,6 +670,7 @@ def generate_training_splits(args: Args) -> None:
                 # Apply chunking
                 split_ds = set_dimension_chunks(split_ds, "sample", args.chunk_size)
 
+                # pyrefly: ignore  # no-matching-overload
                 split_ds.to_zarr(
                     output_path,
                     zarr_format=2,

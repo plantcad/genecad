@@ -5,7 +5,6 @@ Most subclasses require fasta sequence and a tokenizer as input, though some tak
 """
 
 import io
-import torch
 from torch.utils.data import Dataset
 import numpy as np
 import xarray as xr
@@ -198,7 +197,7 @@ class XarrayDataset(Dataset):
     def __init__(
         self,
         path: str,
-        sample_transform: Callable[[xr.Dataset], dict[str, Any]] = None,
+        sample_transform: Callable[[xr.Dataset], dict[str, Any]] | None = None,
         max_sample_count: int | None = None,
         max_sequence_length: int | None = None,
         chunk_size: int = 1,
@@ -295,130 +294,3 @@ class XarrayDataset(Dataset):
             dataset_idx,
             local_dataset_idx // self.chunk_size,
         )
-
-
-class MultisampleSequenceDatasetLabeled(Dataset):
-    """DataSet class with for multiple genomes, with labels"""
-
-    def __init__(
-        self,
-        sequences,
-        label_files,
-        windows,
-        species,
-        contig_indices,
-        tokenizer,
-        window_size,
-    ):
-        self.species = species  # list of species names
-        self.sequences = sequences  # list of lists of SeqRecords
-        self.label_files = label_files  # list of file names for labels
-        self.windows = windows  # array defining windows with columns: species index, chrom index, position, strand
-        self.contig_indices = contig_indices  # list of lists of contig names
-        self.tokenizer = tokenizer  # model tokenizer
-        self.window_size = window_size  # standard length of context windows
-        self.labels = None  # We will lazy-load these arrays
-
-    # Each worker thread needs its own file handle for processing
-    # Unfortunately I can't find a good way to close them programmatically
-    # Though they should all be closed when the subprocess exits
-    def open_label_files(self):
-        self.labels = [np.load(file) for file in self.label_files]
-
-    def __len__(self):
-        return self.windows.shape[0]
-
-    def __getitem__(self, idx):
-        window_species = self.windows[idx, 0]
-        window_chrom = self.windows[idx, 1]
-        window_pos = self.windows[idx, 2]
-        window_strand = self.windows[idx, 3]
-
-        species_id = self.species[window_species]
-
-        if window_chrom >= len(self.contig_indices[window_species]):
-            raise ValueError(
-                f"Contig index {window_chrom} out of range for species {species_id}"
-            )
-        chrom_name = self.contig_indices[window_species][window_chrom]
-
-        if window_chrom >= len(self.sequences[window_species]):
-            raise ValueError(
-                f"Contig index {window_chrom} out of range for species {species_id}"
-            )
-        max_sequence_len = len(self.sequences[window_species][window_chrom].seq)
-        sequence = self.sequences[window_species][window_chrom][
-            window_pos : window_pos + self.window_size
-        ].seq
-
-        # Ensure the window does not extend beyond the end of the sequence
-        if window_pos + self.window_size > max_sequence_len:
-            raise ValueError(
-                "Windows cannot extend beyond end of sequence; invalid window: "
-                f"species={species_id}, chrom={chrom_name}, pos={window_pos}, "
-                f"strand={window_strand}, window_size={self.window_size}, max_sequence_len={max_sequence_len}"
-            )
-
-        # Get the reverse complement if the strand is 1
-        # for labels, [:, 1] are the labels for the reverse strand
-        if window_strand == 1:
-            sequence = sequence.reverse_complement()
-            label = self.labels[window_species][chrom_name][
-                window_pos : window_pos + self.window_size, 1
-            ][::-1].copy()
-        else:
-            label = self.labels[window_species][chrom_name][
-                window_pos : window_pos + self.window_size, 0
-            ].copy()
-        assert label.ndim == 1
-
-        # If label is less than length of sequence, pad with 0.
-        # This happens because the labels are based on GFFs that do not span the entire sequence,
-        # and label vectors based on those annotations are often only as long as the maximum annotation position.
-        # Therefore, it can safely be assumed that any positions requiring padding are intergenic (class = 0)
-        if len(label) < (sequence_len := len(sequence)):
-            label = np.pad(
-                label,
-                (0, sequence_len - len(label)),
-                mode="constant",
-                constant_values=0,
-            )
-            assert label.ndim == 1
-
-        if len(sequence) != len(label):
-            raise ValueError(
-                f"Sequence and label lengths do not match for {chrom_name} at {window_pos}: {len(sequence)=} != {len(label)=}"
-            )
-        if len(sequence) != self.window_size:
-            raise ValueError(
-                f"Sequence length does not match window size for {chrom_name} at {window_pos}: {len(sequence)=} != {self.window_size=}"
-            )
-
-        # Mask out labels where label == -1 (ambiguous)
-        label_mask = label >= 0
-        # Soft-masking from fasta sequence defines un-usable labels
-        soft_mask = np.array([char.isupper() for char in sequence])
-
-        encoding = self.tokenizer.encode_plus(
-            str(sequence),
-            return_tensors="pt",
-            padding="max_length",
-            truncation=True,
-            max_length=self.window_size,
-            return_attention_mask=True,
-            return_token_type_ids=False,
-        )
-        label = torch.tensor(label, dtype=torch.long)
-
-        return {
-            "sample_index": idx,
-            "input_ids": encoding["input_ids"].squeeze(0),
-            "attention_mask": encoding["attention_mask"].squeeze(0),
-            "soft_mask": soft_mask,
-            "label_mask": label_mask,
-            "labels": label,
-            "species": self.species[window_species],
-            "chromosome": chrom_name,
-            "position": window_pos,
-            "strand": window_strand,
-        }

@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 
 
 def write_stats(
-    master_stats: evaluation.Stats, out_handle: str, as_percentage: bool = True
+    master_stats: evaluation.Stats, output_path: str, as_percentage: bool = True
 ):
     """
     Write a set of statistics to the given file.
@@ -22,11 +22,11 @@ def write_stats(
 
     Args:
         master_stats: statistics
-        out_handle: file name
+        output_path: file name
         as_percentage: whether to display values as percentages (0-100) or decimals (0.0-1.0).
                       Defaults to True for consistency with gffcompare.
     """
-    with open(out_handle, "w") as out_handle:
+    with open(output_path, "w") as out_handle:
         out_handle.write("level\tprecision\trecall\tf1\n")
 
         out_handle.write("transcript_cds\t")
