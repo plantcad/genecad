@@ -1,6 +1,6 @@
 ![](https://img.shields.io/badge/version-1.0.0-blue)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
-[![Lint](https://github.com/maize-genetics/GeneCAD-dev/actions/workflows/lint.yaml/badge.svg)](https://github.com/maize-genetics/GeneCAD-dev/actions/workflows/lint.yaml)
+[![Lint](https://github.com/maize-genetics/GeneCAD-dev/actions/workflows/ci.yaml/badge.svg)](https://github.com/maize-genetics/GeneCAD-dev/actions/workflows/ci.yaml)
 [![DOI](https://zenodo.org/badge/DOI/10.1101/2025.08.27.672609.svg)](https://doi.org/10.1101/2025.08.27.672609)
 [![Hugging Face](https://img.shields.io/badge/🤗-Hugging%20Face-yellow.svg?style=flat)](https://huggingface.co/collections/plantcad/genecad-68c686ccf14312bf6de356de)
 [![Docker](https://img.shields.io/badge/docker-%230db7ed.svg?style=flat&logo=docker&logoColor=white)](https://hub.docker.com/r/eczech/genecad)
