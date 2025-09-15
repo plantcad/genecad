@@ -2,7 +2,6 @@
 
 import itertools
 import numpy as np
-#import portion as P
 from Bio import SeqFeature
 from numba import njit
 from dataclasses import dataclass
@@ -76,7 +75,7 @@ class ConfusionCounts:
 
         return str(precision) + "\t" + str(recall) + "\t" + str(f1) + "\n"
 
-# TODO
+
 @dataclass
 class Stats:
     """
@@ -111,7 +110,7 @@ class Stats:
             self.intron_longest + other.intron_longest,
         )
 
-# TODO
+
 def blank_stats():
     """
     Initialize a blank Stats object
@@ -127,7 +126,7 @@ def blank_stats():
         ConfusionCounts(),
         ConfusionCounts(),
         ConfusionCounts(),
-        ConfusionCounts(),
+        ConfusionCounts()
     )
 
 
@@ -419,7 +418,7 @@ def do_genes_match(
         # cds's not equal, genes not equal on any level
         return {"cds": False, "intron": False, "full": False}
 
-# TODO
+
 def evaluate_transcript_matches(
     pred_intervals: dict,
     true_intervals: dict,
@@ -497,7 +496,7 @@ def evaluate_transcript_matches(
 
     return tcds, tintron, tfull
 
-# TODO
+
 def overlap_stats(
     pred_features: list[SeqFeature],
     true_features: list[SeqFeature],
