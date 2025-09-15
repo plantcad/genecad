@@ -29,18 +29,19 @@ GeneCAD is an in silico genome annotation pipeline for plants built on top of th
   - [Docker](#docker)
   - [Reproduction](#reproduction)
 
-
-
 ## Setup
 
-GeneCAD can be used a number of ways.  We provide instructions for:
+GeneCAD can be installed one of two ways:
 
-1. Using a pre-built Docker image (preferred)
+1. Using a pre-built Docker image
 2. Using a virtual environment via `uv`
-3. Using an ephemeral cloud cluster via SkyPilot
-4. Using an existing SLURM cluster
 
-We provide instructions for SkyPilot as an attractive option if you do not already have access to dedicated compute resources.
+We also provide instructions for executing it one of two ways:
+
+1. Using an ephemeral cloud cluster via SkyPilot
+2. Using an existing SLURM/HPC cluster
+
+See the sections below for more details.
 
 ### Using Docker
 
@@ -100,7 +101,7 @@ Note also that `mamba` and `causal-conv1d` are currently forced to build from so
 mamba-ssm = { path = "path/to/mamba_ssm-2.2.4-*.whl" }
 causal-conv1d = { path = "path/to/causal_conv1d-1.5.0.post8-*.whl" }
 # OR upload the wheels somewhere and use a remote URL:
-mamba-ssm = { url = "htts://.../mamba_ssm-2.2.4-*.whl" }
+mamba-ssm = { url = "https://.../mamba_ssm-2.2.4-*.whl" }
 causal-conv1d = { url = "https://.../causal_conv1d-1.5.0.post8-*.whl" }
 ```
 
@@ -351,10 +352,9 @@ These estimates can be used to extrapolate costs and GPU hours necessary for a f
 
 ## Evaluation
 
-A simple way to evaluate predicted annotations is with the gffcompare tool.  It can be [built from source](https://github.com/gpertea/gffcompare?tab=readme-ov-file#building-from-source) or [installed via conda](https://anaconda.org/bioconda/gffcompare).  See [examples/scripts/run_evaluation.sh](examples/scripts/run_evaluation.sh) for an example of how to use it.  See [Dockerfile](Dockerfile) for an example installation from source.
+A simple way to evaluate predicted annotations is with the gffcompare tool.  It can either be [built from source](https://github.com/gpertea/gffcompare?tab=readme-ov-file#building-from-source) or [installed via conda](https://anaconda.org/bioconda/gffcompare).  See [examples/scripts/run_evaluation.sh](examples/scripts/run_evaluation.sh) for an example of how to use it.  See [Dockerfile](Dockerfile) for an example installation from source.
 
-While `gffcompare` offers a useful for starting point for evaluating in silico annotations, it is limited by its inability to capture accuracy outside of predicted UTRs.  These are known to be very difficult to predict accurately from DNA alone and those
-predictions are of limited utility in many applications.  As a result, we offer a seperate evaluation tool for assessing performance of whole-transcript annotations that excludes UTRs.  This tool produces metrics aggregated to several levels (much like `gffcompare`) as well as a `transcript_cds` score that scores perfect, predicted annotations of introns and exons over translated regions only.  Here is some example usage:
+While `gffcompare` offers a useful starting point for evaluating in silico annotations, it is limited by its inability to accurately assess regions outside of predicted UTRs.  These are known to be very difficult to predict accurately from DNA alone and these predictions are of limited utility in many applications.  As a result, we offer a separate evaluation tool for assessing performance of whole-transcript annotations that excludes UTRs.  This tool produces metrics aggregated to several levels (much like `gffcompare`) as well as a `transcript_cds` score that scores perfect, predicted annotations of introns and exons over translated regions only.  Here is some example usage:
 
 ```bash
 python scripts/gff.py evaluate \
