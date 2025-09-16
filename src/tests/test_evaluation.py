@@ -1,4 +1,3 @@
-import portion as P
 import src.evaluation as ev
 from Bio.SeqFeature import SeqFeature, FeatureLocation
 
@@ -92,37 +91,6 @@ def test_nested_matches():
     assert metrics.tp == 1
     assert metrics.fp == 2
     assert metrics.fn == 1
-
-
-def test_base_matches():
-    pred_intervals = P.closedopen(5, 12) | P.closedopen(20, 23) | P.closedopen(29, 36)
-    true_intervals = P.closedopen(8, 14) | P.closedopen(31, 34)
-
-    metrics = ev.evaluate_bases(pred_intervals, true_intervals)
-
-    assert metrics.tp == 7
-    assert metrics.fp == 10
-    assert metrics.fn == 2
-
-
-def test_base_matches_empty():
-    pred_intervals = P.closedopen(5, 12) | P.closedopen(20, 23) | P.closedopen(29, 36)
-    true_intervals = P.closedopen(8, 14) | P.closedopen(31, 34)
-
-    metrics = ev.evaluate_bases(P.empty(), true_intervals)
-    assert metrics.tp == 0
-    assert metrics.fp == 0
-    assert metrics.fn == 9
-
-    metrics = ev.evaluate_bases(pred_intervals, P.empty())
-    assert metrics.tp == 0
-    assert metrics.fp == 17
-    assert metrics.fn == 0
-
-    metrics = ev.evaluate_bases(P.empty(), P.empty())
-    assert metrics.tp == 0
-    assert metrics.fp == 0
-    assert metrics.fn == 0
 
 
 def test_confusion_count_addition():
@@ -446,19 +414,11 @@ def test_transcript_to_intervals():
     intervals = ev.transcript_to_intervals(transcript)
 
     # with UTRs
-    assert intervals.cds == P.closedopen(60, 70) | P.closedopen(80, 90) | P.closedopen(
-        100, 110
-    )
-    assert intervals.utr == P.closedopen(30, 60) | P.closedopen(
-        110, 130
-    ) | P.closedopen(140, 160)
-    assert intervals.intron == P.closedopen(70, 80) | P.closedopen(
-        90, 100
-    ) | P.closedopen(130, 140)
-    assert intervals.intron_cds == P.closedopen(70, 80) | P.closedopen(90, 100)
-    assert intervals.exon == P.closedopen(30, 70) | P.closedopen(80, 90) | P.closedopen(
-        100, 130
-    ) | P.closedopen(140, 160)
+    assert intervals.cds == {(60, 70), (80, 90), (100, 110)}
+    assert intervals.utr == {(30, 60), (110, 130), (140, 160)}
+    assert intervals.intron == {(70, 80), (90, 100), (130, 140)}
+    assert intervals.intron_cds == {(70, 80), (90, 100)}
+    assert intervals.exon == {(30, 70), (80, 90), (100, 130), (140, 160)}
 
 
 def test_transcript_to_intervals_missing_utr():
@@ -475,73 +435,41 @@ def test_transcript_to_intervals_missing_utr():
 
     intervals = ev.transcript_to_intervals(transcript)
 
-    assert intervals.cds == P.closedopen(60, 70) | P.closedopen(80, 90) | P.closedopen(
-        100, 110
-    )
-    assert intervals.utr == P.empty()
-    assert intervals.intron == P.closedopen(70, 80) | P.closedopen(90, 100)
-    assert intervals.intron_cds == P.closedopen(70, 80) | P.closedopen(90, 100)
-    assert intervals.exon == P.closedopen(60, 70) | P.closedopen(80, 90) | P.closedopen(
-        100, 110
-    )
-
-
-def test_interval_to_tuples():
-    empty_interval = P.empty()
-    singleton_interval = P.closedopen(3, 104)
-    complex_interval = (
-        P.closedopen(33, 155) | P.closedopen(155, 190) | P.closedopen(589, 2509)
-    )
-
-    assert ev.interval_to_tuples(empty_interval) == []
-    assert ev.interval_to_tuples(singleton_interval) == [(3, 104)]
-    assert ev.interval_to_tuples(complex_interval) == [(33, 190), (589, 2509)]
+    assert intervals.cds == {(60, 70), (80, 90), (100, 110)}
+    assert intervals.utr == set()
+    assert intervals.intron == {(70, 80), (90, 100)}
+    assert intervals.intron_cds == {(70, 80), (90, 100)}
+    assert intervals.exon == {(60, 70), (80, 90), (100, 110)}
 
 
 def test_gene_match():
     true_gene = ev.Intervals(
-        P.closedopen(40, 50) | P.closedopen(60, 80),
-        P.closedopen(10, 30) | P.closedopen(80, 90) | P.closedopen(110, 130),
-        P.closedopen(30, 40) | P.closedopen(50, 60) | P.closedopen(90, 110),
-        P.closedopen(50, 60),
-        P.closedopen(10, 30)
-        | P.closedopen(40, 50)
-        | P.closedopen(60, 90)
-        | P.closedopen(110, 130),
+        {(40, 50), (60, 80)},
+        {(10, 30), (80, 90), (110, 130)},
+        {(30, 40), (50, 60), (90, 110)},
+        {(50, 60)},
+        {(10, 30), (40, 50), (60, 90), (110, 130)},
     )
     match_w_tolerance = ev.Intervals(
-        P.closedopen(40, 50) | P.closedopen(60, 80),
-        P.closedopen(15, 30) | P.closedopen(80, 90) | P.closedopen(110, 138),
-        P.closedopen(30, 40) | P.closedopen(50, 60) | P.closedopen(90, 110),
-        P.closedopen(50, 60),
-        P.closedopen(15, 30)
-        | P.closedopen(40, 50)
-        | P.closedopen(60, 90)
-        | P.closedopen(110, 138),
+        {(40, 50), (60, 80)},
+        {(15, 30), (80, 90), (110, 138)},
+        {(30, 40), (50, 60), (90, 110)},
+        {(50, 60)},
+        {(15, 30), (40, 50), (60, 90), (110, 138)},
     )
     cds_match = ev.Intervals(
-        P.closedopen(40, 50) | P.closedopen(60, 80),
-        P.closedopen(28, 30) | P.closedopen(85, 92) | P.closedopen(110, 138),
-        P.closedopen(30, 40)
-        | P.closedopen(50, 60)
-        | P.closedopen(80, 85)
-        | P.closedopen(92, 110),
-        P.closedopen(50, 60),
-        P.closedopen(28, 30)
-        | P.closedopen(40, 50)
-        | P.closedopen(60, 80)
-        | P.closedopen(85, 92)
-        | P.closedopen(110, 138),
+        {(40, 50), (60, 80)},
+        {(28, 30), (85, 92), (110, 138)},
+        {(30, 40), (50, 60), (80, 85), (92, 110)},
+        {(50, 60)},
+        {(28, 30), (40, 50), (60, 80), (85, 92), (110, 138)},
     )
     nonmatch = ev.Intervals(
-        P.closedopen(40, 50) | P.closedopen(60, 81),
-        P.closedopen(10, 30) | P.closedopen(81, 90) | P.closedopen(110, 130),
-        P.closedopen(30, 40) | P.closedopen(50, 60) | P.closedopen(90, 110),
-        P.closedopen(50, 60),
-        P.closedopen(10, 30)
-        | P.closedopen(40, 50)
-        | P.closedopen(60, 90)
-        | P.closedopen(110, 130),
+        {(40, 50), (60, 81)},
+        {(10, 30), (81, 90), (110, 130)},
+        {(30, 40), (50, 60), (90, 110)},
+        {(50, 60)},
+        {(10, 30), (40, 50), (60, 90), (110, 130)},
     )
 
     assert ev.do_genes_match(match_w_tolerance, true_gene, 10) == {

@@ -62,15 +62,6 @@ def write_stats(
         out_handle.write("intron\t")
         out_handle.write(master_stats.intron.to_score_string(as_percentage))
 
-        out_handle.write("base_cds\t")
-        out_handle.write(master_stats.base_cds.to_score_string(as_percentage))
-
-        out_handle.write("base_utr\t")
-        out_handle.write(master_stats.base_utr.to_score_string(as_percentage))
-
-        out_handle.write("base_exon\t")
-        out_handle.write(master_stats.base_exon.to_score_string(as_percentage))
-
 
 def calc_stats_for_contig_and_strand(
     pred_contig: SeqRecord,
