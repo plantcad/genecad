@@ -19,7 +19,9 @@ class Intervals:
 
     cds: set[tuple[int, int]]  # all CDS features
     utr: set[tuple[int, int]]  # all UTR features
-    intron: set[tuple[int, int]]  # all introns, inferred from space between CDS and UTR intervals
+    intron: set[
+        tuple[int, int]
+    ]  # all introns, inferred from space between CDS and UTR intervals
     intron_cds: set[tuple[int, int]]  # all introns that are fully contained within CDS
     exon: set[tuple[int, int]]  # all exons (union of CDS and UTR)
 
@@ -126,7 +128,7 @@ def blank_stats():
         ConfusionCounts(),
         ConfusionCounts(),
         ConfusionCounts(),
-        ConfusionCounts()
+        ConfusionCounts(),
     )
 
 
@@ -574,7 +576,7 @@ def overlap_stats(
             ),
             intron_longest=ConfusionCounts(
                 fn=len(true_intervals[tidx][true_longest_index[tidx]].intron)
-            )
+            ),
         )
     elif len(tindices) == 0:  # only one predicted feature, no true features
         return Stats(
@@ -606,7 +608,7 @@ def overlap_stats(
             ),
             intron_longest=ConfusionCounts(
                 fp=len(pred_intervals[pidx][pred_longest_index[pidx]].intron)
-            )
+            ),
         )
 
     # transcript level metrics
@@ -632,16 +634,10 @@ def overlap_stats(
     for pname, pinterval in pred_intervals.items():
         for ptidx, ptranscript in enumerate(pinterval):
             if ptidx == pred_longest_index[pname]:
-                pred_exon_cds_intervals_longest.extend(
-                    ptranscript.cds
-                )
+                pred_exon_cds_intervals_longest.extend(ptranscript.cds)
                 pred_exon_intervals_longest.extend(ptranscript.exon)
-                pred_intron_cds_intervals_longest.extend(
-                    ptranscript.intron_cds
-                )
-                pred_intron_intervals_longest.extend(
-                    ptranscript.intron
-                )
+                pred_intron_cds_intervals_longest.extend(ptranscript.intron_cds)
+                pred_intron_intervals_longest.extend(ptranscript.intron)
 
             pred_exon_cds_intervals.update(ptranscript.cds)
             pred_exon_intervals.update(ptranscript.exon)
@@ -670,16 +666,10 @@ def overlap_stats(
     for tname, tinterval in true_intervals.items():
         for ttidx, ttranscript in enumerate(tinterval):
             if ttidx == true_longest_index[tname]:
-                true_exon_cds_intervals_longest.extend(
-                    ttranscript.cds
-                )
+                true_exon_cds_intervals_longest.extend(ttranscript.cds)
                 true_exon_intervals_longest.extend(ttranscript.exon)
-                true_intron_cds_intervals_longest.extend(
-                    ttranscript.intron_cds
-                )
-                true_intron_intervals_longest.extend(
-                    ttranscript.intron
-                )
+                true_intron_cds_intervals_longest.extend(ttranscript.intron_cds)
+                true_intron_intervals_longest.extend(ttranscript.intron)
 
             true_exon_cds_intervals.update(ttranscript.cds)
             true_exon_intervals.update(ttranscript.exon)
@@ -726,7 +716,7 @@ def overlap_stats(
         exon_cds_counts_longest,
         exon_counts_longest,
         intron_cds_counts_longest,
-        intron_counts_longest
+        intron_counts_longest,
     )
 
 
@@ -763,9 +753,9 @@ def transcript_to_intervals(transcript: SeqFeature):
     while idx < len(temp_interval):
         start = temp_interval[idx][0]
         end = temp_interval[idx][1]
-        while idx+1 < len(temp_interval):
-            if temp_interval[idx+1][0] <= end:
-                end = temp_interval[idx+1][1]
+        while idx + 1 < len(temp_interval):
+            if temp_interval[idx + 1][0] <= end:
+                end = temp_interval[idx + 1][1]
                 idx += 1
             else:
                 break
@@ -777,12 +767,11 @@ def transcript_to_intervals(transcript: SeqFeature):
     intron_interval = []
 
     for idx in range(len(exon_interval) - 1):
-        intron_interval.append((exon_interval[idx][1], exon_interval[idx+1][0]))
+        intron_interval.append((exon_interval[idx][1], exon_interval[idx + 1][0]))
 
     intron_cds_interval = []
     for idx in range(len(cds_interval) - 1):
-        intron_cds_interval.append((cds_interval[idx][1], cds_interval[idx+1][0]))
-
+        intron_cds_interval.append((cds_interval[idx][1], cds_interval[idx + 1][0]))
 
     return Intervals(
         cds=set(cds_interval),
