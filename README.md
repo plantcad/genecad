@@ -1,6 +1,6 @@
 ![](https://img.shields.io/badge/version-1.0.0-blue)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
-[![Lint](https://github.com/maize-genetics/GeneCAD-dev/actions/workflows/ci.yaml/badge.svg)](https://github.com/maize-genetics/GeneCAD-dev/actions/workflows/ci.yaml)
+[![Lint](https://github.com/plantcad/genecad/actions/workflows/ci.yaml/badge.svg)](https://github.com/plantcad/genecad/actions/workflows/ci.yaml)
 [![DOI](https://zenodo.org/badge/DOI/10.1101/2025.08.27.672609.svg)](https://doi.org/10.1101/2025.08.27.672609)
 [![Hugging Face](https://img.shields.io/badge/🤗-Hugging%20Face-yellow.svg?style=flat)](https://huggingface.co/collections/plantcad/genecad-68c686ccf14312bf6de356de)
 [![Docker](https://img.shields.io/badge/docker-%230db7ed.svg?style=flat&logo=docker&logoColor=white)](https://hub.docker.com/r/eczech/genecad)
@@ -49,7 +49,7 @@ This example demonstrates how to run the GeneCAD inference pipeline for a single
 
 ```bash
 # Clone the GeneCAD repository
-git clone --single-branch https://github.com/maize-genetics/GeneCAD-dev && cd GeneCAD-dev
+git clone --single-branch https://github.com/plantcad/genecad && cd genecad
 # Optionally, checkout a release tag for greater reproducibility
 # git checkout v0.0.11
 
@@ -341,14 +341,16 @@ This table shows observed GeneCAD inference throughput on different devices and 
 | Lambda   | gpu_2x_h100_sxm5      | GeneCAD-Small | 34,290            | 6.3800      | 0.0517           |
 | Lambda   | gpu_2x_h100_sxm5      | GeneCAD-Large | 11,223            | 6.3800      |   0.1579         |
 
-These estimates can be used to extrapolate costs and GPU hours necessary for a few reference genomes.  These estimates below all assume the lowest `Cost per Mbp ($)` observed above on Lambda `A100 40G SXM4` GPUs (17,687 bp/s, $0.0202 / Mbp) with the `GeneCAD-Small` model.
+These estimates can be used to extrapolate costs and GPU hours necessary for a few reference genomes.  The estimated costs below all assume the lowest `Cost per Mbp ($)` observed above on Lambda `A100 40G SXM4` GPUs (17,687 bp/s, $0.0202 / Mbp) with the `GeneCAD-Small` model.  Any cost can be multiplied by ~3 to approximate the cost of using the `GeneCAD-Large` model instead.
 
 | Genome | Length (Mbp) | GPU Hours | Cost ($) |
 |----------|-------------|-----------|----------|
-| Arabidopsis thaliana | 135 | 2.12 | 2.73 |
-| Zea mays | 2,182 | 34.27 | 44.04 |
-| Hordeum vulgare | 4,224 | 66.34 | 85.32 |
+| Arabidopsis thaliana (thale cress) | 120 | 2.12 | 2.42 |
+| Zea mays (corn)| 2,182 | 34.27 | 44.04 |
+| Hordeum vulgare (barley) | 4,224 | 66.34 | 85.32 |
+| Triticum aestivum (wheat) | 14,577 | 227.00 | 294.46 |
 
+For example, this table is saying that it costs about $44 to run GeneCAD-Small on the Zea mays genome to produce a predicted annotations (`gff`) file.
 
 ## Evaluation
 
