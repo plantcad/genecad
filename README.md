@@ -404,9 +404,9 @@ HF checkpoints should be uploaded to https://huggingface.co/plantcad.  Currently
 
 ```bash
 # cd /path/to/checkpoints/small-base
-hf upload plantcad/GeneCAD-l8-d768-PC2-Small model.ckpt --repo-type model --private
+hf upload plantcad/GeneCAD-l8-d768-PC2-Small model.ckpt --repo-type model
 # cd /path/to/checkpoints/large-base
-hf upload plantcad/GeneCAD-l8-d768-PC2-Large model.ckpt --repo-type model --private
+hf upload plantcad/GeneCAD-l8-d768-PC2-Large model.ckpt --repo-type model
 ```
 
 In the future, this may include a conversion to safetensors/gguf format first.
@@ -455,7 +455,6 @@ mkdir -p $INPUT_DIR $OUTPUT_DIR
 # Download FASTA and GFF files
 hf download plantcad/genecad-dev data/fasta/Juglans_regia.Walnut_2.0.dna.toplevel_chr1.fa --repo-type dataset --local-dir .
 hf download plantcad/genecad-dev data/gff/Juglans_regia.Walnut_2.0.60_chr1.gff3 --repo-type dataset --local-dir .
-
 
 # Run inference pipeline in container
 docker run --rm --gpus all \
