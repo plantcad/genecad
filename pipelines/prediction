@@ -12,6 +12,20 @@ PRED_DTYPE ?= bfloat16
 HEAD_MODEL_PATH ?= plantcad/GeneCAD-l8-d768-PC2-Small
 BASE_MODEL_PATH ?= kuleshov-group/PlantCAD2-Small-l24-d0768
 
+# Validate required variables
+ifndef INPUT_FILE
+  $(error INPUT_FILE is required. Set it via: INPUT_FILE=/path/to/input.fasta)
+endif
+ifndef OUTPUT_DIR
+  $(error OUTPUT_DIR is required. Set it via: OUTPUT_DIR=/path/to/output)
+endif
+ifndef SPECIES_ID
+  $(error SPECIES_ID is required. Set it via: SPECIES_ID=species_id)
+endif
+ifndef CHR_ID
+  $(error CHR_ID is required. Set it via: CHR_ID=chromosome_id)
+endif
+
 # Pipeline directory structure
 PIPELINE_DIR = $(OUTPUT_DIR)/pipeline
 

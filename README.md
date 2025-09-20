@@ -197,6 +197,8 @@ salloc -partition=gpu-queue --nodes=4 --ntasks=4
 cd /path/to/GeneCAD
 INPUT_FILE=/path/to/input.fasta \
 OUTPUT_DIR=/path/to/output \
+SPECIES_ID=species_id \
+CHR_ID=chromosome_id \
 LAUNCHER="srun python" \
 make -f pipelines/prediction all
 ```
@@ -223,6 +225,8 @@ sbatch \
 genecad.slurm \
   INPUT_FILE=/path/to/input.fasta \
   OUTPUT_DIR=/path/to/output \
+  SPECIES_ID=species_id \
+  CHR_ID=chromosome_id \
   make -f pipelines/prediction all
 ```
 
@@ -231,6 +235,8 @@ The GeneCAD pipeline relies only on settings for `RANK` and `WORLD_SIZE` to dist
 ```bash
 export INPUT_FILE=/path/to/input.fasta
 export OUTPUT_DIR=/path/to/output
+export SPECIES_ID=species_id
+export CHR_ID=chromosome_id
 
 # CPU-only preprocessing (FASTA -> Xarray)
 sbatch -p cpu-queue -N 1 -n 1 genecad.slurm make -f pipelines/prediction sequences
@@ -251,6 +257,7 @@ The inference pipeline requires these inputs at a minimum:
 
 ```bash
 INPUT_FILE=/path/to/input.fasta \
+OUTPUT_DIR=/path/to/output \
 SPECIES_ID=species_id \
 CHR_ID=chromosome_id \
 make -f pipelines/prediction all
@@ -404,9 +411,9 @@ HF checkpoints should be uploaded to https://huggingface.co/plantcad.  Currently
 
 ```bash
 # cd /path/to/checkpoints/small-base
-hf upload plantcad/GeneCAD-l8-d768-PC2-Small model.ckpt --repo-type model --private
+hf upload plantcad/GeneCAD-l8-d768-PC2-Small model.ckpt --repo-type model
 # cd /path/to/checkpoints/large-base
-hf upload plantcad/GeneCAD-l8-d768-PC2-Large model.ckpt --repo-type model --private
+hf upload plantcad/GeneCAD-l8-d768-PC2-Large model.ckpt --repo-type model
 ```
 
 In the future, this may include a conversion to safetensors/gguf format first.
@@ -455,7 +462,6 @@ mkdir -p $INPUT_DIR $OUTPUT_DIR
 # Download FASTA and GFF files
 hf download plantcad/genecad-dev data/fasta/Juglans_regia.Walnut_2.0.dna.toplevel_chr1.fa --repo-type dataset --local-dir .
 hf download plantcad/genecad-dev data/gff/Juglans_regia.Walnut_2.0.60_chr1.gff3 --repo-type dataset --local-dir .
-
 
 # Run inference pipeline in container
 docker run --rm --gpus all \
