@@ -113,31 +113,7 @@ wheels = [
 name = "causal-conv1d"
 version = "1.5.0.post8"
 source = { git = "https://github.com/Dao-AILab/causal-conv1d?tag=v1.5.0.post8#82867a9d2e6907cc0f637ac6aff318f696838548" }
-resolution-markers = [
-    "platform_machine != 'x86_64' or sys_platform != 'linux'",
-]
 dependencies = [
-    { name = "einops", marker = "platform_machine != 'x86_64' or sys_platform != 'linux'" },
-    { name = "torch", marker = "platform_machine != 'x86_64' or sys_platform != 'linux'" },
-]
-
-[[package]]
-name = "causal-conv1d"
-version = "1.5.0.post8"
-source = { url = "https://github.com/Open-Athena/python-wheels/releases/download/v0.0.1/causal_conv1d-1.5.0.post8-cp312-cp312-linux_x86_64.whl" }
-resolution-markers = [
-    "platform_machine == 'x86_64' and sys_platform == 'linux'",
-]
-dependencies = [
-    { name = "einops", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
-    { name = "torch", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
-]
-wheels = [
-    { url = "https://github.com/Open-Athena/python-wheels/releases/download/v0.0.1/causal_conv1d-1.5.0.post8-cp312-cp312-linux_x86_64.whl", hash = "sha256:13e05f9c51cf4fd81c0231fab306327b3353679b56bd08afe494f76ef782ec75" },
-]
-
-[package.metadata]
-requires-dist = [
     { name = "einops" },
     { name = "torch" },
 ]
@@ -358,10 +334,8 @@ dependencies = [
 
 [package.optional-dependencies]
 mamba = [
-    { name = "causal-conv1d", version = "1.5.0.post8", source = { git = "https://github.com/Dao-AILab/causal-conv1d?tag=v1.5.0.post8#82867a9d2e6907cc0f637ac6aff318f696838548" }, marker = "platform_machine != 'x86_64' or sys_platform != 'linux'" },
-    { name = "causal-conv1d", version = "1.5.0.post8", source = { url = "https://github.com/Open-Athena/python-wheels/releases/download/v0.0.1/causal_conv1d-1.5.0.post8-cp312-cp312-linux_x86_64.whl" }, marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
-    { name = "mamba-ssm", version = "2.2.4", source = { git = "https://github.com/state-spaces/mamba?tag=v2.2.4#95d8aba8a8c75aedcaa6143713b11e745e7cd0d9" }, marker = "platform_machine != 'x86_64' or sys_platform != 'linux'" },
-    { name = "mamba-ssm", version = "2.2.4", source = { url = "https://github.com/Open-Athena/python-wheels/releases/download/v0.0.1/mamba_ssm-2.2.4-cp312-cp312-linux_x86_64.whl" }, marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "causal-conv1d" },
+    { name = "mamba-ssm" },
 ]
 torch = [
     { name = "lightning" },
@@ -372,6 +346,7 @@ torch = [
 [package.dev-dependencies]
 dev = [
     { name = "pre-commit" },
+    { name = "pyrefly" },
     { name = "pytest" },
     { name = "ruff" },
 ]
@@ -379,11 +354,9 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "biopython", specifier = "~=1.85" },
-    { name = "causal-conv1d", marker = "python_full_version == '3.12.*' and platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'mamba'", url = "https://github.com/Open-Athena/python-wheels/releases/download/v0.0.1/causal_conv1d-1.5.0.post8-cp312-cp312-linux_x86_64.whl" },
-    { name = "causal-conv1d", marker = "(python_full_version != '3.12.*' and extra == 'mamba') or (platform_machine != 'x86_64' and extra == 'mamba') or (sys_platform != 'linux' and extra == 'mamba')", git = "https://github.com/Dao-AILab/causal-conv1d?tag=v1.5.0.post8" },
+    { name = "causal-conv1d", marker = "extra == 'mamba'", git = "https://github.com/Dao-AILab/causal-conv1d?tag=v1.5.0.post8" },
     { name = "lightning", marker = "extra == 'torch'", specifier = "~=2.5.1" },
-    { name = "mamba-ssm", marker = "python_full_version == '3.12.*' and platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'mamba'", url = "https://github.com/Open-Athena/python-wheels/releases/download/v0.0.1/mamba_ssm-2.2.4-cp312-cp312-linux_x86_64.whl" },
-    { name = "mamba-ssm", marker = "(python_full_version != '3.12.*' and extra == 'mamba') or (platform_machine != 'x86_64' and extra == 'mamba') or (sys_platform != 'linux' and extra == 'mamba')", git = "https://github.com/state-spaces/mamba?tag=v2.2.4" },
+    { name = "mamba-ssm", marker = "extra == 'mamba'", git = "https://github.com/state-spaces/mamba?tag=v2.2.4" },
     { name = "matplotlib", specifier = "~=3.10.1" },
     { name = "numba", specifier = "~=0.61.0" },
     { name = "numpy", specifier = "~=2.1.2" },
@@ -405,6 +378,7 @@ provides-extras = ["torch", "mamba"]
 [package.metadata.requires-dev]
 dev = [
     { name = "pre-commit", specifier = ">=4.2.0" },
+    { name = "pyrefly", specifier = ">=0.32.0" },
     { name = "pytest", specifier = ">=8.3.4" },
     { name = "ruff", specifier = ">=0.11.13" },
 ]
@@ -563,31 +537,7 @@ wheels = [
 name = "mamba-ssm"
 version = "2.2.4"
 source = { git = "https://github.com/state-spaces/mamba?tag=v2.2.4#95d8aba8a8c75aedcaa6143713b11e745e7cd0d9" }
-resolution-markers = [
-    "platform_machine != 'x86_64' or sys_platform != 'linux'",
-]
 dependencies = [
-    { name = "einops", marker = "platform_machine != 'x86_64' or sys_platform != 'linux'" },
-    { name = "torch", marker = "platform_machine != 'x86_64' or sys_platform != 'linux'" },
-]
-
-[[package]]
-name = "mamba-ssm"
-version = "2.2.4"
-source = { url = "https://github.com/Open-Athena/python-wheels/releases/download/v0.0.1/mamba_ssm-2.2.4-cp312-cp312-linux_x86_64.whl" }
-resolution-markers = [
-    "platform_machine == 'x86_64' and sys_platform == 'linux'",
-]
-dependencies = [
-    { name = "einops", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
-    { name = "torch", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
-]
-wheels = [
-    { url = "https://github.com/Open-Athena/python-wheels/releases/download/v0.0.1/mamba_ssm-2.2.4-cp312-cp312-linux_x86_64.whl", hash = "sha256:2c4b420217da39feeed12e0c87dcc85195a306e42b3e21b9f9736414bf50c3bb" },
-]
-
-[package.metadata]
-requires-dist = [
     { name = "einops" },
     { name = "torch" },
 ]
@@ -784,7 +734,7 @@ name = "nvidia-cudnn-cu12"
 version = "9.7.1.26"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "nvidia-cublas-cu12" },
+    { name = "nvidia-cublas-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/25/dc/dc825c4b1c83b538e207e34f48f86063c88deaa35d46c651c7c181364ba2/nvidia_cudnn_cu12-9.7.1.26-py3-none-manylinux_2_27_x86_64.whl", hash = "sha256:6d011159a158f3cfc47bf851aea79e31bcff60d530b70ef70474c84cac484d07", size = 726851421, upload-time = "2025-02-06T22:18:29.812Z" },
@@ -795,7 +745,7 @@ name = "nvidia-cufft-cu12"
 version = "11.3.3.41"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "nvidia-nvjitlink-cu12" },
+    { name = "nvidia-nvjitlink-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/ac/26/b53c493c38dccb1f1a42e1a21dc12cba2a77fbe36c652f7726d9ec4aba28/nvidia_cufft_cu12-11.3.3.41-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:da650080ab79fcdf7a4b06aa1b460e99860646b176a43f6208099bdc17836b6a", size = 193118795, upload-time = "2025-01-23T17:56:30.536Z" },
@@ -822,9 +772,9 @@ name = "nvidia-cusolver-cu12"
 version = "11.7.2.55"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "nvidia-cublas-cu12" },
-    { name = "nvidia-cusparse-cu12" },
-    { name = "nvidia-nvjitlink-cu12" },
+    { name = "nvidia-cublas-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "nvidia-cusparse-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "nvidia-nvjitlink-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/c2/08/953675873a136d96bb12f93b49ba045d1107bc94d2551c52b12fa6c7dec3/nvidia_cusolver_cu12-11.7.2.55-py3-none-manylinux_2_27_x86_64.whl", hash = "sha256:4d1354102f1e922cee9db51920dba9e2559877cf6ff5ad03a00d853adafb191b", size = 260373342, upload-time = "2025-01-23T17:58:56.406Z" },
@@ -835,7 +785,7 @@ name = "nvidia-cusparse-cu12"
 version = "12.5.7.53"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "nvidia-nvjitlink-cu12" },
+    { name = "nvidia-nvjitlink-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/c2/ab/31e8149c66213b846c082a3b41b1365b831f41191f9f40c6ddbc8a7d550e/nvidia_cusparse_cu12-12.5.7.53-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:3c1b61eb8c85257ea07e9354606b26397612627fdcd327bfd91ccf6155e7c86d", size = 292064180, upload-time = "2025-01-23T18:00:23.233Z" },
@@ -1048,6 +998,22 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/98/c9/b4594e6a81371dfa9eb7a2c110ad682acf985d96115ae8b25a1d63b4bf3b/pyparsing-3.2.4.tar.gz", hash = "sha256:fff89494f45559d0f2ce46613b419f632bbb6afbdaed49696d322bcf98a58e99", size = 1098809, upload-time = "2025-09-13T05:47:19.732Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/53/b8/fbab973592e23ae313042d450fc26fa24282ebffba21ba373786e1ce63b4/pyparsing-3.2.4-py3-none-any.whl", hash = "sha256:91d0fcde680d42cd031daf3a6ba20da3107e08a75de50da58360e7d94ab24d36", size = 113869, upload-time = "2025-09-13T05:47:17.863Z" },
+]
+
+[[package]]
+name = "pyrefly"
+version = "0.33.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/ea/7a/4d0bb7accd3e5f88a9ec027cfa781358fe8a4381d6f3aa37d5633a8a16f7/pyrefly-0.33.1.tar.gz", hash = "sha256:6c9710c63bc2015ba9b66fd7d019f81339207863d625abbf204a62dbb06f9bfc", size = 1448500, upload-time = "2025-09-18T21:08:39.826Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/c1/67/61141a7f20d987aa53c9db4e22fa939060c289226ae943944477dbc19cf6/pyrefly-0.33.1-py3-none-macosx_10_12_x86_64.whl", hash = "sha256:eb85124d0f62549082c4a7da0186fb01b9d327943988fa226d6a438ff9f13ec2", size = 6716147, upload-time = "2025-09-18T21:08:21.938Z" },
+    { url = "https://files.pythonhosted.org/packages/07/27/9829e8267772c496c3e2763be8f076e87f6aa30d5ea5ce3dbfad38cb5bdd/pyrefly-0.33.1-py3-none-macosx_11_0_arm64.whl", hash = "sha256:2f5684d853851f5436081593c61eab6544ce967de30f6c292c0a4d9277f1e8a6", size = 6273479, upload-time = "2025-09-18T21:08:24.009Z" },
+    { url = "https://files.pythonhosted.org/packages/57/4d/9a3eec0576aa81a1908b77dcfab4b02cc2427e5747798b9ffb5ff0790f48/pyrefly-0.33.1-py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:0786de1e6209ee41bf88ca6435cd51d17eaa4e02444c9a3eb413729793535d18", size = 6500521, upload-time = "2025-09-18T21:08:26.155Z" },
+    { url = "https://files.pythonhosted.org/packages/3e/62/04f728927a968c50ab932a55d8972393ae754f6802aef34be041c04a5f7c/pyrefly-0.33.1-py3-none-manylinux_2_17_i686.manylinux2014_i686.whl", hash = "sha256:a4af7bae847fa71a6568599a4b6f718806e2c0d980c5935a3d450be8cad0bc53", size = 7329109, upload-time = "2025-09-18T21:08:29.963Z" },
+    { url = "https://files.pythonhosted.org/packages/67/6e/e57b52dca3b80247f8af8de71bd077c7e27e1e71bc4925aeb64ee8c28c53/pyrefly-0.33.1-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:f1728ae24da9a6c84f3cb61da011fe2e8708f8a99620600186a61f3237c01e66", size = 6993761, upload-time = "2025-09-18T21:08:31.743Z" },
+    { url = "https://files.pythonhosted.org/packages/68/12/afb53121b909d12096b9d120d15aa0ea16ffce1ec9282ab99248a5dd6a7d/pyrefly-0.33.1-py3-none-win32.whl", hash = "sha256:1d76c05bd066ef7398bb05f91674206c9cc9fadb9113457044df545b29bf69d5", size = 6493672, upload-time = "2025-09-18T21:08:33.859Z" },
+    { url = "https://files.pythonhosted.org/packages/e2/48/ee6c84b1eb45b936b0b6bd1619db0d2c8f2aaac078755942cc04e421ef29/pyrefly-0.33.1-py3-none-win_amd64.whl", hash = "sha256:2218e207c06e69258735d6c13d888a680a4b18b5890c5b27f020185609a18c63", size = 6931703, upload-time = "2025-09-18T21:08:35.986Z" },
+    { url = "https://files.pythonhosted.org/packages/51/72/417b3f5845232c30897eb6472c9ea7e70f52a7167d3f65a8042fe6e777bf/pyrefly-0.33.1-py3-none-win_arm64.whl", hash = "sha256:329ebd3cf015ff734ec1779ef57c6a86b66b350d6d764ed94053cf85b4ffc502", size = 6535442, upload-time = "2025-09-18T21:08:38.153Z" },
 ]
 
 [[package]]

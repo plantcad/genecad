@@ -1,4 +1,4 @@
-"""Interval evaluation functions from https://github.com/maize-genetics/GeneCAD-dev/pull/2"""
+"""Interval evaluation functions from https://github.com/plantcad/genecad/pull/2"""
 
 import itertools
 import numpy as np
