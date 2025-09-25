@@ -321,7 +321,6 @@ dependencies = [
     { name = "numba" },
     { name = "numpy" },
     { name = "pandas" },
-    { name = "portion" },
     { name = "pydantic" },
     { name = "scikit-learn" },
     { name = "six" },
@@ -361,7 +360,6 @@ requires-dist = [
     { name = "numba", specifier = "~=0.61.0" },
     { name = "numpy", specifier = "~=2.1.2" },
     { name = "pandas", specifier = "~=2.2.3" },
-    { name = "portion", specifier = "~=2.6.1" },
     { name = "pydantic", specifier = "~=2.10.6" },
     { name = "scikit-learn", specifier = "~=1.6.1" },
     { name = "six", specifier = "~=1.17.0" },
@@ -891,18 +889,6 @@ wheels = [
 ]
 
 [[package]]
-name = "portion"
-version = "2.6.1"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "sortedcontainers" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/71/eb/fb2cc91b0214c0c6028cb4b29d309142687c740d1daf7c36c771a0aa5ac1/portion-2.6.1.tar.gz", hash = "sha256:44b1f7d57e052993c4157e519dc447e57b87a4e5e00a77c1c50e7044104e53c6", size = 61345, upload-time = "2025-05-25T13:50:46.683Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/da/9e/21c4088d1d433cfbf0578f138a6df59527dbd9e9d67355ee31b17e6dc774/portion-2.6.1-py3-none-any.whl", hash = "sha256:764d0be5479842f011feccc6f4bf80454dd944ef16309fceb2b5ae229cf05df3", size = 27389, upload-time = "2025-05-25T13:50:45.295Z" },
-]
-
-[[package]]
 name = "pre-commit"
 version = "4.3.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1002,6 +988,7 @@ wheels = [
 
 [[package]]
 name = "pyrefly"
+
 version = "0.33.1"
 source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/ea/7a/4d0bb7accd3e5f88a9ec027cfa781358fe8a4381d6f3aa37d5633a8a16f7/pyrefly-0.33.1.tar.gz", hash = "sha256:6c9710c63bc2015ba9b66fd7d019f81339207863d625abbf204a62dbb06f9bfc", size = 1448500, upload-time = "2025-09-18T21:08:39.826Z" }
@@ -1014,6 +1001,7 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/68/12/afb53121b909d12096b9d120d15aa0ea16ffce1ec9282ab99248a5dd6a7d/pyrefly-0.33.1-py3-none-win32.whl", hash = "sha256:1d76c05bd066ef7398bb05f91674206c9cc9fadb9113457044df545b29bf69d5", size = 6493672, upload-time = "2025-09-18T21:08:33.859Z" },
     { url = "https://files.pythonhosted.org/packages/e2/48/ee6c84b1eb45b936b0b6bd1619db0d2c8f2aaac078755942cc04e421ef29/pyrefly-0.33.1-py3-none-win_amd64.whl", hash = "sha256:2218e207c06e69258735d6c13d888a680a4b18b5890c5b27f020185609a18c63", size = 6931703, upload-time = "2025-09-18T21:08:35.986Z" },
     { url = "https://files.pythonhosted.org/packages/51/72/417b3f5845232c30897eb6472c9ea7e70f52a7167d3f65a8042fe6e777bf/pyrefly-0.33.1-py3-none-win_arm64.whl", hash = "sha256:329ebd3cf015ff734ec1779ef57c6a86b66b350d6d764ed94053cf85b4ffc502", size = 6535442, upload-time = "2025-09-18T21:08:38.153Z" },
+
 ]
 
 [[package]]
@@ -1230,15 +1218,6 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/94/e7/b2c673351809dca68a0e064b6af791aa332cf192da575fd474ed7d6f16a2/six-1.17.0.tar.gz", hash = "sha256:ff70335d468e7eb6ec65b95b99d3a2836546063f63acc5171de367e834932a81", size = 34031, upload-time = "2024-12-04T17:35:28.174Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/b7/ce/149a00dd41f10bc29e5921b496af8b574d8413afcd5e30dfa0ed46c2cc5e/six-1.17.0-py2.py3-none-any.whl", hash = "sha256:4721f391ed90541fddacab5acf947aa0d3dc7d27b2e1e8eda2be8970586c3274", size = 11050, upload-time = "2024-12-04T17:35:26.475Z" },
-]
-
-[[package]]
-name = "sortedcontainers"
-version = "2.4.0"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/e8/c4/ba2f8066cceb6f23394729afe52f3bf7adec04bf9ed2c820b39e19299111/sortedcontainers-2.4.0.tar.gz", hash = "sha256:25caa5a06cc30b6b83d11423433f65d1f9d76c4c6a0c90e3379eaa43b9bfdb88", size = 30594, upload-time = "2021-05-16T22:03:42.897Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/32/46/9cb0e58b2deb7f82b84065f37f3bffeb12413f947f9388e4cac22c4621ce/sortedcontainers-2.4.0-py2.py3-none-any.whl", hash = "sha256:a163dcaede0f1c021485e957a39245190e74249897e2ae4b2aa38595db237ee0", size = 29575, upload-time = "2021-05-16T22:03:41.177Z" },
 ]
 
 [[package]]
