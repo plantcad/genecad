@@ -354,7 +354,7 @@ These estimates can be used to extrapolate costs and GPU hours necessary for a f
 
 A simple way to evaluate predicted annotations is with the gffcompare tool.  It can either be [built from source](https://github.com/gpertea/gffcompare?tab=readme-ov-file#building-from-source) or [installed via conda](https://anaconda.org/bioconda/gffcompare).  See [examples/scripts/run_evaluation.sh](examples/scripts/run_evaluation.sh) for an example of how to use it.  See [Dockerfile](Dockerfile) for an example installation from source.
 
-While `gffcompare` offers a useful starting point for evaluating in silico annotations, it is limited by its inability to accurately assess regions outside of predicted UTRs.  These are known to be very difficult to predict accurately from DNA alone and these predictions are of limited utility in many applications.  As a result, we offer a separate evaluation tool for assessing performance of whole-transcript annotations that excludes UTRs.  This tool produces metrics aggregated to several levels (much like `gffcompare`) as well as a `transcript_cds` score that scores perfect, predicted annotations of introns and exons over translated regions only.  Here is some example usage:
+While `gffcompare` offers a useful starting point for evaluating in silico annotations, it is limited by its inability to accurately assess regions independent of predicted UTRs.  UTRs are known to be very difficult to predict accurately from DNA alone and these predictions are of limited utility in many applications.  As a result, we offer a separate evaluation tool for assessing performance of whole-transcript annotations that excludes UTRs.  This tool produces metrics aggregated to several levels (much like `gffcompare`) as well as a `transcript_cds` score that scores perfect, predicted annotations of introns and exons over translated regions only.  Here is some example usage:
 
 ```bash
 python scripts/gff.py evaluate \
@@ -374,10 +374,25 @@ cat /path/to/results/gffeval.stats.tsv
 # exon                                    65.14    28.72  39.86
 # intron_cds                              97.29    51.15  67.05
 # intron                                  96.32    45.36  61.68
-# base_cds                                92.41    68.06  78.39
-# base_utr                                84.94    40.32  54.69
-# base_exon                               94.23    60.82  73.92
 ```
+
+For each metric level, three values are reported: precision, recall, and F1 score. The GFF specified by `--reference` contains all true features, while the gff specified by `--input` provides the predicted features. Below is a definition of a match, or true positive, for each level.
+
+| Level                              | Description                                                                                                                                                                                                                                                                 |
+|------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| transcript_cds                     | Instances where a predicted transcript's CDS exactly matches the true transcript's CDS. Discrepancies in the UTRs are allowed.                                                                                                                                              |
+| transcript_intron                  | Instances where a predicted transcript's intron boundaries exactly match the true transcript's intron boundaries. Discrepancies in the transcription start and stop are allowed, as long as they do not alter splice sites.                                                 |
+| transcript                         | Instances where a predicted transcript exactly matches the true transcript, including CDS and UTRs.                                                                                                                                                                         |
+| exon_cds_longest_transcript_only   | Instances where a predicted exon's boundaries exactly match the true exon's boundaries, taking into account only the exons from the longest true transcript and excluding UTR exons. If an exon is split between UTR and CDS sequence, only the CDS portion is condsidered. |
+| exon_longest_transcript_only       | Instances where a predicted exon's boundaries exactly match a true exon's boundaries, taking into account only the exons from the longest true transcript.                                                                                                                  |
+| intron_cds_longest_transcript_only | Instances where a predicted intron's boundaries exactly match the true intron's boundaries, taking into account only the introns from the longest true transcript and excluding introns that border UTR sequence.                                                           |
+| intron_longest_transcript_only     | Instances where a predicted intron's boundaries exactly match a true intron's boundaries, taking into account only the introns from the longest true transcript.                                                                                                            |
+| exon_cds                           | Instances where a predicted exon's boundaries exactly match the true exon's boundaries, excluding UTR exons. If an exon is split between UTR and CDS sequence, only the CDS portion is condsidered. Exons from alternative transcripts are considered.                      |
+| exon                               | Instances where a predicted exon's boundaries exactly match a true exon's boundaries. Exons from alternative transcripts are considered.                                                                                                                                    |
+| intron_cds                         | Instances where a predicted intron's boundaries exactly match the true intron's boundaries, excluding introns that border UTR sequence. Introns from alternative transcripts are considered.                                                                                |
+| intron                             | Instances where a predicted intron's boundaries exactly match a true intron's boundaries. Exons from alternative transcripts are considered.                                                                                                                                |
+
+Note: for the first three transcript-level metrics, a true positive result is counted whenever the predicted transcript matches at least one of the true transcripts for a gene with alternative splicing.
 
 ## Development
 
