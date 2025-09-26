@@ -27,7 +27,7 @@ def set_visualization_save_dir(save_dir: str) -> None:
     Parameters
     ----------
     save_dir : str
-        Directory path where visualization files will be saved
+        Directory path where visualization files will be saved.
     """
     global SAVE_DIR
     SAVE_DIR = save_dir
@@ -43,6 +43,28 @@ def visualize_tokens(
     sample_name: str | None = None,
     batch_idx: int | None = None,
 ) -> None:
+    """Render token-level predictions produced by the classifier.
+
+    Parameters
+    ----------
+    module : lightning.pytorch.LightningModule
+        Lightning module that generated the predictions.
+    logits : torch.Tensor
+        Token logits with shape ``(batch, sequence, num_labels)``.
+    labels : torch.Tensor
+        Ground-truth token labels aligned with ``logits``.
+    masks : torch.Tensor
+        Binary mask identifying valid elements in ``logits``.
+    prefix : str
+        Prefix for the saved visualization file names.
+    sample_index : int, optional
+        Optional index identifying the sample of interest, by default ``None``.
+    sample_name : str, optional
+        Optional human readable name for the sample, by default ``None``.
+    batch_idx : int, optional
+        Training batch index used for logging, by default ``None``.
+    """
+
     attempt_visualization(visualize_token_predictions)(
         module,
         logits=logits,
@@ -68,6 +90,34 @@ def visualize_entities(
     batch_name: str | None = None,
     batch_idx: int | None = None,
 ) -> None:
+    """Render entity-level predictions and supporting diagnostics.
+
+    Parameters
+    ----------
+    module : lightning.pytorch.LightningModule
+        Lightning module that generated the predictions.
+    true_entity_labels : numpy.ndarray
+        Ground-truth entity labels for each token.
+    pred_entity_labels : numpy.ndarray
+        Predicted entity labels.
+    pred_entity_logits : numpy.ndarray
+        Entity logits corresponding to ``pred_entity_labels``.
+    true_token_masks : numpy.ndarray
+        Boolean mask indicating which tokens are valid.
+    eval_intervals : pandas.DataFrame
+        Interval-level evaluation results.
+    prefix : str
+        Prefix for saved visualization file names.
+    sample_index : int, optional
+        Optional index identifying the sample of interest, by default ``None``.
+    sample_name : str, optional
+        Optional human readable name for the sample, by default ``None``.
+    batch_name : str, optional
+        Optional identifier for the batch being visualized, by default ``None``.
+    batch_idx : int, optional
+        Training batch index used for logging, by default ``None``.
+    """
+
     attempt_visualization(visualize_entity_predictions)(
         module,
         true_entity_labels=true_entity_labels,
@@ -99,6 +149,20 @@ def visualize_entities(
 
 
 def attempt_visualization(fn):
+    """Execute a visualization callback while suppressing non-critical errors.
+
+    Parameters
+    ----------
+    fn : Callable
+        Visualization function to execute.
+
+    Returns
+    -------
+    Callable
+        Wrapped callable that executes ``fn`` only on rank zero and logs
+        warnings on failure instead of raising exceptions.
+    """
+
     @rank_zero_only
     def wrapper(*args, **kwargs):
         try:
@@ -121,6 +185,24 @@ def _resolve_sample_info(
     sample_name: str | None,
     default_index: Callable[[], int] | None = None,
 ) -> tuple[int, str]:
+    """Resolve sample index and name for visualization metadata.
+
+    Parameters
+    ----------
+    sample_index : int or None
+        Explicitly provided sample index or ``None`` to use ``default_index``.
+    sample_name : str or None
+        Explicit sample name or ``None`` to derive one from ``sample_index``.
+    default_index : Callable, optional
+        Callable that returns the default index when ``sample_index`` is
+        ``None``. Defaults to ``None``.
+
+    Returns
+    -------
+    tuple[int, str]
+        Tuple containing the resolved index and human readable sample name.
+    """
+
     if sample_index is None:
         assert default_index is not None
         sample_index = default_index()
@@ -141,20 +223,20 @@ def get_visualization_path(
     Parameters
     ----------
     prefix : str
-        Prefix for the file name (usually 'train', 'val', etc.)
+        Prefix for the file name (usually ``"train"``, ``"val"``, etc.).
     visualization_type : str
-        Type of visualization (e.g., 'token_prediction', 'entity_prediction')
+        Type of visualization (e.g., ``"token_prediction"`` or ``"entity_prediction"``).
     global_step : int
-        Current global step of the model
+        Current global step of the model.
     batch_idx : int, optional
-        Batch index, by default None
+        Batch index, by default ``None``.
     extension : str, optional
-        File extension, by default 'png'
+        File extension, by default ``"png"``.
 
     Returns
     -------
     str
-        Full path to save the visualization
+        Full path to save the visualization.
     """
     if batch_idx is not None:
         filename = f"{prefix}__{visualization_type}__step_{global_step:05d}__batch_{batch_idx:05d}.{extension}"
