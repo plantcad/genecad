@@ -79,13 +79,17 @@ def load_tokenizer(args: Args) -> AutoTokenizer:
 
 
 def load_models(args: Args) -> tuple[AutoModel | None, GeneClassifier, AutoTokenizer]:
-    """
-    Load the base embedding model, the GeneClassifier, and the tokenizer.
+    """Load the base model, classifier, and tokenizer required for inference.
+
+    Parameters
+    ----------
+    args : argparse.Namespace
+        Command-line arguments controlling checkpoint paths and device.
 
     Returns
     -------
-    tuple
-        (base_model, classifier_model, tokenizer) - models and tokenizer loaded and ready for inference
+    tuple[AutoModel | None, GeneClassifier, AutoTokenizer]
+        Tuple containing the optional base model, the classifier, and the tokenizer.
     """
     classifier = load_classifier(args)
     base_model = None
@@ -96,13 +100,17 @@ def load_models(args: Args) -> tuple[AutoModel | None, GeneClassifier, AutoToken
 
 
 def load_data(args: Args) -> xr.Dataset:
-    """
-    Load the input data and select the specific species and chromosome.
+    """Load the sequence dataset for a specific species and chromosome.
+
+    Parameters
+    ----------
+    args : argparse.Namespace
+        Command-line arguments describing the input path, species, and chromosome.
 
     Returns
     -------
     xarray.Dataset
-        The dataset containing the sequence data for the specified species and chromosome
+        Dataset containing the sequence data for the requested species and chromosome.
     """
     logger.info(f"Opening input sequence datatree from {args.input}")
     sequences = open_datatree(args.input, consolidated=False)
@@ -145,26 +153,25 @@ def _create_predictions(
     classifier: GeneClassifier,
     tokenizer: AutoTokenizer,
 ) -> xr.DataTree:
-    """
-    Generate predictions by processing sequences in strided windows.
+    """Generate token and feature predictions in strided windows.
 
     Parameters
     ----------
     args : argparse.Namespace
-        Command-line arguments
+        Command-line arguments configuring batch size, stride, and output paths.
     ds : xarray.Dataset
-        Dataset containing the sequence data
-    base_model : AutoModel | None
-        The base embedding model, or None if not needed
+        Dataset containing the sequence input identifiers and metadata.
+    base_model : AutoModel or None
+        Base encoder used to compute embeddings when required by the classifier.
     classifier : GeneClassifier
-        The classifier model
+        Fine-tuned classifier that produces token logits.
     tokenizer : AutoTokenizer
-        The tokenizer for the base model
+        Tokenizer associated with the base model.
 
     Returns
     -------
     xr.DataTree
-        A data tree containing the predictions for each strand
+        Data tree containing predictions for both forward and reverse strands.
     """
     # Get distributed processing info
     rank, world_size = process_group()
@@ -356,14 +363,12 @@ def flip(sequence: npt.ArrayLike) -> npt.ArrayLike:
 
 
 def create_predictions(args: Args):
-    """
-    Run the gene prediction inference pipeline to generate logits.
-    Each rank writes its results to a separate file.
+    """Run the inference pipeline to generate logits for each genomic strand.
 
     Parameters
     ----------
     args : argparse.Namespace
-        Command-line arguments
+        Command-line arguments controlling inputs, outputs, and runtime options.
     """
     # Set to avoid:
     # UserWarning: TensorFloat32 tensor cores for float32 matrix multiplication available but not enabled. Consider setting `torch.set_float32_matmul_precision('high')` for better performance.
@@ -405,20 +410,19 @@ def _detect_intervals(
     args: Args,
     predictions: xr.Dataset,
 ) -> xr.Dataset:
-    """
-    Infer region intervals from feature predictions.
+    """Infer genomic intervals from per-token feature predictions.
 
     Parameters
     ----------
     args : argparse.Namespace
-        Command-line arguments
+        Command-line arguments describing decoding options.
     predictions : xr.Dataset
-        Dataset containing feature predictions ('feature_predictions' variable)
+        Dataset containing feature logits and predictions for each strand.
 
     Returns
     -------
     xr.Dataset
-        Dataset containing inferred region intervals
+        Dataset containing inferred region intervals.
     """
     logger.info("Inferring regions from predicted labels")
 
@@ -532,14 +536,13 @@ def _detect_intervals(
 
 
 def detect_intervals(args: Args):
-    """
-    Detect intervals from per-token classifier logits.
+    """Aggregate rank outputs and decode genomic intervals from logits.
 
     Parameters
     ----------
     args : argparse.Namespace
-        Command-line arguments, where `args.input_dir` is the directory
-        containing `predictions.*.zarr` files.
+        Command-line arguments where ``args.input_dir`` points to
+        ``predictions.*.zarr`` files produced by inference.
     """
     logger.info(
         f"Detecting intervals from rank files in {args.input_dir} and saving to {args.output}"
@@ -637,7 +640,7 @@ class GffRecord(BaseModel):
 
 
 def _create_gff_attributes(id: str, parent_id: str | None = None) -> str:
-    """Creates the GFF attribute string."""
+    """Create a GFF attribute string for a given feature identifier."""
     attrs = f"ID={id}"
     if parent_id:
         attrs += f";Parent={parent_id}"
@@ -668,24 +671,21 @@ def process_single_transcript(
 def group_intervals_by_transcript(
     intervals: pd.DataFrame, min_transcript_length: int = 0
 ) -> list[pd.DataFrame]:
-    """
-    Group feature intervals by their parent transcript.
+    """Group feature intervals by transcript with optional length filtering.
 
     Parameters
     ----------
-    intervals : pd.DataFrame
-        DataFrame containing interval predictions with columns like
-        'start', 'stop', 'strand', 'entity_name'.
+    intervals : pandas.DataFrame
+        DataFrame containing interval predictions with ``start``, ``stop``,
+        ``strand``, and ``entity_name`` columns.
     min_transcript_length : int, default 0
-        Minimum length of transcript to include. Transcripts shorter than
-        this value will be filtered out.
+        Minimum transcript length in base pairs required to keep a transcript.
 
     Returns
     -------
-    list[pd.DataFrame]
-        A list where each element is a DataFrame representing a transcript
-        and its associated features (CDS, UTRs, etc.), sorted by start position.
-        The first row of each DataFrame corresponds to the transcript interval.
+    list[pandas.DataFrame]
+        List of DataFrames where each item corresponds to a transcript and its
+        associated features sorted by genomic position.
     """
     logger.info("Grouping intervals by transcript")
     transcript_intervals = intervals[
@@ -730,21 +730,21 @@ def generate_gff(
     strip_introns: bool = True,
     source: str = "GeneCAD",
 ) -> None:
-    """
-    Generate a GFF3 file from grouped gene intervals.
+    """Write a GFF3 file from grouped gene intervals.
 
     Parameters
     ----------
-    genes : list[pd.DataFrame]
-        A list of DataFrames, each representing a transcript and its features.
+    genes : list[pandas.DataFrame]
+        List of transcript DataFrames produced by
+        :func:`group_intervals_by_transcript`.
     chrom_id : str
-        The chromosome ID for the GFF records.
+        Chromosome identifier used for all emitted records.
     output_path : str
-        Path to write the GFF3 output file.
+        Destination file path for the generated GFF3 file.
     strip_introns : bool, default True
-        Whether to remove intron features before calculating gene boundaries.
+        Whether to remove intron records when constructing gene boundaries.
     source : str, default "GeneCAD"
-        The source of the GFF records.
+        Value written in the GFF ``source`` column.
     """
     logger.info(f"Generating GFF3 output for {len(genes)} genes on {chrom_id}")
     gff_records = []
@@ -870,13 +870,12 @@ def generate_gff(
 
 
 def export_gff(args: Args):
-    """
-    Export prediction results to GFF format.
+    """Convert interval predictions to a GFF3 file.
 
     Parameters
     ----------
     args : argparse.Namespace
-        Command-line arguments
+        Command-line arguments specifying inputs, outputs, and filters.
     """
     logger.info(f"Loading predictions from {args.input}")
     # Use DataTree to easily access attributes and specific groups
