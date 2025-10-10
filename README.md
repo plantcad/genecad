@@ -3,7 +3,7 @@
 [![Lint](https://github.com/plantcad/genecad/actions/workflows/ci.yaml/badge.svg)](https://github.com/plantcad/genecad/actions/workflows/ci.yaml)
 [![DOI](https://zenodo.org/badge/DOI/10.1101/2025.08.27.672609.svg)](https://doi.org/10.1101/2025.08.27.672609)
 [![Hugging Face](https://img.shields.io/badge/🤗-Hugging%20Face-yellow.svg?style=flat)](https://huggingface.co/collections/plantcad/genecad-68c686ccf14312bf6de356de)
-[![Docker](https://img.shields.io/badge/docker-%230db7ed.svg?style=flat&logo=docker&logoColor=white)](https://hub.docker.com/r/eczech/genecad)
+[![Container](https://img.shields.io/badge/container-ghcr.io%2Fplantcad%2Fgenecad-blue?logo=github)](https://github.com/orgs/plantcad/packages/container/package/genecad)
 [![Pytorch](https://img.shields.io/badge/PyTorch-%23EE4C2C.svg?e&logo=PyTorch&logoColor=white)](https://pytorch.org/)
 
 # GeneCAD
@@ -45,7 +45,7 @@ See the sections below for more details.
 
 ### Using Docker
 
-This example demonstrates how to run the GeneCAD inference pipeline for a single chromosome via Docker:
+This example demonstrates how to run the GeneCAD inference pipeline for a single chromosome via Docker using the image published at `ghcr.io/plantcad/genecad`:
 
 ```bash
 # Clone the GeneCAD repository
@@ -54,12 +54,12 @@ git clone --single-branch https://github.com/plantcad/genecad && cd genecad
 # git checkout v0.0.11
 
 # Pull the image
-docker pull eczech/genecad:latest
+docker pull ghcr.io/plantcad/genecad:latest
 
 # Run inference on Arabidopsis chromosome 4
 docker run --rm --gpus all \
   -v $(pwd):/workspace -w /workspace \
-  eczech/genecad:latest \
+  ghcr.io/plantcad/genecad:latest \
   bash examples/scripts/run_inference.sh
 
 # Run inference on Arabidopsis chromosome 4 using large base PlantCAD2 model
@@ -67,7 +67,7 @@ docker run --rm --gpus all \
   -v $(pwd):/workspace -w /workspace \
   -e HEAD_MODEL_PATH=plantcad/GeneCAD-l8-d768-PC2-Large \
   -e BASE_MODEL_PATH=kuleshov-group/PlantCAD2-Large-l48-d1536 \
-  eczech/genecad:latest \
+  ghcr.io/plantcad/genecad:latest \
   bash examples/scripts/run_inference.sh
 ```
 
@@ -443,16 +443,18 @@ docker run --rm --gpus all -v $(pwd):/workspace -w /workspace genecad:v1.0.1 \
   bash examples/scripts/run_evaluation.sh
 ```
 
-Deploy to Docker Hub:
+Publish to GitHub Container Registry:
 
 ```bash
-# Tag and push to Docker Hub
-DOCKER_USER=$(whoami)
-docker tag genecad:v1.0.1 $DOCKER_USER/genecad:v1.0.1
-docker tag genecad:v1.0.1 $DOCKER_USER/genecad:latest
-docker login -u $DOCKER_USER
-docker push $DOCKER_USER/genecad:v1.0.1
-docker push $DOCKER_USER/genecad:latest
+# Tag and push to GitHub Container Registry
+IMAGE=ghcr.io/plantcad/genecad
+docker tag genecad:v1.0.1 $IMAGE:v1.0.1
+docker tag genecad:v1.0.1 $IMAGE:latest
+# Requires a GitHub personal access token with "write:packages"
+# stored in GHCR_TOKEN
+echo $GHCR_TOKEN | docker login ghcr.io -u <github-username> --password-stdin
+docker push $IMAGE:v1.0.1
+docker push $IMAGE:latest
 ```
 
 ### Reproduction
@@ -477,13 +479,13 @@ docker run --rm --gpus all \
   -e OUTPUT_DIR \
   -e INPUT_FILE=data/fasta/Juglans_regia.Walnut_2.0.dna.toplevel_chr1.fa \
   -e SPECIES_ID=jregia -e CHR_ID=1 \
-  eczech/genecad:latest \
+  ghcr.io/plantcad/genecad:latest \
   make -f pipelines/prediction all # add -n for dry run first to make sure paths are correct
 
 # Run gffcompare (inside or outside container)
 docker run --rm \
   -v $(pwd):/workspace -w /workspace \
-  eczech/genecad:latest gffcompare \
+  ghcr.io/plantcad/genecad:latest gffcompare \
   -r data/gff/Juglans_regia.Walnut_2.0.60_chr1.gff3 \
   -C -o $OUTPUT_DIR/gffcompare $OUTPUT_DIR/predictions.gff
 cat $OUTPUT_DIR/gffcompare.stats
