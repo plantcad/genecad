@@ -1,5 +1,7 @@
+#!/usr/bin/env python3
 import argparse
 import logging
+import sys
 import pandas as pd
 import re
 import os
@@ -10,6 +12,13 @@ from src.gff_compare import run_gffcompare, parse_gffcompare_stats
 from src.gff_eval import run_gffeval
 from src.config import SPECIES_CONFIGS, get_species_configs
 from src.schema import GffFeatureType, RegionType
+from src.merge_orfs import (
+    merge_orfs,
+    embed_from_fasta,
+    generate_protein_scores,
+    filter_merged_gff_by_predictions,
+    score_and_filter_gff,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +80,24 @@ def save_gff(path: str, df: pd.DataFrame) -> None:
     df : pd.DataFrame
         DataFrame object to write, must have 'header' in attrs
     """
+    
+    # --- START FIX 1: De-duplicate header ---
+    # Ensure the header exists and is a list before de-duplicating
+    if 'header' in df.attrs and isinstance(df.attrs['header'], list):
+        seen = set()
+        unique_header = []
+        for line in df.attrs['header']:
+            # GFF comments (like '##gff-version 3')
+            stripped_line = line.strip()
+            if stripped_line and stripped_line not in seen:
+                unique_header.append(line)
+                seen.add(stripped_line)
+            # Keep empty lines if they exist
+            elif not stripped_line:
+                 unique_header.append(line)
+        df.attrs['header'] = unique_header
+    # --- END FIX 1 ---
+
     # Write to file
     logger.info(f"Writing GFF to {path}")
     write_gff3(df, path)
@@ -133,7 +160,7 @@ def remove_features_by_id(
 
 
 # -------------------------------------------------------------------------------------------------
-# CLI functions
+# CLI functions (Original)
 # -------------------------------------------------------------------------------------------------
 
 
@@ -321,6 +348,9 @@ def filter_to_strand(input_path: str, output_path: str, strand: str) -> None:
 
     # Read GFF file
     features = load_gff(input_path)
+    # This line was added in the new file, so we keep it.
+    if "passplantcadfilter" in features.columns:
+        features["passplantcadfilter"] = features["passplantcadfilter"].astype(str)
 
     # Filter to specified strand
     original_count = features.shape[0]
@@ -440,7 +470,8 @@ def filter_to_min_feature_length(
 
     # Validate feature types against schema
     # pyrefly: ignore  # no-matching-overload
-    valid_types = set(GffFeatureType)
+    # Using the new validation logic from your modified file
+    valid_types = {t.value for t in GffFeatureType}
     requested_types = set(feature_types)
     invalid_types = requested_types - valid_types
 
@@ -676,12 +707,13 @@ def filter_to_representative_transcripts(
     # Log selection statistics
     total_selected = selection_stats["annotation"] + selection_stats["length"]
     logger.info(f"Selected {total_selected} representative mRNAs:")
-    logger.info(
-        f"  - {selection_stats['annotation']} ({selection_stats['annotation'] / total_selected * 100:.1f}%) selected by annotation"
-    )
-    logger.info(
-        f"  - {selection_stats['length']} ({selection_stats['length'] / total_selected * 100:.1f}%) selected by length"
-    )
+    if total_selected > 0:
+        logger.info(
+            f"  - {selection_stats['annotation']} ({selection_stats['annotation'] / total_selected * 100:.1f}%) selected by annotation"
+        )
+        logger.info(
+            f"  - {selection_stats['length']} ({selection_stats['length'] / total_selected * 100:.1f}%) selected by length"
+        )
 
     # Find mRNAs to remove (those not in the keep set)
     mrnas_to_remove = set(mrnas["id"].dropna()) - mrnas_to_keep
@@ -697,7 +729,8 @@ def filter_to_representative_transcripts(
     logger.info(f"Total features removed: {removed_count}")
 
     # Remove the temporary length column
-    features = features.drop(columns=["length"])
+    if "length" in features.columns:
+        features = features.drop(columns=["length"])
 
     # Write filtered GFF
     save_gff(output_path, features)
@@ -848,14 +881,19 @@ def remove_exon_utrs(input_path: str, output_path: str) -> None:
     remaining_type_counts = filtered_features["type"].value_counts()
 
     logger.info("After removal, feature types remaining:")
-    for feature_type, count in remaining_type_counts.items():
-        percentage = (count / len(filtered_features)) * 100
-        logger.info(f"  - {count} {feature_type} features ({percentage:.1f}%)")
+    if len(filtered_features) > 0:
+        for feature_type, count in remaining_type_counts.items():
+            percentage = (count / len(filtered_features)) * 100
+            logger.info(f"  - {count} {feature_type} features ({percentage:.1f}%)")
+    else:
+        logger.info("  - No features remaining")
+
 
     # Write filtered GFF
     save_gff(output_path, filtered_features)
+    final_percentage = (len(filtered_features) / original_count * 100) if original_count > 0 else 0
     logger.info(
-        f"UTR/exon removal complete: {removed_count} features removed, {len(filtered_features)}/{original_count} records retained ({len(filtered_features) / original_count * 100:.1f}%)"
+        f"UTR/exon removal complete: {removed_count} features removed, {len(filtered_features)}/{original_count} records retained ({final_percentage:.1f}%)"
     )
 
 
@@ -1177,19 +1215,26 @@ def summarize_gff(input_path: str, species_id: str | None = None) -> None:
     ]
 
     # Group by parent (transcript) and get unique types, then count combinations
-    type_combinations = (
-        transcript_features.groupby("parent")["type"]
-        .unique()
-        .apply(frozenset)
-        .value_counts()
-    )
+    if not transcript_features.empty:
+        type_combinations = (
+            transcript_features.groupby("parent")["type"]
+            .unique()
+            .apply(frozenset)
+            .value_counts()
+        )
+    else:
+        type_combinations = pd.Series(dtype='object')
+
 
     # Display results
     total_transcripts = len(mrna_ids)
-    for combo, count in type_combinations.items():
-        percentage = (count / total_transcripts) * 100
-        combo_str = ", ".join(sorted(combo))
-        print(f"{combo_str:<50} {count:<15} {percentage:.2f}%")
+    if total_transcripts > 0:
+        for combo, count in type_combinations.items():
+            percentage = (count / total_transcripts) * 100
+            combo_str = ", ".join(sorted(combo))
+            print(f"{combo_str:<50} {count:<15} {percentage:.2f}%")
+    else:
+        print("No transcripts (mRNAs) found to analyze feature combinations.")
 
 
 def collect_results(input_dir: str, output_path: str | None = None) -> None:
@@ -1235,7 +1280,11 @@ def collect_results(input_dir: str, output_path: str | None = None) -> None:
         logger.info(f"Processing {file_path} (source: {source}, tool: {tool})")
 
         # Read the file
-        df = pd.read_csv(file_path, sep="\t")
+        try:
+            df = pd.read_csv(file_path, sep="\t")
+        except pd.errors.EmptyDataError:
+            logger.warning(f"Skipping empty stats file: {file_path}")
+            continue
 
         # Normalize column names for consistency between tools
         if tool == "gffeval":
@@ -1254,6 +1303,13 @@ def collect_results(input_dir: str, output_path: str | None = None) -> None:
             "source",
             "tool",
         ]
+        
+        # Check if required columns exist
+        missing_cols = [col for col in expected_columns if col not in df.columns]
+        if missing_cols:
+            logger.warning(f"Skipping {file_path}, missing columns: {missing_cols}")
+            continue
+
         df = df[expected_columns]
 
         dfs.append(df)
@@ -1368,9 +1424,10 @@ def clean_gff(
     logger.info(f"Final record count: {final_count}")
     if remove_invalid_interval and invalid_df.shape[0] > 0:
         logger.info(f"Total records removed: {original_count - final_count}")
-        logger.info(
-            f"Total removal percentage: {((original_count - final_count) / original_count) * 100:.2f}%"
-        )
+        if original_count > 0:
+            logger.info(
+                f"Total removal percentage: {((original_count - final_count) / original_count) * 100:.2f}%"
+            )
 
 
 def filter_to_pc_quality_score_pass(
@@ -1469,6 +1526,11 @@ def _apply_pc_quality_filter_to_file(input_path: str, output_path: str) -> None:
     # Read GFF file
     features = load_gff(input_path)
     original_count = features.shape[0]
+    
+    if original_count == 0:
+        logger.warning(f"Input file {input_path} is empty. Writing empty output file.")
+        save_gff(output_path, features)
+        return
 
     # Check if passPlantCADFilter column exists
     if "passplantcadfilter" not in features.columns:
@@ -1575,33 +1637,337 @@ def _apply_pc_quality_filter_to_file(input_path: str, output_path: str) -> None:
     # Log final feature type distribution
     final_type_counts = features["type"].value_counts()
     logger.info("Final feature type distribution:")
-    for feature_type, count in final_type_counts.items():
-        percentage = (count / final_count) * 100 if final_count > 0 else 0
-        logger.info(f"  - {feature_type}: {count} ({percentage:.2f}%)")
+    if final_count > 0:
+        for feature_type, count in final_type_counts.items():
+            percentage = (count / final_count) * 100
+            logger.info(f"  - {feature_type}: {count} ({percentage:.2f}%)")
+    else:
+        logger.info("  - No features remaining")
 
 
-def main() -> None:
-    """Parse command line arguments and execute the appropriate function."""
-    logging.basicConfig(
-        level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
+# -------------------------------------------------------------------------------------------------
+# CLI functions (New ORF/Embedding Pipeline)
+# -------------------------------------------------------------------------------------------------
+
+log = logging.getLogger("gff_cli")
+
+
+def _add_common_logging_args(p: argparse.ArgumentParser) -> None:
+    p.add_argument(
+        "--log-level",
+        default="INFO",
+        choices=["CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG"],
+        help="Logging verbosity (default: INFO)",
     )
 
-    parser = argparse.ArgumentParser(description="Manipulate GFF files")
-    subparsers = parser.add_subparsers(
-        dest="command", required=True, help="Command to execute"
+def _set_output_gff_source(output_path: str, source_name: str):
+    """
+    Helper to load a GFF, set its source column, and save it back.
+    This is used to override the default 'merged_orf' source.
+    """
+    if not os.path.exists(output_path):
+        logger.warning(
+            f"File {output_path} not found. Skipping source update."
+        )
+        return
+    
+    logger.info(f"Setting 'source' column to '{source_name}' in {output_path}")
+    df = load_gff(output_path)
+
+    if df.empty:
+        logger.warning(
+            f"File {output_path} is empty. Skipping source update."
+        )
+        # Still, save it to apply header fixes
+        save_gff(output_path, df)
+        return
+
+    df["source"] = source_name
+    save_gff(output_path, df)
+
+def cmd_merge_orfs(args: argparse.Namespace) -> None:
+    merge_orfs(
+        gff_in=args.gff,
+        genome_fa=args.genome,
+        proteins_fa=args.proteins,
+        gff_out=args.gff_out,
     )
+    _set_output_gff_source(args.gff_out, "GeneCAD_Merged")
+
+def cmd_embed_from_fasta(args: argparse.Namespace) -> None:
+    embed_from_fasta(
+        fasta_path=args.fasta,
+        output_tsv=args.out,
+        device=args.device,
+        per_residue=args.per_residue,
+        max_residues=args.max_residues,
+        max_seq_len=args.max_seq_len,
+        max_batch=args.max_batch,
+    )
+
+
+def cmd_merge_and_embed(args: argparse.Namespace) -> None:
+    # 1) Merge ORFs (writes proteins fasta + merged gff)
+    merge_orfs(
+        gff_in=args.gff,
+        genome_fa=args.genome,
+        proteins_fa=args.proteins,
+        gff_out=args.gff_out,
+    )
+    # 2) Embed produced proteins
+    embed_from_fasta(
+        fasta_path=args.proteins,
+        output_tsv=args.embeddings,
+        device=args.device,
+        per_residue=args.per_residue,
+        max_residues=args.max_residues,
+        max_seq_len=args.max_seq_len,
+        max_batch=args.max_batch,
+    )
+    _set_output_gff_source(args.gff_out, "GeneCAD_Merged")
+
+
+def cmd_score_proteins(args: argparse.Namespace) -> None:
+    generate_protein_scores(
+        input_tsv=args.embeddings,
+        model_dir=args.models,
+        output_csv=args.out,
+    )
+
+
+def cmd_score_and_filter(args: argparse.Namespace) -> None:
+    score_and_filter_gff(
+        embeddings_tsv=args.embeddings,
+        model_dir=args.models,
+        scores_csv=args.scores,
+        input_gff=args.gff,
+        output_gff=args.out,
+    )
+    _set_output_gff_source(args.out, "GeneCAD_ReelProtein")
+
+
+def cmd_full_pipeline(args: argparse.Namespace) -> None:
+    # 1) merge ORFs -> proteins + merged GFF
+    merge_orfs(
+        gff_in=args.gff,
+        genome_fa=args.genome,
+        proteins_fa=args.proteins,
+        gff_out=args.gff_merged,
+    )
+
+    # 2) embed proteins -> embeddings TSV
+    embed_from_fasta(
+        fasta_path=args.proteins,
+        output_tsv=args.embeddings,
+        device=args.device,
+        per_residue=args.per_residue,
+        max_residues=args.max_residues,
+        max_seq_len=args.max_seq_len,
+        max_batch=args.max_batch,
+    )
+
+    # 3) score embeddings with XGBoost ensemble -> scores CSV
+    generate_protein_scores(
+        input_tsv=args.embeddings,
+        model_dir=args.models,
+        output_csv=args.scores,
+    )
+
+    # 4) filter the merged GFF by the scores CSV -> final GFF
+    filter_merged_gff_by_predictions(
+        pred_csv=args.scores,
+        merged_gff_in=args.gff_merged,
+        output_gff=args.gff_out,
+    )
+    # 5) set source field
+    _set_output_gff_source(args.gff_out, "GeneCAD_ReelProtein")
+
+
+def build_parser() -> argparse.ArgumentParser:
+    ap = argparse.ArgumentParser(
+        description="GeneCAD GFF utilities: merge ORFs, embed proteins, score, and filter."
+    )
+    sub = ap.add_subparsers(dest="command", required=True)
+
+    # ---- merge_orfs ----
+    p_merge = sub.add_parser(
+        "merge_orfs",
+        help="Merge ORFs across adjacent genes and emit proteins FASTA + merged GFF",
+    )
+    p_merge.add_argument("--gff", required=True, help="Input GFF3")
+    p_merge.add_argument("--genome", required=True, help="Genome FASTA")
+    p_merge.add_argument(
+        "--proteins", required=True, help="Output proteins FASTA (merged ORFs, translated)"
+    )
+    p_merge.add_argument(
+        "--gff-out", dest="gff_out", required=True, help="Output merged/sorted GFF3"
+    )
+    _add_common_logging_args(p_merge)
+    # set_defaults removed, will be handled by if/elif block in main()
+
+    # ---- embed_from_fasta ----
+    p_embed = sub.add_parser(
+        "embed_from_fasta",
+        help="Embed protein FASTA with ProtT5 and write TSV (ID + 1024 dims)",
+    )
+    p_embed.add_argument("--fasta", required=True, help="Protein FASTA to embed")
+    p_embed.add_argument("--out", required=True, help="Output TSV")
+    p_embed.add_argument(
+        "--device", default="auto", help="Device (e.g. 'cuda', 'cuda:0', 'cpu', 'auto')"
+    )
+    p_embed.add_argument(
+        "--per-residue", action="store_true", help="(reserved) Emit per-residue embeddings"
+    )
+    p_embed.add_argument(
+        "--max-residues",
+        type=int,
+        default=4000,
+        help="Flush batch when total residues reach this",
+    )
+    p_embed.add_argument(
+        "--max-seq-len",
+        type=int,
+        default=1000,
+        help="Flush early if a single sequence is longer",
+    )
+    p_embed.add_argument("--max-batch", type=int, default=1, help="Max sequences per batch")
+    _add_common_logging_args(p_embed)
+    # set_defaults removed
+
+    # ---- merge_and_embed ----
+    p_mae = sub.add_parser(
+        "merge_and_embed",
+        help="Convenience: merge_orfs then embed_from_fasta (produces proteins FASTA, merged GFF, and embeddings TSV)",
+    )
+    p_mae.add_argument("--gff", required=True, help="Input GFF3")
+    p_mae.add_argument("--genome", required=True, help="Genome FASTA")
+    p_mae.add_argument("--proteins", required=True, help="Output proteins FASTA")
+    p_mae.add_argument(
+        "--gff-out", dest="gff_out", required=True, help="Output merged/sorted GFF3"
+    )
+    p_mae.add_argument("--embeddings", required=True, help="Output embeddings TSV")
+    p_mae.add_argument(
+        "--device", default="auto", help="Device (e.g. 'cuda', 'cuda:0', 'cpu', 'auto')"
+    )
+    p_mae.add_argument(
+        "--per-residue", action="store_true", help="(reserved) Emit per-residue embeddings"
+    )
+    p_mae.add_argument(
+        "--max-residues",
+        type=int,
+        default=4000,
+        help="Flush batch when total residues reach this",
+    )
+    p_mae.add_argument(
+        "--max-seq-len",
+        type=int,
+        default=1000,
+        help="Flush early if a single sequence is longer",
+    )
+    p_mae.add_argument("--max-batch", type=int, default=1, help="Max sequences per batch")
+    _add_common_logging_args(p_mae)
+    # set_defaults removed
+
+    # ---- score_proteins ----
+    p_score = sub.add_parser(
+        "score_proteins",
+        help="Score embeddings TSV with XGBoost models (*.json in a directory) → CSV",
+    )
+    p_score.add_argument(
+        "--embeddings", required=True, help="Input embeddings TSV (from embed_from_fasta)"
+    )
+    p_score.add_argument(
+        "--models", required=True, help="Directory of XGBoost .json model files"
+    )
+    p_score.add_argument(
+        "--out",
+        required=True,
+        help="Output CSV (ProteinID, per-model scores, Mean_Score, Predicted_Label)",
+    )
+    _add_common_logging_args(p_score)
+    # set_defaults removed
+
+    # ---- filter_merged_by_scores ----
+    p_fmbs = sub.add_parser(
+        "filter_merged_by_scores",
+        help="Filter a merged GFF (from merge_orfs) using a scores CSV (ProteinID + Predicted_Label) → filtered GFF",
+    )
+    p_fmbs.add_argument("--csv", required=True, help="Scores CSV from score_proteins")
+    p_fmbs.add_argument("--gff-merged", required=True, help="Input merged GFF3 to filter")
+    p_fmbs.add_argument("--out", required=True, help="Output filtered GFF3")
+    _add_common_logging_args(p_fmbs)
+    # set_defaults removed
+
+    # ---- score_and_filter ----
+    p_saf = sub.add_parser(
+        "score_and_filter",
+        help="Convenience: embeddings.tsv + models -> scores.csv -> filtered.gff",
+    )
+    p_saf.add_argument("--embeddings", required=True, help="Input embeddings TSV")
+    p_saf.add_argument(
+        "--models", required=True, help="Directory of XGBoost .json model files"
+    )
+    p_saf.add_argument("--scores", required=True, help="Intermediate scores CSV to write")
+    p_saf.add_argument("--gff", required=True, help="Input GFF3 to filter")
+    p_saf.add_argument("--out", required=True, help="Output filtered GFF3")
+    _add_common_logging_args(p_saf)
+    # set_defaults removed
+
+    # === One-shot: merge ORFs -> embed -> score -> filter ===
+    full_parser = sub.add_parser(
+        "full_pipeline",
+        help="Run ORF merge -> ProtT5 embeddings -> XGBoost scoring -> GFF filtering in one command",
+    )
+    full_parser.add_argument(
+        "--gff", required=True, help="Input GFF3 with genes/CDS/UTRs"
+    )
+    full_parser.add_argument("--genome", required=True, help="Reference genome FASTA")
+    full_parser.add_argument(
+        "--models", required=True, help="Directory with XGBoost .json models"
+    )
+
+    # outputs
+    full_parser.add_argument(
+        "--proteins", required=True, help="Output proteins FASTA (merged ORFs)"
+    )
+    full_parser.add_argument(
+        "--gff-merged", required=True, help="Output merged GFF3 path (pre-filter)"
+    )
+    full_parser.add_argument(
+        "--embeddings", required=True, help="Output TSV path (ProtT5 embeddings)"
+    )
+    full_parser.add_argument(
+        "--scores", required=True, help="Output CSV path (XGBoost scores)"
+    )
+    full_parser.add_argument("--gff-out", required=True, help="Final filtered GFF3 output path")
+
+    # embedding options
+    full_parser.add_argument(
+        "--device", default="auto", help="Device: 'auto', 'cpu', or 'cuda[:idx]'"
+    )
+    full_parser.add_argument(
+        "--per-residue", action="store_true", help="(reserved) Emit per-residue embeddings"
+    )
+    full_parser.add_argument("--max-residues", type=int, default=4000)
+    full_parser.add_argument("--max-seq-len", type=int, default=1000)
+    full_parser.add_argument("--max-batch", type=int, default=1)
+    _add_common_logging_args(full_parser)
+    # set_defaults removed
+
+    # ---- ORIGINAL commands (merge, filter, summarize, etc.) ----
 
     # Merge command
-    merge_parser = subparsers.add_parser(
+    merge_parser = sub.add_parser(
         "merge", help="Merge multiple GFF files into one"
     )
     merge_parser.add_argument(
         "--input", required=True, nargs="+", help="Input GFF files"
     )
     merge_parser.add_argument("--output", required=True, help="Output GFF file")
+    _add_common_logging_args(merge_parser)
 
     # Resolve command
-    resolve_parser = subparsers.add_parser(
+    resolve_parser = sub.add_parser(
         "resolve",
         help="Resolve and copy a GFF file for a species using its configuration",
     )
@@ -1614,9 +1980,10 @@ def main() -> None:
     resolve_parser.add_argument(
         "--output", required=True, help="Output path to copy the resolved GFF file to"
     )
+    _add_common_logging_args(resolve_parser)
 
     # Filter to chromosome command
-    filter_parser = subparsers.add_parser(
+    filter_parser = sub.add_parser(
         "filter_to_chromosome",
         help="Filter GFF file to include only entries from a specific chromosome",
     )
@@ -1628,9 +1995,10 @@ def main() -> None:
     filter_parser.add_argument(
         "--species-id", help="Species ID to use for chromosome mapping"
     )
+    _add_common_logging_args(filter_parser)
 
     # Filter to strand command
-    strand_parser = subparsers.add_parser(
+    strand_parser = sub.add_parser(
         "filter_to_strand",
         help="Filter GFF file to include only entries from a specific strand",
     )
@@ -1642,17 +2010,19 @@ def main() -> None:
         choices=["positive", "negative", "both"],
         help="Strand to filter for",
     )
+    _add_common_logging_args(strand_parser)
 
     # Set source command
-    source_parser = subparsers.add_parser(
+    source_parser = sub.add_parser(
         "set_source", help="Set the source field for all records in a GFF file"
     )
     source_parser.add_argument("--input", required=True, help="Input GFF file")
     source_parser.add_argument("--output", required=True, help="Output GFF file")
     source_parser.add_argument("--source", required=True, help="Source value to set")
+    _add_common_logging_args(source_parser)
 
     # Filter to minimum length command
-    length_parser = subparsers.add_parser(
+    length_parser = sub.add_parser(
         "filter_to_min_gene_length",
         help="Filter GFF file to remove genes shorter than minimum length and their children",
     )
@@ -1661,9 +2031,10 @@ def main() -> None:
     length_parser.add_argument(
         "--min-length", required=True, type=int, help="Minimum gene length to retain"
     )
+    _add_common_logging_args(length_parser)
 
     # Filter small features command
-    small_features_parser = subparsers.add_parser(
+    small_features_parser = sub.add_parser(
         "filter_to_min_feature_length",
         help="Filter GFF file to remove small features of specified types and update gene/mRNA boundaries",
     )
@@ -1679,9 +2050,10 @@ def main() -> None:
     small_features_parser.add_argument(
         "--min-length", required=True, type=int, help="Minimum feature length to retain"
     )
+    _add_common_logging_args(small_features_parser)
 
     # Filter to representative transcripts command
-    rep_parser = subparsers.add_parser(
+    rep_parser = sub.add_parser(
         "filter_to_representative_transcripts",
         help="Filter GFF file to keep only one representative transcript for each gene",
     )
@@ -1693,9 +2065,10 @@ def main() -> None:
         choices=["longest", "annotated", "annotated_or_longest"],
         help="Selection mode: 'longest' always uses longest transcript, 'annotated' uses canonical_transcript=1 (errors if missing), 'annotated_or_longest' tries canonical annotationfirst then falls back to longest if that annotation does not exist for even a single feature",
     )
+    _add_common_logging_args(rep_parser)
 
     # Filter to valid genes command
-    valid_parser = subparsers.add_parser(
+    valid_parser = sub.add_parser(
         "filter_to_valid_genes",
         help="Filter GFF file to remove transcripts without required features and genes without valid transcripts",
     )
@@ -1707,17 +2080,19 @@ def main() -> None:
         default="yes",
         help="Require UTRs for valid transcripts (default: yes)",
     )
+    _add_common_logging_args(valid_parser)
 
     # Remove UTRs command
-    utrs_parser = subparsers.add_parser(
+    utrs_parser = sub.add_parser(
         "remove_exon_utrs",
         help="Remove five_prime_UTR, three_prime_UTR, and exon features from a GFF file",
     )
     utrs_parser.add_argument("--input", required=True, help="Input GFF file")
     utrs_parser.add_argument("--output", required=True, help="Output GFF file")
+    _add_common_logging_args(utrs_parser)
 
     # Compare command
-    compare_parser = subparsers.add_parser(
+    compare_parser = sub.add_parser(
         "compare", help="Compare an input GFF file against a reference using gffcompare"
     )
     compare_parser.add_argument("--reference", required=True, help="Reference GFF file")
@@ -1730,9 +2105,10 @@ def main() -> None:
     compare_parser.add_argument(
         "--gffcompare-path", required=True, help="Path to gffcompare executable"
     )
+    _add_common_logging_args(compare_parser)
 
     # Evaluate command
-    evaluate_parser = subparsers.add_parser(
+    evaluate_parser = sub.add_parser(
         "evaluate",
         help="Evaluate an input GFF file against a reference using internal evaluation functions",
     )
@@ -1763,9 +2139,10 @@ def main() -> None:
         default="yes",
         help="Display values as percentages (0-100) rather than decimals (0.0-1.0) for consistency with gffcompare (default: yes)",
     )
+    _add_common_logging_args(evaluate_parser)
 
     # Summarize command
-    summarize_parser = subparsers.add_parser(
+    summarize_parser = sub.add_parser(
         "summarize",
         help="Summarize the distribution of source and type fields in a GFF file",
     )
@@ -1775,9 +2152,10 @@ def main() -> None:
         default=None,
         help="Species ID for getting attributes_to_drop configuration",
     )
+    _add_common_logging_args(summarize_parser)
 
     # Collect results command
-    collect_parser = subparsers.add_parser(
+    collect_parser = sub.add_parser(
         "collect_results",
         help="Collect and consolidate gffcompare.stats.csv and gffeval.stats.csv files from subdirectories",
     )
@@ -1790,9 +2168,10 @@ def main() -> None:
         "--output",
         help="Output file path for consolidated results (default: {input}/consolidated.stats.csv)",
     )
+    _add_common_logging_args(collect_parser)
 
     # Clean command
-    clean_parser = subparsers.add_parser(
+    clean_parser = sub.add_parser(
         "clean", help="Clean a GFF file by sorting and/or removing invalid intervals"
     )
     clean_parser.add_argument("--input", required=True, help="Input GFF file")
@@ -1809,9 +2188,10 @@ def main() -> None:
         default="yes",
         help="Remove records where end < start",
     )
+    _add_common_logging_args(clean_parser)
 
     # PC quality filter command
-    pc_filter_parser = subparsers.add_parser(
+    pc_filter_parser = sub.add_parser(
         "filter_to_pc_quality_score_pass",
         help="Filter GFF file to remove genes and transcripts with passPlantCADFilter=0",
     )
@@ -1835,66 +2215,111 @@ def main() -> None:
         nargs="+",
         help="List of species IDs to determine filenames (species config interface)",
     )
+    _add_common_logging_args(pc_filter_parser)
 
-    args = parser.parse_args()
+    return ap
 
-    if args.command == "merge":
-        merge_gff_files(args.input, args.output)
-    elif args.command == "resolve":
-        resolve_gff_file(args.input_dir, args.species_id, args.output)
-    elif args.command == "filter_to_chromosome":
-        filter_to_chromosome(
-            args.input, args.output, args.chromosome_id, args.species_id
-        )
-    elif args.command == "filter_to_strand":
-        filter_to_strand(args.input, args.output, args.strand)
-    elif args.command == "set_source":
-        set_source(args.input, args.output, args.source)
-    elif args.command == "filter_to_min_gene_length":
-        filter_to_min_gene_length(args.input, args.output, args.min_length)
-    elif args.command == "filter_to_min_feature_length":
-        filter_to_min_feature_length(
-            args.input, args.output, args.feature_types.split(","), args.min_length
-        )
-    elif args.command == "filter_to_representative_transcripts":
-        filter_to_representative_transcripts(args.input, args.output, args.mode)
-    elif args.command == "filter_to_valid_genes":
-        filter_to_valid_genes(args.input, args.output, args.require_utrs == "yes")
-    elif args.command == "remove_exon_utrs":
-        remove_exon_utrs(args.input, args.output)
-    elif args.command == "compare":
-        compare_gff_files(args.reference, args.input, args.output, args.gffcompare_path)
-    elif args.command == "evaluate":
-        evaluate_gff_files(
-            args.reference,
-            args.input,
-            args.output,
-            args.edge_tolerance,
-            args.ignore_unmatched == "yes",
-            args.as_percentage == "yes",
-        )
-    elif args.command == "summarize":
-        summarize_gff(args.input, species_id=args.species_id)
-    elif args.command == "collect_results":
-        collect_results(args.input, args.output)
-    elif args.command == "clean":
-        clean_gff(
-            args.input,
-            args.output,
-            args.sort_by_start == "yes",
-            args.remove_invalid_interval == "yes",
-        )
-    elif args.command == "filter_to_pc_quality_score_pass":
-        filter_to_pc_quality_score_pass(
-            input_path=args.input,
-            output_path=args.output,
-            input_dir=args.input_dir,
-            output_dir=args.output_dir,
-            species_ids=args.species_ids,
-        )
-    else:
-        parser.print_help()
+
+def main(argv: list[str] | None = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+
+    logging.basicConfig(
+        level=getattr(logging, args.log_level),
+        format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
+    )
+
+    try:
+        # --- Merged command execution block ---
+
+        # Original commands
+        if args.command == "merge":
+            merge_gff_files(args.input, args.output)
+        elif args.command == "resolve":
+            resolve_gff_file(args.input_dir, args.species_id, args.output)
+        elif args.command == "filter_to_chromosome":
+            filter_to_chromosome(
+                args.input, args.output, args.chromosome_id, args.species_id
+            )
+        elif args.command == "filter_to_strand":
+            filter_to_strand(args.input, args.output, args.strand)
+        elif args.command == "set_source":
+            set_source(args.input, args.output, args.source)
+        elif args.command == "filter_to_min_gene_length":
+            filter_to_min_gene_length(args.input, args.output, args.min_length)
+        elif args.command == "filter_to_min_feature_length":
+            filter_to_min_feature_length(
+                args.input, args.output, args.feature_types.split(","), args.min_length
+            )
+        elif args.command == "filter_to_representative_transcripts":
+            filter_to_representative_transcripts(args.input, args.output, args.mode)
+        elif args.command == "filter_to_valid_genes":
+            filter_to_valid_genes(args.input, args.output, args.require_utrs == "yes")
+        elif args.command == "remove_exon_utrs":
+            remove_exon_utrs(args.input, args.output)
+        elif args.command == "compare":
+            compare_gff_files(
+                args.reference, args.input, args.output, args.gffcompare_path
+            )
+        elif args.command == "evaluate":
+            evaluate_gff_files(
+                args.reference,
+                args.input,
+                args.output,
+                args.edge_tolerance,
+                args.ignore_unmatched == "yes",
+                args.as_percentage == "yes",
+            )
+        elif args.command == "summarize":
+            summarize_gff(args.input, species_id=args.species_id)
+        elif args.command == "collect_results":
+            collect_results(args.input, args.output)
+        elif args.command == "clean":
+            clean_gff(
+                args.input,
+                args.output,
+                args.sort_by_start == "yes",
+                args.remove_invalid_interval == "yes",
+            )
+        elif args.command == "filter_to_pc_quality_score_pass":
+            filter_to_pc_quality_score_pass(
+                input_path=args.input,
+                output_path=args.output,
+                input_dir=args.input_dir,
+                output_dir=args.output_dir,
+                species_ids=args.species_ids,
+            )
+
+        # New commands
+        elif args.command == "merge_orfs":
+            cmd_merge_orfs(args)
+        elif args.command == "embed_from_fasta":
+            cmd_embed_from_fasta(args)
+        elif args.command == "merge_and_embed":
+            cmd_merge_and_embed(args)
+        elif args.command == "score_proteins":
+            cmd_score_proteins(args)
+        elif args.command == "filter_merged_by_scores":
+            filter_merged_gff_by_predictions(
+                pred_csv=args.csv,
+                merged_gff_in=args.gff_merged,
+                output_gff=args.out,
+            )
+        elif args.command == "score_and_filter":
+            cmd_score_and_filter(args)
+        elif args.command == "full_pipeline":
+            cmd_full_pipeline(args)
+
+        # Fallback
+        else:
+            parser.print_help()
+
+        return 0
+
+    except Exception as e:
+        log.exception(str(e))
+        return 1
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
