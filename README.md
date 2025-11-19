@@ -263,6 +263,8 @@ CHR_ID=chromosome_id \
 make -f pipelines/prediction all
 ```
 
+Note that the `SPECIES_ID` variable is used for more informative logging and it is added to attributes in resulting Xarray datasets (along with `CHR_ID`).  It can be any descriptive string, e.g. `athaliana` or `arabidopsis_thaliana`.  The `CHR_ID` variable must be a string matching the name of the target chromosome in the input FASTA file.  It too will be included in logging and attributes.
+
 See the [pipelines/prediction](pipelines/prediction) Makefile for more details on other configurable parameters.
 
 ### Steps
