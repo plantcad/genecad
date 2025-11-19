@@ -197,6 +197,8 @@ salloc -partition=gpu-queue --nodes=4 --ntasks=4
 cd /path/to/GeneCAD
 INPUT_FILE=/path/to/input.fasta \
 OUTPUT_DIR=/path/to/output \
+SPECIES_ID=species_id \
+CHR_ID=chromosome_id \
 LAUNCHER="srun python" \
 make -f pipelines/prediction all
 ```
@@ -223,6 +225,8 @@ sbatch \
 genecad.slurm \
   INPUT_FILE=/path/to/input.fasta \
   OUTPUT_DIR=/path/to/output \
+  SPECIES_ID=species_id \
+  CHR_ID=chromosome_id \
   make -f pipelines/prediction all
 ```
 
@@ -231,6 +235,8 @@ The GeneCAD pipeline relies only on settings for `RANK` and `WORLD_SIZE` to dist
 ```bash
 export INPUT_FILE=/path/to/input.fasta
 export OUTPUT_DIR=/path/to/output
+export SPECIES_ID=species_id
+export CHR_ID=chromosome_id
 
 # CPU-only preprocessing (FASTA -> Xarray)
 sbatch -p cpu-queue -N 1 -n 1 genecad.slurm make -f pipelines/prediction sequences
@@ -251,10 +257,13 @@ The inference pipeline requires these inputs at a minimum:
 
 ```bash
 INPUT_FILE=/path/to/input.fasta \
+OUTPUT_DIR=/path/to/output \
 SPECIES_ID=species_id \
 CHR_ID=chromosome_id \
 make -f pipelines/prediction all
 ```
+
+Note that the `SPECIES_ID` variable is used for more informative logging and it is added to attributes in resulting Xarray datasets (along with `CHR_ID`).  It can be any descriptive string, e.g. `athaliana` or `arabidopsis_thaliana`.  The `CHR_ID` variable must be a string matching the name of the target chromosome in the input FASTA file.  It too will be included in logging and attributes.
 
 See the [pipelines/prediction](pipelines/prediction) Makefile for more details on other configurable parameters.
 
