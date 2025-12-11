@@ -1,58 +1,62 @@
+#!/usr/bin/env python3
 import sys
+import os
 import argparse
 import pathlib
+import logging
 
 # Ensure we can import from src
-# (This adds the project root to python path if running from scripts/)
 current_dir = pathlib.Path(__file__).resolve().parent
 project_root = current_dir.parent
 sys.path.append(str(project_root))
 
 from src import reelprotein  # noqa: E402
 
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[logging.StreamHandler(sys.stdout)]
+)
+logger = logging.getLogger(__name__)
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="ReelGene Pipeline: Merge, Embed, Score, and Filter."
-    )
+    parser = argparse.ArgumentParser(description="ReelProtein Pipeline: Merge, Embed, Score, and Filter.")
     parser.add_argument("--gff", required=True, help="Input GFF file")
     parser.add_argument("--genome", required=True, help="Genome FASTA file")
     parser.add_argument("--out", required=True, help="Final output GFF file")
-
+    parser.add_argument("--model-repo", default="plantcad/reelprotein", help="Hugging Face Repo ID for models")
+    
     args = parser.parse_args()
 
-    # Resolve model directory relative to the project root
-    # assuming src/reelprotein_models/ exists
-    models_dir = project_root / "src" / "reelprotein_models"
-
-    if not models_dir.exists():
-        print(f"[Error] Model directory not found at: {models_dir}")
-        sys.exit(1)
-
-    print(f"[Config] Model directory resolved to: {models_dir}")
+    # --- CONFIGURATION ---
+    model_source = args.model_repo
+    logger.info(f"[Config] Using Hugging Face model repository: {model_source}")
 
     # --- EXECUTION FLOW ---
+    try:
+        # 1. Parse GFF and Genome
+        genes_data = reelprotein.parse_gff3(args.gff)
+        protein_candidates = reelprotein.extract_candidate_proteins(genes_data, args.genome)
+        
+        if not protein_candidates:
+            logger.warning("No protein candidates found. Exiting.")
+            sys.exit(0)
 
-    # 1. Parse GFF and Genome
-    # (Note: In the future, check if you can use src.gff_parser instead of reelprotein.parse_gff3)
-    genes_data = reelprotein.parse_gff3(args.gff)
-    protein_candidates = reelprotein.extract_candidate_proteins(genes_data, args.genome)
+        # 2. Generate Embeddings
+        embeddings_df = reelprotein.generate_embeddings(protein_candidates)
 
-    if not protein_candidates:
-        print("No protein candidates found. Exiting.")
-        sys.exit(0)
+        # 3. Score Proteins
+        scored_df = reelprotein.score_proteins(embeddings_df, model_source)
 
-    # 2. Generate Embeddings
-    embeddings_df = reelprotein.generate_embeddings(protein_candidates)
+        # 4. Generate Final GFF
+        reelprotein.generate_final_gff(scored_df, args.gff, args.out)
+        
+        logger.info("Pipeline Finished Successfully.")
 
-    # 3. Score Proteins
-    scored_df = reelprotein.score_proteins(embeddings_df, str(models_dir))
+    except Exception as e:
+        logger.error(f"Pipeline failed: {e}")
+        sys.exit(1)
 
-    # 4. Generate Final GFF
-    reelprotein.generate_final_gff(scored_df, args.gff, args.out)
-
-    print("Pipeline Finished Successfully.")
-
-
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
