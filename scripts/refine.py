@@ -11,12 +11,7 @@ sys.path.append(str(project_root))
 
 from src import reelprotein  # noqa: E402
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    handlers=[logging.StreamHandler(sys.stdout)],
-)
+# Initialize module logger
 logger = logging.getLogger(__name__)
 
 
@@ -40,32 +35,31 @@ def main():
     logger.info(f"[Config] Using Hugging Face model repository: {model_source}")
 
     # --- EXECUTION FLOW ---
-    try:
-        # 1. Parse GFF and Genome
-        genes_data = reelprotein.parse_gff3(args.gff)
-        protein_candidates = reelprotein.extract_candidate_proteins(
-            genes_data, args.genome
-        )
+    # 1. Parse GFF and Genome
+    genes_data = reelprotein.parse_gff3(args.gff)
+    protein_candidates = reelprotein.extract_candidate_proteins(genes_data, args.genome)
 
-        if not protein_candidates:
-            logger.warning("No protein candidates found. Exiting.")
-            sys.exit(0)
+    if not protein_candidates:
+        logger.warning("No protein candidates found. Exiting.")
+        return
 
-        # 2. Generate Embeddings
-        embeddings_df = reelprotein.generate_embeddings(protein_candidates)
+    # 2. Generate Embeddings
+    embeddings_df = reelprotein.generate_embeddings(protein_candidates)
 
-        # 3. Score Proteins
-        scored_df = reelprotein.score_proteins(embeddings_df, model_source)
+    # 3. Score Proteins
+    scored_df = reelprotein.score_proteins(embeddings_df, model_source)
 
-        # 4. Generate Final GFF
-        reelprotein.generate_final_gff(scored_df, args.gff, args.out)
+    # 4. Generate Final GFF
+    reelprotein.generate_final_gff(scored_df, args.gff, args.out)
 
-        logger.info("Pipeline Finished Successfully.")
-
-    except Exception as e:
-        logger.error(f"Pipeline failed: {e}")
-        sys.exit(1)
+    logger.info("Pipeline Finished Successfully.")
 
 
 if __name__ == "__main__":
+    # Configure logging only when run as a script
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        handlers=[logging.StreamHandler(sys.stdout)],
+    )
     main()
