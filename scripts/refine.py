@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 import sys
-import os
 import argparse
 import pathlib
 import logging
@@ -15,18 +14,25 @@ from src import reelprotein  # noqa: E402
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[logging.StreamHandler(sys.stdout)]
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    handlers=[logging.StreamHandler(sys.stdout)],
 )
 logger = logging.getLogger(__name__)
 
+
 def main():
-    parser = argparse.ArgumentParser(description="ReelProtein Pipeline: Merge, Embed, Score, and Filter.")
+    parser = argparse.ArgumentParser(
+        description="ReelProtein Pipeline: Merge, Embed, Score, and Filter."
+    )
     parser.add_argument("--gff", required=True, help="Input GFF file")
     parser.add_argument("--genome", required=True, help="Genome FASTA file")
     parser.add_argument("--out", required=True, help="Final output GFF file")
-    parser.add_argument("--model-repo", default="plantcad/reelprotein", help="Hugging Face Repo ID for models")
-    
+    parser.add_argument(
+        "--model-repo",
+        default="plantcad/reelprotein",
+        help="Hugging Face Repo ID for models",
+    )
+
     args = parser.parse_args()
 
     # --- CONFIGURATION ---
@@ -37,8 +43,10 @@ def main():
     try:
         # 1. Parse GFF and Genome
         genes_data = reelprotein.parse_gff3(args.gff)
-        protein_candidates = reelprotein.extract_candidate_proteins(genes_data, args.genome)
-        
+        protein_candidates = reelprotein.extract_candidate_proteins(
+            genes_data, args.genome
+        )
+
         if not protein_candidates:
             logger.warning("No protein candidates found. Exiting.")
             sys.exit(0)
@@ -51,12 +59,13 @@ def main():
 
         # 4. Generate Final GFF
         reelprotein.generate_final_gff(scored_df, args.gff, args.out)
-        
+
         logger.info("Pipeline Finished Successfully.")
 
     except Exception as e:
         logger.error(f"Pipeline failed: {e}")
         sys.exit(1)
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     main()
