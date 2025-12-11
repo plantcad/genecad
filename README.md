@@ -364,9 +364,9 @@ For example, this table is saying that it costs about $44 to run GeneCAD-Small o
 
 ## Refinement
 
-After generating initial predictions, you can refine them using the **ReelProtein** pipeline. This post-processing step merges fragmented gene predictions, generates protein embeddings using ProtT5, scores sequences using XGBoost models, and produces a filtered GFF file.
+After generating initial predictions, you can refine them using the [ReelProtein](https://onlinelibrary.wiley.com/doi/10.1111/tpj.70483?af=R) pipeline. This post-processing step merges fragmented gene predictions, generates protein embeddings using ProtT5, scores sequences using XGBoost models, and produces a filtered GFF file.
 
-The pipeline handles model downloading automatically via Hugging Face.
+The pipeline handles model downloading automatically via (Hugging Face)[https://huggingface.co/plantcad/reelprotein].
 
 ```bash
 uv run python scripts/refine.py \
