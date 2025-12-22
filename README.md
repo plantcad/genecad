@@ -22,6 +22,7 @@ GeneCAD is an in silico genome annotation pipeline for plants built on top of th
   - [Dry run](#dry-run)
   - [Outputs](#outputs)
   - [Throughput](#throughput)
+  - [Refinement](#refinement)
 - [Evaluation](#evaluation)
 - [Development](#development)
   - [Environment](#environment)
@@ -361,6 +362,18 @@ These estimates can be used to extrapolate costs and GPU hours necessary for a f
 
 For example, this table is saying that it costs about $44 to run GeneCAD-Small on the Zea mays genome to produce a predicted annotations (`gff`) file.
 
+## Refinement
+
+After generating initial predictions, you can refine them using the [ReelProtein](https://onlinelibrary.wiley.com/doi/10.1111/tpj.70483?af=R) pipeline. This post-processing step merges fragmented gene predictions, generates protein embeddings using ProtT5, scores sequences using XGBoost models, and produces a filtered GFF file.
+
+The pipeline handles model downloading automatically via [Hugging Face](https://huggingface.co/plantcad/reelprotein).
+
+```bash
+uv run python scripts/refine.py \
+  --gff /path/to/predictions.gff \
+  --genome /path/to/genome.fa \
+  --out /path/to/refined_output.gff
+```
 ## Evaluation
 
 A simple way to evaluate predicted annotations is with the gffcompare tool.  It can either be [built from source](https://github.com/gpertea/gffcompare?tab=readme-ov-file#building-from-source) or [installed via conda](https://anaconda.org/bioconda/gffcompare).  See [examples/scripts/run_evaluation.sh](examples/scripts/run_evaluation.sh) for an example of how to use it.  See [Dockerfile](Dockerfile) for an example installation from source.
