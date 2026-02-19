@@ -4,6 +4,7 @@ OUTPUT_DIR ?=
 SPECIES_ID ?=
 CHR_ID ?=
 REQUIRE_UTRS ?= yes
+INTERGENIC_BIAS ?= 0.0
 LAUNCHER ?= python
 PRED_BATCH_SIZE ?= 32
 PRED_DTYPE ?= bfloat16
@@ -88,7 +89,8 @@ $(PIPELINE_DIR)/intervals.zarr: $(PIPELINE_DIR)/predictions.zarr
 	  --input-dir $(PIPELINE_DIR)/predictions.zarr \
 	  --output $(PIPELINE_DIR)/intervals.zarr \
 	  --decoding-methods "direct,viterbi" \
-	  --remove-incomplete-features yes
+	  --remove-incomplete-features yes \
+	  --intergenic-bias $(INTERGENIC_BIAS)
 
 # Export raw GFF
 $(PIPELINE_DIR)/predictions__raw.gff: $(PIPELINE_DIR)/intervals.zarr
