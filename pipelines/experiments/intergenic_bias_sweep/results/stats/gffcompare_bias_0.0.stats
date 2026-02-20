@@ -1,0 +1,30 @@
+# gffcompare v0.12.9 | Command line was:
+#/work/10459/eczech/vista/repos/misc/gffcompare/gffcompare -r /work/10459/eczech/vista/data/dna/plant_caduceus_genome_annotation_task/data_share_20250326/testing_data/gff/Juglans_regia.Walnut_2.0.60_chr1.gff3 -C -o /scratch/10459/eczech/tmp/jregia_chr1/pipeline/sweep_bias_0.0/gffcompare /scratch/10459/eczech/tmp/jregia_chr1/pipeline/sweep_bias_0.0/predictions.gff
+#
+
+#= Summary for dataset: /scratch/10459/eczech/tmp/jregia_chr1/pipeline/sweep_bias_0.0/predictions.gff
+#     Query mRNAs :    2254 in    2254 loci  (1787 multi-exon transcripts)
+#            (0 multi-transcript loci, ~1.0 transcripts per locus)
+# Reference mRNAs :    3478 in    2589 loci  (2896 multi-exon)
+# Super-loci w/ reference transcripts:     1991
+#-----------------| Sensitivity | Precision  |
+        Base level:    79.6     |    76.7    |
+        Exon level:    60.7     |    75.0    |
+      Intron level:    76.0     |    92.1    |
+Intron chain level:    44.7     |    72.4    |
+  Transcript level:    37.2     |    57.4    |
+       Locus level:    49.6     |    57.4    |
+
+     Matching intron chains:    1294
+       Matching transcripts:    1294
+              Matching loci:    1283
+
+          Missed exons:    2848/15331	( 18.6%)
+           Novel exons:     828/12226	(  6.8%)
+        Missed introns:    2143/12078	( 17.7%)
+         Novel introns:     538/9972	(  5.4%)
+           Missed loci:     594/2589	( 22.9%)
+            Novel loci:     242/2254	( 10.7%)
+
+ Total union super-loci across all input datasets: 2233
+2254 out of 2254 consensus transcripts written in /scratch/10459/eczech/tmp/jregia_chr1/pipeline/sweep_bias_0.0/gffcompare.combined.gtf (0 discarded as redundant)
