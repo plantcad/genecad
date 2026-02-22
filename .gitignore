@@ -9,3 +9,4 @@ logs/train*
 .ruff_cache
 .specstory/
 data/
+.claude/settings.local.json
