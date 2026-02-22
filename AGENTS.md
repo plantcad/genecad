@@ -1,28 +1,21 @@
 # Agent Guidelines
 
 ## General
-- Plan thoroughly before implementing; ask for clarification on vague or ill-advised prompts
+- IMPORTANT: Ask clarifying questions liberally
 - Prefer functional, declarative style over imperative OOP
 - Add comments only where intent or implementation is not immediately clear
-- All behavioral directives are defaults that can be overridden by request
 
 ## Project Layout
 - `local/` — untracked scratch space for plans, ad-hoc scripts, logs, and results
   - `local/scratch/` — ad-hoc scripts and their outputs (plots, CSVs, etc.)
-  - `local/logs/exec/` — execution logs
+  - `local/logs/` — execution logs
 - `scripts/` — production CLIs for pipeline operations
-- `scripts/misc/` — analysis CLIs saved in source control
+- `scripts/misc/` — ad-hoc CLIs saved in source control
 
 ## Environment
-- Run `source ~/.projectrc` before anything else; it sets the working directory, PYTHONPATH, and env vars
-- Never `cd` to the repo manually; always use `source ~/.projectrc`
-- Never add `sys.path.append(...)` to scripts
-- When running Python locally: `source .venv/bin/activate && python ...`
-- Pre-commit: install `pyrefly` with `uv pip install pyrefly` if missing
-
-## Execution
-- This project is developed on a local CPU-only workstation unless instructed otherwise
-- All GPU or CPU-intensive work must be offloaded to the TACC HPC cluster (see `.claude/skills/tacc/SKILL.md`)
+- IMPORTANT: All local libraries and execution needs to use `uv`
+- Assume local dev (typically MacOS) and execution is mostly remote in HPC or Neocloud
+- Assume remote environment from context or ask for clarification based on skills (`.claude/skills`)
 
 ## CLI
 - Use `argparse` for CLIs unless instructed otherwise
@@ -31,6 +24,8 @@
 - Always tee CLI output: `python ... 2>&1 | tee local/logs/exec/<name>.log`
 
 ## Coding
+- IMPORTANT: Highly prefer errors over fallbacks
+- IMPORTANT: No local imports
 - NumPy-style docstrings
 - `numpy.typing` for array annotations
 - Liberal type annotations using Python 3.10+ syntax (`list`, `dict`, `int | None`)
@@ -39,8 +34,9 @@
 
 ## Testing
 - `pytest` with `pytest.mark.parametrize` over boilerplate
-- Start small, expand on request
+- Start small (one or two tests max), expand on request
 - Absolute imports: `from src.module import ...`
+
 
 ## Naming
 - No type suffixes on variables (use `attributes` not `attr_df`)
