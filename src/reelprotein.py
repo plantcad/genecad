@@ -127,14 +127,15 @@ def extract_candidate_proteins(genes, genome_fasta):
             logger.warning(f"[WARN] Chromosome {chrom} not found in FASTA; skipping.")
             continue
         chrom_seq = seqs[chrom].seq
-        id_to_index = {g["id"]: idx for idx, g in enumerate(gene_list)}
-
         for strand in ("+", "-"):
             st_genes = sorted(
                 (g for g in gene_list if g["strand"] == strand),
                 key=lambda g: g["start"],
                 reverse=(strand == "-"),
             )
+            
+            # Use strand-specific indexing to avoid opposite-strand genes breaking contiguous chains
+            id_to_index = {g["id"]: idx for idx, g in enumerate(st_genes)}
 
             cds_strings = [build_cds_string_for_gene(g, chrom_seq) for g in st_genes]
             n = len(st_genes)
@@ -151,10 +152,9 @@ def extract_candidate_proteins(genes, genome_fasta):
                         prev = st_genes[j - 1]
                         curr = st_genes[j]
 
-                        # Stop if previous gene is a complete annotated model
-                        required = {"five_prime_UTR", "CDS", "three_prime_UTR"}
-                        if required.issubset(prev["feature_types"]):
-                            break
+                        # Removed the strict required.issubset check here so that fragments
+                        # with erroneously predicted UTRs can still be merged into a larger gene
+                        # if they form a proper continuous orf.
 
                         # Stop if gap > 1 gene index
                         prev_idx = id_to_index.get(prev["id"])
