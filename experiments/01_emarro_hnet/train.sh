@@ -7,16 +7,16 @@ set -euo pipefail
 # Configuration
 # =============================================================================
 
-# Emarro HNet base model (local path required — HF repo is incomplete)
-BASE_MODEL="/workdir/zl843/GeneCAD/pcad2-200M-cnet-baseline"
+# Emarro HNet base model (from HuggingFace)
+BASE_MODEL="emarro/pcad2-200M-cnet-baseline"
 
-# Training data paths
-RAW_GFF_DIR="/workdir/plantcad_architecture_tests/zero_shot_filter/gff_filtered_top_transcripts"
-RAW_FASTA_DIR="/workdir/plantcad_architecture_tests/training_data/fasta/raw_fastas"
+# Training data paths (Set these to TACC locations before running)
+RAW_GFF_DIR="${RAW_GFF_DIR:-/workdir/plantcad_architecture_tests/zero_shot_filter/gff_filtered_top_transcripts}"
+RAW_FASTA_DIR="${RAW_FASTA_DIR:-/workdir/plantcad_architecture_tests/training_data/fasta/raw_fastas}"
 SPECIES_IDS="Athaliana Osativa"
 
 # Pipeline directories
-WORK_DIR="/workdir/zl843/GeneCAD/genecad_result"
+WORK_DIR="${WORK_DIR:-/workdir/zl843/GeneCAD/genecad_result}"
 PIPELINE_DIR="$WORK_DIR/training_emarro"
 EXTRACT_DIR="$PIPELINE_DIR/extract"
 TRANSFORM_DIR="$PIPELINE_DIR/transform"
@@ -40,7 +40,7 @@ RUN_NAME="emarro-hnet-athaliana-v1"
 PROJECT_NAME="genecad-emarro"
 
 # Python executable
-PYTHON="/workdir/zl843/GeneCAD/genecad/.venv/bin/python"
+PYTHON="${PYTHON:-/workdir/zl843/GeneCAD/genecad/.venv/bin/python}"
 
 echo "============================================"
 echo " GeneCAD Fine-Tuning on Emarro HNet"
@@ -48,7 +48,7 @@ echo " Base model: $BASE_MODEL"
 echo " Species: $SPECIES_IDS"
 echo "============================================"
 
-cd /workdir/zl843/GeneCAD/genecad
+cd "${GENECAD_DIR:-/workdir/zl843/GeneCAD/genecad}"
 export PYTHONPATH=.
 
 # =============================================================================
@@ -211,6 +211,17 @@ fi
 # =============================================================================
 echo ""
 echo "[8/8] Starting training..."
+
+# Checkpoint resumption logic
+CHECKPOINT_ARGS=""
+LATEST_CKPT=$(ls -t "$OUTPUT_DIR/checkpoints"/*.ckpt 2>/dev/null | head -n 1 || true)
+if [ -n "$LATEST_CKPT" ]; then
+    echo "  Found checkpoint to resume: $LATEST_CKPT"
+    CHECKPOINT_ARGS="--checkpoint $LATEST_CKPT --checkpoint-type trainer"
+else
+    echo "  No checkpoint found. Starting fresh."
+fi
+
 echo "  Architecture:    $ARCHITECTURE"
 echo "  Base encoder:    $BASE_MODEL (frozen=$BASE_FROZEN)"
 echo "  Batch size:      $BATCH_SIZE (grad accum: $ACCUM_GRAD)"
@@ -235,7 +246,7 @@ $PYTHON scripts/train.py \
     --learning-rate-decay none \
     --num-workers $NUM_WORKERS \
     --prefetch-factor 2 \
-    --gpu 2 \
+    --gpu "${NUM_GPUS:-2}" \
     --strategy ddp \
     --checkpoint-frequency 200 \
     --val-check-interval 200 \
@@ -246,7 +257,8 @@ $PYTHON scripts/train.py \
     --torch-compile no \
     --project-name "$PROJECT_NAME" \
     --run-name "$RUN_NAME" \
-    2>&1 | tee "$OUTPUT_DIR/training.log"
+    $CHECKPOINT_ARGS \
+    2>&1 | tee -a "$OUTPUT_DIR/training.log"
 
 echo ""
 echo "============================================"
