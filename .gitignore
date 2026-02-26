@@ -10,3 +10,4 @@ logs/train*
 .specstory/
 data/
 .claude/settings.local.json
+.DS_Store

@@ -481,22 +481,31 @@ def _detect_intervals(
         assert len(labels) == len(logits)
         return labels
 
+    # Penalize intergenic logits to shift the model toward predicting more
+    # genic elements, compensating for class-imbalanced training data.
+    # Note: this intentionally overlaps with what _create_predictions could do
+    # at inference time, but we apply it here (downstream) so the bias can be
+    # swept cheaply without regenerating the large prediction datasets.
+    intergenic_bias = args.intergenic_bias
+    logger.info(f"Using intergenic bias: {intergenic_bias}")
+
     for strand in strands:
+        feature_logits = predictions.sel(strand=strand).feature_logits.copy()
+        feature_logits.loc[dict(feature="intergenic")] -= intergenic_bias
+
         # Direct label inference
         if "direct" in decoding_methods:
-            labels = predictions.sel(strand=strand).feature_predictions.values
+            labels = feature_logits.argmax(dim="feature").values
             logger.info(f"Running direct decoding for {strand!r} strand")
             intervals = convert_entity_labels_to_intervals(
                 labels=labels, class_groups=config.interval_entity_classes
             )
             region_intervals.append(intervals.assign(strand=strand, decoding="direct"))
 
-        # CRF/Viterbi label decoding
-        logits = predictions.sel(strand=strand).feature_logits.values
-
-        # Viterbi decoding
+        # Viterbi decoding (uses biased logits via softmax internally)
         if "viterbi" in decoding_methods:
             logger.info(f"Running viterbi decoding for {strand!r} strand")
+            logits = feature_logits.values
             if strand == "positive":
                 viterbi_labels = _decode_intervals_viterbi(
                     logits=logits,
@@ -1028,6 +1037,14 @@ def main():
         choices=["yes", "no"],
         default="no",
         help="Whether to remove incomplete features from predictions (default: no)",
+    )
+    detect_parser.add_argument(
+        "--intergenic-bias",
+        type=float,
+        default=0.0,
+        help="Additive penalty subtracted from intergenic feature logits before "
+        "softmax/decoding. Positive values reduce intergenic dominance and increase "
+        "recall of genic elements (default: 0.0, no change)",
     )
 
     # Export GFF command

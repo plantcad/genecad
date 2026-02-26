@@ -1,0 +1,12 @@
+#!/bin/bash
+# Environment and process-group wrapper for TACC compute nodes.
+# Sources .bashrc, sets PYTHONPATH, cds to the repo, and exports
+# RANK/WORLD_SIZE from SLURM variables for multi-node jobs,
+# then execs the given command.
+# Install at $HOME/local/bin/genecad/cmd on TACC.
+source ~/.bashrc
+export PYTHONPATH=$WORK/repos/genecad:$PYTHONPATH
+export RANK=$PMIX_RANK
+export WORLD_SIZE=$SLURM_NNODES
+cd $WORK/repos/genecad
+exec "$@"
