@@ -18,19 +18,17 @@ ssh tacc "echo 'SSH OK'"
 ```
 If this fails, the user needs to configure `tacc` as an SSH host in `~/.ssh/config`.
 
-### Step 2: Verify remote environment wrapper
+### Step 2: Install command wrapper
 ```bash
-ssh tacc "test -x \$HOME/local/bin/tacc_env.sh && echo 'tacc_env.sh OK' || echo 'MISSING'"
+ssh tacc "test -x \$HOME/local/bin/genecad/cmd && echo 'cmd OK' || echo 'MISSING'"
 ```
-If missing, create it — this script sources `.bashrc` before executing commands on compute nodes:
+If missing, install it from the local skill scripts:
 ```bash
-ssh tacc "mkdir -p \$HOME/local/bin && cat > \$HOME/local/bin/tacc_env.sh << 'SCRIPT'
-#!/bin/bash
-source ~/.bashrc
-exec \"\$@\"
-SCRIPT
-chmod +x \$HOME/local/bin/tacc_env.sh"
+ssh tacc "mkdir -p ~/local/bin/genecad"
+rsync -Pz .claude/skills/tacc/scripts/cmd tacc:~/local/bin/genecad/cmd
+ssh tacc "chmod +x ~/local/bin/genecad/cmd"
 ```
+The `cmd` script sources `.bashrc`, sets `PYTHONPATH`, cds to the repo, and exports `RANK`/`WORLD_SIZE` from SLURM variables, then execs the given command. It is the single entry point for running commands on compute nodes.
 
 ### Step 3: Verify Python environment
 ```bash
@@ -71,8 +69,8 @@ A typical experiment follows this sequence. Each step depends on the prior step 
 
 ### Step 1: Sync code to TACC
 ```bash
-bash .claude/skills/tacc/scripts/sync_tacc.sh          # rsync (default, fast, no commit needed)
-bash .claude/skills/tacc/scripts/sync_tacc.sh --git    # git push + pull (requires clean commit)
+bash .claude/skills/tacc/scripts/sync          # rsync (default, fast, no commit needed)
+bash .claude/skills/tacc/scripts/sync --git    # git push + pull (requires clean commit)
 ```
 **rsync (default):** Directly pushes local files without requiring a git commit. Use for in-progress work.
 **git (`--git`):** Use only when changes are committed and you want the remote to match a specific branch/commit.
@@ -84,7 +82,8 @@ ssh tacc "squeue -u \$USER -o '%.18i %.9P %.30j %.2t %.10M %.6D %.20R'"
 Reuse a running node if one exists — each session has a minimum 15-minute charge.
 
 ### Step 3: Allocate a compute node
-Choose the right queue based on whether the task needs a GPU:
+
+**Queues:**
 
 | Queue | Type | Time Limit | Use Case |
 |-------|------|------------|----------|
@@ -94,32 +93,52 @@ Choose the right queue based on whether the task needs a GPU:
 
 Do not allocate a CPU-only node (`gg`) for GPU work. The prediction step requires a GPU.
 
-For GPU jobs, try `gh-dev` first. If no node is provisioned within ~2 minutes, cancel and switch to `gh`:
+**Single-node (default):** Use `idev` to allocate an interactive node:
 ```bash
 idev -p gh-dev -N 1 -n 1 -t 2:00:00
-# Check: ssh tacc "squeue -u \$USER -h -t R -p gh-dev -o '%N'"
-# If empty after ~2 min: ssh tacc "scancel <jobid>"
-idev -p gh -N 1 -n 1 -t 2:00:00
-# Wait indefinitely on gh
 ```
-`idev` exits immediately after job submission — do not sleep before checking for the node.
+Then find the allocated node:
+```bash
+ssh tacc "squeue -u \$USER -h -t R -o '%N'"
+```
+
+**Multi-node:** Use `srun` directly — no `idev` needed (see Step 4).
 
 ### Step 4: Run the experiment
+
 Write all output to `$SCRATCH/tmp` unless instructed otherwise.
+
+#### Single-node execution
+
+After allocating a node with `idev` (Step 3), find the node name and run commands via `cmd`. Since `cmd` cds to the repo automatically, commands can use repo-relative paths directly:
 ```bash
-bash .claude/skills/tacc/scripts/run_tacc.sh "COMMAND 2>&1 | tee \$SCRATCH/tmp/logs/<name>.log"
+NODE=$(ssh tacc "squeue -u \$USER -h -t R -o '%N'" | head -1)
+ssh tacc "ssh $NODE ~/local/bin/genecad/cmd python scripts/predict.py ..."
 ```
-Also tee locally for monitoring after SSH disconnects:
+For long-running single-node jobs, prefer `sbatch` over `idev` to survive SSH disconnects.
+
+#### Multi-node execution with `srun`
+
+Use `srun` to launch the same command across multiple nodes simultaneously. The `cmd` wrapper sets `RANK=$PMIX_RANK` and `WORLD_SIZE=$SLURM_NNODES`, so each node knows its rank and the total node count.
+
 ```bash
-bash .claude/skills/tacc/scripts/run_tacc.sh "COMMAND 2>&1 | tee \$SCRATCH/tmp/logs/<name>.log" 2>&1 | tee local/logs/exec/<name>.log
+ssh tacc "bash -l -c '\
+  srun -p gh-dev -N 8 -n 8 --tasks-per-node 1 -t 2:00:00 \
+    --output \$SCRATCH/tmp/logs/<name>.log \
+    --error  \$SCRATCH/tmp/logs/<name>.log \
+    ~/local/bin/genecad/cmd python scripts/predict.py create_predictions \
+      --input ... --output-dir ...'" 2>&1 &
 ```
-For long-running GPU jobs (e.g., `make -f pipelines/prediction predictions`), background the remote command:
+
+**Important notes for multi-node `srun`:**
+- Always use `--tasks-per-node 1` — each node runs one instance of the command.
+- Environment variables set *before* the `srun` call propagate to all nodes.
+- All nodes write to the same `--output`/`--error` log file (interleaved). Use `[rank=N]` prefixes in log messages to distinguish nodes.
+- `srun` blocks until all nodes finish. Run it in background (`&`) and monitor via `tail` on the log file.
+
+#### Monitoring progress
 ```bash
-bash .claude/skills/tacc/scripts/run_tacc.sh "COMMAND > \$SCRATCH/tmp/logs/<name>.log 2>&1 &"
-```
-Then check progress periodically:
-```bash
-bash .claude/skills/tacc/scripts/run_tacc.sh "tail -20 \$SCRATCH/tmp/logs/<name>.log"
+ssh tacc "tail -20 \$SCRATCH/tmp/logs/<name>.log"
 ```
 
 ### Step 5: Download results
@@ -134,53 +153,12 @@ ssh tacc "scancel <jobid>"
 ```
 **Always cancel jobs when done.** Idle jobs consume SU credits.
 
-## User Quick Commands
-
-When invoked directly with `/tacc`, interpret the argument:
-
-- **`status`** or **`jobs`**: Show running SLURM jobs.
-  ```bash
-  ssh tacc "squeue -u \$USER -o '%.18i %.9P %.30j %.2t %.10M %.6D %.20R'"
-  ```
-
-- **`paths`**: Display key TACC filesystem paths:
-  ```bash
-  ssh tacc "bash -l -c 'echo WORK=\$WORK && echo SCRATCH=\$SCRATCH'"
-  ```
-  | Path | Location | Notes |
-  |------|----------|-------|
-  | Repository | `$WORK/repos/genecad` | Code lives here |
-  | Experiment output | `$SCRATCH/tmp` | Default output for all experiments |
-  | gffcompare | `$WORK/repos/misc/gffcompare/gffcompare` | Built from source |
-  | `$WORK` | `/work/10459/$USER/vista` | Persistent, small, read-only for data |
-  | `$SCRATCH` | `/scratch/10459/$USER` | Unlimited, GC'd, ephemeral outputs only |
-
-- **No argument or free-text**: Interpret intent from context and follow the Experiment Workflow.
-
 ## Environment
 
 - Python env: standard venv at `$WORK/envs/ml-rel/bin/activate`, sourced automatically by `.bashrc`
 - Do NOT use conda, mamba, or micromamba — they are not installed
 - Modules loaded by `.bashrc`: `gcc/13.2.0`, `cuda/12.4`, `python3/3.11.8`
-- `.bashrc` must be sourced for all remote commands (loads modules, activates venv, exports keys)
-
-## Command Execution
-
-Run commands on TACC compute nodes:
-```bash
-bash .claude/skills/tacc/scripts/run_tacc.sh "COMMAND"
-bash .claude/skills/tacc/scripts/run_tacc.sh --node NODE "COMMAND"
-```
-
-This auto-detects the first running compute node from `squeue`, or uses the explicit `--node`. It invokes `$HOME/local/bin/tacc_env.sh` on the remote side, which sources `.bashrc` before executing the command.
-
-## File Transfer
-
-Always use `rsync` instead of `scp` to copy files to/from TACC:
-```bash
-rsync -Pz /local/path tacc:/remote/path
-rsync -Pz tacc:/remote/path /local/path
-```
+- `.bashrc` must be sourced for all remote commands — `cmd` handles this automatically
 
 ## Troubleshooting
 
@@ -197,7 +175,7 @@ Fix: Use `rsync -Pz` instead of `scp`.
 
 ### Python environment not found / `conda` not found
 Cause: `.bashrc` was not sourced, or agent tried to use conda.
-Fix: The venv is activated by `.bashrc`. Ensure all remote commands go through `run_tacc.sh` or `tacc_env.sh`. Never use conda/mamba/micromamba.
+Fix: Ensure all compute node commands go through `cmd`. Never use conda/mamba/micromamba.
 
 ### Pre-commit `pyrefly` hook fails locally
 Cause: `pyrefly` is not installed in the local dev environment.

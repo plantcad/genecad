@@ -482,7 +482,10 @@ def _detect_intervals(
         return labels
 
     # Penalize intergenic logits to shift the model toward predicting more
-    # genic elements, compensating for class-imbalanced training data
+    # genic elements, compensating for class-imbalanced training data.
+    # Note: this intentionally overlaps with what _create_predictions could do
+    # at inference time, but we apply it here (downstream) so the bias can be
+    # swept cheaply without regenerating the large prediction datasets.
     intergenic_bias = args.intergenic_bias
     logger.info(f"Using intergenic bias: {intergenic_bias}")
 

@@ -1,0 +1,30 @@
+# gffcompare v0.12.9 | Command line was:
+#/work/10459/eczech/vista/repos/misc/gffcompare/gffcompare -r /scratch/10459/eczech/tmp/zmays/chr1.gff3 -C -o /scratch/10459/eczech/tmp/zmays/output/pipeline/sweep_bias_0.0/utrs_no/gffcompare /scratch/10459/eczech/tmp/zmays/output/pipeline/sweep_bias_0.0/utrs_no/predictions.gff
+#
+
+#= Summary for dataset: /scratch/10459/eczech/tmp/zmays/output/pipeline/sweep_bias_0.0/utrs_no/predictions.gff
+#     Query mRNAs :    4389 in    4389 loci  (3378 multi-exon transcripts)
+#            (0 multi-transcript loci, ~1.0 transcripts per locus)
+# Reference mRNAs :   11611 in    6820 loci  (10165 multi-exon)
+# Super-loci w/ reference transcripts:     4020
+#-----------------| Sensitivity | Precision  |
+        Base level:    56.7     |    95.0    |
+        Exon level:    53.5     |    88.2    |
+      Intron level:    60.4     |    96.7    |
+Intron chain level:    24.6     |    74.1    |
+  Transcript level:    21.6     |    57.0    |
+       Locus level:    36.6     |    57.0    |
+
+     Matching intron chains:    2503
+       Matching transcripts:    2503
+              Matching loci:    2498
+
+          Missed exons:   13536/40028	( 33.8%)
+           Novel exons:     357/22896	(  1.6%)
+        Missed introns:    9507/29609	( 32.1%)
+         Novel introns:     236/18507	(  1.3%)
+           Missed loci:    2791/6820	( 40.9%)
+            Novel loci:     127/4389	(  2.9%)
+
+ Total union super-loci across all input datasets: 4147
+4389 out of 4389 consensus transcripts written in /scratch/10459/eczech/tmp/zmays/output/pipeline/sweep_bias_0.0/utrs_no/gffcompare.combined.gtf (0 discarded as redundant)
