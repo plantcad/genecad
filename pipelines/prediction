@@ -7,6 +7,7 @@ REQUIRE_UTRS ?= yes
 LAUNCHER ?= python
 PRED_BATCH_SIZE ?= 32
 PRED_DTYPE ?= bfloat16
+PRED_STRIDE ?= 4096
 
 # Model configuration
 HEAD_MODEL_PATH ?= plantcad/GeneCAD-l8-d768-PC2-Small
@@ -61,9 +62,10 @@ help:
 	@echo "  PRED_BATCH_SIZE - Batch size for prediction (default: 32)"
 
 # Extract sequences from input FASTA file
+export PYTHONPATH := .
 $(PIPELINE_DIR)/sequences.zarr: $(INPUT_FILE)
 	@mkdir -p $(PIPELINE_DIR)
-	python scripts/extract.py extract_fasta_file \
+	$(LAUNCHER) scripts/extract.py extract_fasta_file \
 	  --species-id $(SPECIES_ID) \
 	  --fasta-file $(INPUT_FILE) \
 	  --chrom-map "$(CHR_ID):$(CHR_ID)" \
@@ -80,11 +82,12 @@ $(PIPELINE_DIR)/predictions.zarr: $(PIPELINE_DIR)/sequences.zarr
 	  --species-id $(SPECIES_ID) \
 	  --chromosome-id $(CHR_ID) \
 	  --batch-size $(PRED_BATCH_SIZE) \
-	  --dtype $(PRED_DTYPE)
+	  --dtype $(PRED_DTYPE) \
+	  --stride $(PRED_STRIDE)
 
 # Detect feature intervals from token-level predictions
 $(PIPELINE_DIR)/intervals.zarr: $(PIPELINE_DIR)/predictions.zarr
-	python scripts/predict.py detect_intervals \
+	$(LAUNCHER) scripts/predict.py detect_intervals \
 	  --input-dir $(PIPELINE_DIR)/predictions.zarr \
 	  --output $(PIPELINE_DIR)/intervals.zarr \
 	  --decoding-methods "direct,viterbi" \
@@ -92,7 +95,7 @@ $(PIPELINE_DIR)/intervals.zarr: $(PIPELINE_DIR)/predictions.zarr
 
 # Export raw GFF
 $(PIPELINE_DIR)/predictions__raw.gff: $(PIPELINE_DIR)/intervals.zarr
-	python scripts/predict.py export_gff \
+	$(LAUNCHER) scripts/predict.py export_gff \
 	  --input $(PIPELINE_DIR)/intervals.zarr \
 	  --output $(PIPELINE_DIR)/predictions__raw.gff \
 	  --decoding-method viterbi \
@@ -101,7 +104,7 @@ $(PIPELINE_DIR)/predictions__raw.gff: $(PIPELINE_DIR)/intervals.zarr
 
 # Remove implausibly small features (1 bp in size) and reconstruct gene/mRNA boundaries
 $(PIPELINE_DIR)/predictions__raw__feat_len_2.gff: $(PIPELINE_DIR)/predictions__raw.gff
-	python scripts/gff.py filter_to_min_feature_length \
+	$(LAUNCHER) scripts/gff.py filter_to_min_feature_length \
 	  --input $(PIPELINE_DIR)/predictions__raw.gff \
 	  --output $(PIPELINE_DIR)/predictions__raw__feat_len_2.gff \
 	  --feature-types "five_prime_UTR,three_prime_UTR,CDS" \
@@ -109,14 +112,14 @@ $(PIPELINE_DIR)/predictions__raw__feat_len_2.gff: $(PIPELINE_DIR)/predictions__r
 
 # Remove genes/transcripts below a certain length (30bp)
 $(PIPELINE_DIR)/predictions__raw__feat_len_2__gene_len_30.gff: $(PIPELINE_DIR)/predictions__raw__feat_len_2.gff
-	python scripts/gff.py filter_to_min_gene_length \
+	$(LAUNCHER) scripts/gff.py filter_to_min_gene_length \
 	  --input $(PIPELINE_DIR)/predictions__raw__feat_len_2.gff \
 	  --output $(PIPELINE_DIR)/predictions__raw__feat_len_2__gene_len_30.gff \
 	  --min-length 30
 
 # Filter to genes with at least one CDS exon and if configured, both a 5' and 3' UTR
 $(PIPELINE_DIR)/predictions__raw__feat_len_2__gene_len_30__has_req_feats.gff: $(PIPELINE_DIR)/predictions__raw__feat_len_2__gene_len_30.gff
-	python scripts/gff.py filter_to_valid_genes \
+	$(LAUNCHER) scripts/gff.py filter_to_valid_genes \
 	  --input $(PIPELINE_DIR)/predictions__raw__feat_len_2__gene_len_30.gff \
 	  --output $(PIPELINE_DIR)/predictions__raw__feat_len_2__gene_len_30__has_req_feats.gff \
 	  --require-utrs $(REQUIRE_UTRS)

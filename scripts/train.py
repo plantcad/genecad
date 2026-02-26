@@ -218,7 +218,7 @@ def train(args: Args) -> None:
     # Suppress Lightning warnings about sync_dist (these metrics are fine as averages across batches); e.g.:
     # It is recommended to use `self.log('valid__token__classes/f1/14-I-three_prime_utr', ..., sync_dist=True)` when logging on epoch level in distributed setting to accumulate the metric across devices.
     warnings.filterwarnings(
-        "ignore", ".*It is recommended to use `self.log\(.*sync_dist=True\).*"
+        "ignore", r".*It is recommended to use `self.log\(.*sync_dist=True\).*"
     )
 
     # Set precision and random seed
@@ -316,13 +316,14 @@ def train(args: Args) -> None:
         logger.info(
             f"Creating new model (architecture={args.architecture}, base_encoder_path={args.base_encoder_path})"
         )
-        base_encoder_dim = (
-            AutoConfig.from_pretrained(args.base_encoder_path, trust_remote_code=True)
-            # Classifier excepts dimension of embeddings, which is double the configured hidden
-            # size for Caduceus models (forward + reverse-complement sequences)
-            .d_model
-            * 2
-        )
+        _base_config = AutoConfig.from_pretrained(args.base_encoder_path, trust_remote_code=True)
+        _d_model = _base_config.d_model
+        # HNet models store d_model as a list (e.g. [1024])
+        if isinstance(_d_model, (list, tuple)):
+            _d_model = _d_model[0]
+        # Only double for Caduceus models that use RCPS (forward + reverse-complement sequences)
+        _is_rcps = getattr(_base_config, 'rcps', False)
+        base_encoder_dim = _d_model * (2 if _is_rcps else 1)
         config = GeneClassifierConfig(
             architecture=args.architecture,
             max_sequence_length=args.window_size,
