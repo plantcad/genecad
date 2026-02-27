@@ -30,6 +30,17 @@ Tokenizer = Callable[[npt.NDArray[np.str_]], npt.NDArray[np.int_]]
 # -------------------------------------------------------------------------------------------------
 
 
+def _resolve_file_path(path: str) -> str:
+    """Resolve file path by falling back to gzip/un-gzipped versions if needed."""
+    if os.path.exists(path):
+        return path
+    if path.endswith(".gz") and os.path.exists(path[:-3]):
+        return path[:-3]
+    if not path.endswith(".gz") and os.path.exists(path + ".gz"):
+        return path + ".gz"
+    return path
+
+
 def get_feature_name(feature: SeqFeature) -> str | None:
     """Extract name from a SeqFeature object."""
     if not hasattr(feature, "qualifiers"):
@@ -102,6 +113,7 @@ def extract_gff_features(
     dfs = []
     for config in species_configs:
         input_path = os.path.join(input_dir, config.gff.filename)
+        input_path = _resolve_file_path(input_path)
         logger.info(f"Processing file for {config.name} ({config.id}): {input_path}")
         df = _extract_gff_features(input_path, config, skip_exon_features)
         dfs.append(df)
@@ -506,6 +518,7 @@ def extract_fasta_sequences(
     # Extract sequences for each species
     for species_config in species_configs:
         fasta_file = os.path.join(input_dir, species_config.fasta.filename)
+        fasta_file = _resolve_file_path(fasta_file)
         chrom_map = species_config.chromosome_map
         _extract_fasta_sequences(
             species_id=species_config.id,
@@ -718,6 +731,7 @@ def validate_configs(data_dir: str) -> None:
 
         # Get GFF file path and extract sequence IDs
         gff_path = os.path.join(data_dir, species_data_dir, "gff", config.gff.filename)
+        gff_path = _resolve_file_path(gff_path)
         if not os.path.exists(gff_path):
             raise ValueError(f"[species={species_id}] GFF file not found: {gff_path}")
 
@@ -728,6 +742,7 @@ def validate_configs(data_dir: str) -> None:
         fasta_path = os.path.join(
             data_dir, species_data_dir, "fasta", config.fasta.filename
         )
+        fasta_path = _resolve_file_path(fasta_path)
         if not os.path.exists(fasta_path):
             raise ValueError(
                 f"[species={species_id}] FASTA file not found: {fasta_path}"

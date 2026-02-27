@@ -9,7 +9,7 @@ description = "GeneCAD: A long-context genome annotation model built on PlantCAD
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = [
-  "transformers~=4.49.0",
+  "transformers>=4.51",
   "pandas~=2.2.3",
   "numpy~=2.1.2",
   "scikit-learn~=1.6.1",
@@ -25,6 +25,11 @@ dependencies = [
   "xgboost>=3.1.2",
   "sentencepiece>=0.2.1",
   "protobuf>=6.33.2",
+  "pyarrow>=23.0.1",
+  "wandb>=0.25.0",
+  "optree>=0.19.0",
+  "flash-attn>=2.8.3",
+  "omegaconf>=2.3.0",
 ]
 
 [project.optional-dependencies]

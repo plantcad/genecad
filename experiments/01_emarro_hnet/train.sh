@@ -11,9 +11,8 @@ set -euo pipefail
 BASE_MODEL="emarro/pcad2-200M-cnet-baseline"
 
 # Training data paths (Set these to TACC locations before running)
-RAW_GFF_DIR="${RAW_GFF_DIR:-/workdir/plantcad_architecture_tests/zero_shot_filter/gff_filtered_top_transcripts}"
-RAW_FASTA_DIR="${RAW_FASTA_DIR:-/workdir/plantcad_architecture_tests/training_data/fasta/raw_fastas}"
-SPECIES_IDS="Athaliana Osativa"
+DATA_ROOT="${DATA_ROOT:-/scratch/10373/zongyan/genecad_data}"
+SPECIES_IDS="Zmays Athaliana Gmax Hvulgare Osativa Ptrichocarpa"
 
 # Pipeline directories
 WORK_DIR="${WORK_DIR:-/workdir/zl843/GeneCAD/genecad_result}"
@@ -36,7 +35,7 @@ VALID_PROPORTION=0.05
 
 # Output
 OUTPUT_DIR="$PIPELINE_DIR/training_output"
-RUN_NAME="emarro-hnet-athaliana-v1"
+RUN_NAME="emarro-hnet-6-species-v1"
 PROJECT_NAME="genecad-emarro"
 
 # Python executable
@@ -65,28 +64,53 @@ DATA_DIR="$PIPELINE_DIR/data"
 mkdir -p "$DATA_DIR/gff" "$DATA_DIR/fasta"
 
 # Check and link files
-ATHALIANA_GFF="$RAW_GFF_DIR/Athaliana_top_transcript.gff3"
-ATHALIANA_FASTA="$RAW_FASTA_DIR/Athaliana_447_TAIR10.fa"
-OSATIVA_GFF="$RAW_GFF_DIR/Osativa_top_transcript.gff3"
-OSATIVA_FASTA="$RAW_FASTA_DIR/Osativa_323_v7.0.fa"
+declare -A GFF_EXPECTED
+declare -A FASTA_EXPECTED
 
-for f in "$ATHALIANA_GFF" "$ATHALIANA_FASTA" "$OSATIVA_GFF" "$OSATIVA_FASTA"; do
-    if [ ! -f "$f" ]; then
-        echo "ERROR: File not found at $f"
+GFF_EXPECTED[Zmays]="Zea_mays-B73-REFERENCE-NAM-5.0_Zm00001eb.1.gff3"
+FASTA_EXPECTED[Zmays]="Zea_mays-B73-REFERENCE-NAM-5.0.fa"
+
+GFF_EXPECTED[Athaliana]="Athaliana_447_Araport11.gene.gff3"
+FASTA_EXPECTED[Athaliana]="Athaliana_447.fasta"
+
+GFF_EXPECTED[Gmax]="Gmax_880_Wm82.a6.v1.gene.gff3"
+FASTA_EXPECTED[Gmax]="Gmax_880_v6.0.fa"
+
+GFF_EXPECTED[Hvulgare]="HvulgareMorex_702_V3.gene.gff3"
+FASTA_EXPECTED[Hvulgare]="HvulgareMorex_702_V3.fa"
+
+GFF_EXPECTED[Osativa]="Osativa_323_v7.0.gene.gff3"
+FASTA_EXPECTED[Osativa]="Osativa_323.fasta"
+
+GFF_EXPECTED[Ptrichocarpa]="Ptrichocarpa_533_v4.1.gene.gff3"
+FASTA_EXPECTED[Ptrichocarpa]="Ptrichocarpa_533_v4.0.fa"
+
+for species in $SPECIES_IDS; do
+    SRC_GFF="$DATA_ROOT/$species/${species}_top_transcript.gff3"
+    SRC_FASTA="$DATA_ROOT/$species/${species}.fa"
+    
+    if [ ! -f "$SRC_FASTA" ]; then
+        SRC_FASTA="$DATA_ROOT/$species/${species}.fasta"
+    fi
+
+    if [ ! -f "$SRC_GFF" ]; then
+        echo "ERROR: GFF not found for $species at $SRC_GFF"
         exit 1
     fi
+    if [ ! -f "$SRC_FASTA" ]; then
+        echo "ERROR: FASTA not found for $species at $SRC_FASTA"
+        exit 1
+    fi
+
+    DST_GFF="$DATA_DIR/gff/${GFF_EXPECTED[$species]}"
+    DST_FASTA="$DATA_DIR/fasta/${FASTA_EXPECTED[$species]}"
+
+    ln -sf "$SRC_GFF" "$DST_GFF"
+    ln -sf "$SRC_FASTA" "$DST_FASTA"
+
+    echo "  GFF:   $SRC_GFF -> $DST_GFF"
+    echo "  FASTA: $SRC_FASTA -> $DST_FASTA"
 done
-
-# Create symlinks with species ID naming convention expected by src/config.py
-ln -sf "$ATHALIANA_GFF" "$DATA_DIR/gff/Athaliana_447_Araport11.gene.gff3" 2>/dev/null || true
-ln -sf "$ATHALIANA_FASTA" "$DATA_DIR/fasta/Athaliana_447.fasta" 2>/dev/null || true
-ln -sf "$OSATIVA_GFF" "$DATA_DIR/gff/Osativa_323_v7.0.gene.gff3" 2>/dev/null || true
-ln -sf "$OSATIVA_FASTA" "$DATA_DIR/fasta/Osativa_323.fasta" 2>/dev/null || true
-
-echo "  GFF:   $ATHALIANA_GFF -> $DATA_DIR/gff/Athaliana_447_Araport11.gene.gff3"
-echo "  FASTA: $ATHALIANA_FASTA -> $DATA_DIR/fasta/Athaliana_447.fasta"
-echo "  GFF:   $OSATIVA_GFF -> $DATA_DIR/gff/Osativa_323_v7.0.gene.gff3"
-echo "  FASTA: $OSATIVA_FASTA -> $DATA_DIR/fasta/Osativa_323.fasta"
 
 # =============================================================================
 # Step 1: Extract GFF features

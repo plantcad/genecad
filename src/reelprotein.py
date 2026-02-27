@@ -229,11 +229,13 @@ def generate_embeddings(seqs_dict, max_residues=4000, max_seq_len=1000, max_batc
     # Sort sequences by length (descending)
     seq_items = sorted(seqs_dict.items(), key=lambda kv: len(kv[1]), reverse=True)
 
+    from tqdm import tqdm
+
     results_list = []
     batch = []
     logger.info(f"[Step 2] Generating embeddings for {len(seq_items)} sequences...")
 
-    for seq_idx, (pdb_id, seq) in enumerate(seq_items, 1):
+    for seq_idx, (pdb_id, seq) in enumerate(tqdm(seq_items, desc="Embedding Sequences", unit="seq"), 1):
         seq_len = len(seq)
         seq_spaced = " ".join(list(seq))
         batch.append((pdb_id, seq_spaced, seq_len))
@@ -250,8 +252,8 @@ def generate_embeddings(seqs_dict, max_residues=4000, max_seq_len=1000, max_batc
             pdb_ids, batch_seqs, batch_lens = zip(*batch)
             batch = []  # reset
 
-            token_encoding = tokenizer.batch_encode_plus(
-                batch_seqs, add_special_tokens=True, padding="longest"
+            token_encoding = tokenizer(
+                list(batch_seqs), add_special_tokens=True, padding="longest"
             )
             input_ids = torch.tensor(token_encoding["input_ids"]).to(device)
             attention_mask = torch.tensor(token_encoding["attention_mask"]).to(device)
@@ -310,7 +312,13 @@ def score_proteins(features_df, model_source):
             f"Failed to download models from Hugging Face ({model_source}): {e}"
         ) from e
 
-    model_files = sorted(glob.glob(os.path.join(model_dir, "*.json")))
+    model_files = sorted(
+        [
+            f
+            for f in glob.glob(os.path.join(model_dir, "*.json"))
+            if os.path.basename(f) != "config.json"
+        ]
+    )
 
     if not model_files:
         raise FileNotFoundError(
