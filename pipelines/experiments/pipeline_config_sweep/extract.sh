@@ -5,7 +5,7 @@
 #SBATCH -n 1
 #SBATCH -t 2:00:00
 
-# PC Quality Filter Experiment - FASTA Sequence Extraction Script
+# GeneCAD Pipeline Configuration Sweep - FASTA Sequence Extraction Script
 # Usage: ./extract.sh [SPECIES_LIST]
 #
 # Arguments:
@@ -17,7 +17,7 @@ set -euo pipefail
 DEFAULT_SPECIES_LIST="jregia pvulgaris carabica zmays ntabacum nsylvestris"
 SPECIES_LIST="${1:-$DEFAULT_SPECIES_LIST}"
 
-echo "Starting PC Quality Filter Experiment - FASTA Sequence Extraction"
+echo "Starting GeneCAD Pipeline Configuration Sweep - FASTA Sequence Extraction"
 echo "Species: $(echo "$SPECIES_LIST" | tr ' ' ',')"
 echo "$(date): Beginning FASTA sequence extraction"
 

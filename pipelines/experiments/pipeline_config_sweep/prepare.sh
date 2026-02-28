@@ -5,7 +5,7 @@
 #SBATCH -n 1
 #SBATCH -t 2:00:00
 
-# PC Quality Filter Experiment - Unified Data Preparation Script
+# GeneCAD Pipeline Configuration Sweep - Unified Data Preparation Script
 # Usage: ./prepare.sh {1.0|1.1|1.2}
 
 set -euo pipefail
@@ -44,7 +44,7 @@ case "$VERSION" in
         ;;
 esac
 
-echo "Starting PC Quality Filter Experiment - Data Preparation v$VERSION"
+echo "Starting GeneCAD Pipeline Configuration Sweep - Data Preparation v$VERSION"
 echo "Species: $DESCRIPTION"
 echo "$(date): Beginning data preparation pipeline"
 

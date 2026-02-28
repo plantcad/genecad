@@ -5,7 +5,7 @@
 #SBATCH -n 20
 #SBATCH -t 2:00:00
 
-# PC Quality Filter Experiment - Prediction Generation Script
+# GeneCAD Pipeline Configuration Sweep - Prediction Generation Script
 # Usage: ./predict.sh {1.0|1.1|1.2|1.3|1.4|1.5}
 
 set -euo pipefail
@@ -73,7 +73,7 @@ esac
 
 RUN_VERSION="v$MODEL_VERSION"
 
-echo "$(date): Starting PC Quality Filter Experiment - Prediction Generation $RUN_VERSION"
+echo "$(date): Starting GeneCAD Pipeline Configuration Sweep - Prediction Generation $RUN_VERSION"
 echo "$(date): Model: $MODEL_DESCRIPTION"
 echo "$(date): Beginning prediction generation"
 

@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# PC Quality Filter Experiment - Unified Training Script
+# GeneCAD Pipeline Configuration Sweep - Unified Training Script
 # Usage: ./train.sh {1.0|1.1|1.2|1.3|1.4|1.5}
 
 set -euo pipefail
@@ -78,7 +78,7 @@ case "$VERSION" in
         ;;
 esac
 
-echo "Starting PC Quality Filter Experiment - Training v$VERSION"
+echo "Starting GeneCAD Pipeline Configuration Sweep - Training v$VERSION"
 echo "Species: $SPECIES_DESCRIPTION"
 echo "Run ID: v$VERSION"
 echo "$(date): Beginning training"
@@ -162,8 +162,8 @@ fi
 
 # Run training with proper resource allocation and run-id
 srun -p gh -N $N_NODES -n $N_NODES --tasks-per-node 1 -t $TIME_LIMIT \
-  --output local/logs/pc_quality_exp/train_v$VERSION.log \
-  --error local/logs/pc_quality_exp/train_v$VERSION.log \
+  --output local/logs/pipeline_config_sweep/train_v$VERSION.log \
+  --error local/logs/pipeline_config_sweep/train_v$VERSION.log \
   bin/tacc \
 python scripts/sweep.py run \
   --train-dataset "$PIPE_DIR/prep/v$VERSION/splits/train.zarr" \
