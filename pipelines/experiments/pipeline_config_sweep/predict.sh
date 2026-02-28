@@ -36,37 +36,37 @@ case "$MODEL_VERSION" in
     "1.0")
         MODEL_DESCRIPTION="v1.0 (Athaliana only)"
         SWEEP_DIR="sweep-v1.0__cfg_013__rand_no__arch_all__frzn_yes__lr_1e-04"
-        BASE_MODEL_PATH="kuleshov-group/PlantCAD2-Small-l24-d0768"  # pragma: allowlist secret
+        BASE_MODEL_PATH="kuleshov-group/PlantCAD2-Small-l24-d0768"
         DTYPE="float32"
         ;;
     "1.1")
         MODEL_DESCRIPTION="v1.1 (Athaliana + Osativa)"
         SWEEP_DIR="sweep-v1.1__cfg_013__rand_no__arch_all__frzn_yes__lr_1e-04"
-        BASE_MODEL_PATH="kuleshov-group/PlantCAD2-Small-l24-d0768"  # pragma: allowlist secret
+        BASE_MODEL_PATH="kuleshov-group/PlantCAD2-Small-l24-d0768"
         DTYPE="float32"
         ;;
     "1.2")
         MODEL_DESCRIPTION="v1.2 (All 5 species from v1.1 checkpoint)"
         SWEEP_DIR="sweep-v1.2__cfg_013__rand_no__arch_all__frzn_yes__lr_1e-04"
-        BASE_MODEL_PATH="kuleshov-group/PlantCAD2-Small-l24-d0768"  # pragma: allowlist secret
+        BASE_MODEL_PATH="kuleshov-group/PlantCAD2-Small-l24-d0768"
         DTYPE="float32"
         ;;
     "1.3")
         MODEL_DESCRIPTION="v1.3 (Athaliana + Osativa with randomized base encoder)"
         SWEEP_DIR="sweep-v1.3__cfg_016__rand_yes__arch_all__frzn_yes__lr_1e-04"
-        BASE_MODEL_PATH="kuleshov-group/PlantCAD2-Small-l24-d0768"  # pragma: allowlist secret
+        BASE_MODEL_PATH="kuleshov-group/PlantCAD2-Small-l24-d0768"
         DTYPE="float32"
         ;;
     "1.4")
         MODEL_DESCRIPTION="v1.4 (Athaliana + Osativa with large PlantCAD base model)"
         SWEEP_DIR="sweep-v1.4__cfg_013__rand_no__arch_all__frzn_yes__lr_1e-04"
-        BASE_MODEL_PATH="kuleshov-group/PlantCAD2-Large-l48-d1536"  # pragma: allowlist secret
+        BASE_MODEL_PATH="kuleshov-group/PlantCAD2-Large-l48-d1536"
         DTYPE="bfloat16"
         ;;
     "1.5")
         MODEL_DESCRIPTION="v1.5 (All 5 species from v1.4 checkpoint, large base model)"
         SWEEP_DIR="sweep-v1.5__cfg_013__rand_no__arch_all__frzn_yes__lr_1e-04"
-        BASE_MODEL_PATH="kuleshov-group/PlantCAD2-Large-l48-d1536"  # pragma: allowlist secret
+        BASE_MODEL_PATH="kuleshov-group/PlantCAD2-Large-l48-d1536"
         DTYPE="bfloat16"
         ;;
 esac
