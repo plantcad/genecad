@@ -1,6 +1,6 @@
-## PC Quality Filter Experiment - v1.x
+## GeneCAD Pipeline Configuration Sweep
 
-This experiment primarily assesses the impact of a zero-shot PlantCAD quality score used to remove low-quality, putative transcripts in ground-truth annotations.  This is assessed in both training data and final evaluations.  It also tests the impact of training dataset size, the use of Viterbi decoding, and the PlantCAD base model itself through a negative control model initialized from a random, frozen PlantCAD checkpoint.
+This experiment evaluates a broader sweep of GeneCAD pipeline configuration choices for plant genome annotation. It includes the original zero-shot PlantCAD quality score filter used to remove low-quality, putative transcripts in ground-truth annotations, along with post-hoc decoding choices, training species composition, and PlantCAD base model variants including a randomized negative control.
 
 The [main.sh](main.sh) script orchestrates the entire pipeline, including data preparation, training, sequence extraction, prediction generation, and evaluation with TACC.
 

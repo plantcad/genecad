@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-PC Quality Filter Experiment Analysis
+GeneCAD Pipeline Configuration Sweep Analysis
 
-This script analyzes the results from the PC quality filter experiment by:
+This script analyzes the results from the GeneCAD pipeline configuration sweep by:
 1. Loading consolidated CSV files across all species and versions
 2. Processing and filtering the data according to experimental design
-3. Creating visualizations comparing model versions and ground truth filtering
+3. Creating visualizations comparing model versions, ground-truth variants, and post-processing choices
 """
 
 import pandas as pd
@@ -616,7 +616,7 @@ def print_summary_statistics(df: pd.DataFrame) -> None:
 
 def main():
     """Main analysis function."""
-    logger.info("Starting PC Quality Filter Experiment Analysis")
+    logger.info("Starting GeneCAD Pipeline Configuration Sweep analysis")
 
     # Set up output directory for the single plot
     output_dir = Path("local/scratch")

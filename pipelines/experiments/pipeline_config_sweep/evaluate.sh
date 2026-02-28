@@ -5,7 +5,7 @@
 #SBATCH -n 1
 #SBATCH -t 2:00:00
 
-# PC Quality Filter Experiment - Unified Evaluation Script
+# GeneCAD Pipeline Configuration Sweep - Unified Evaluation Script
 # Usage: ./evaluate.sh {1.0|1.1|1.2|1.3|1.4|1.5} {original|pc-filtered} {viterbi|direct}
 
 set -euo pipefail
@@ -110,7 +110,7 @@ PREDICT_DIR="$PIPE_DIR/predict"
 SPECIES_LIST="jregia pvulgaris carabica zmays ntabacum nsylvestris"
 CHR_ID="chr1"
 
-echo "Starting PC Quality Filter Experiment - Evaluation $RUN_VERSION"
+echo "Starting GeneCAD Pipeline Configuration Sweep - Evaluation $RUN_VERSION"
 echo "Model: $MODEL_DESCRIPTION"
 echo "Ground Truth: $GT_DESCRIPTION"
 echo "Decoding Method: $DECODING_METHOD"

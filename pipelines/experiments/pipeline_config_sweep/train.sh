@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# PC Quality Filter Experiment - Unified Training Script
+# GeneCAD Pipeline Configuration Sweep - Unified Training Script
 # Usage: ./train.sh {1.0|1.1|1.2|1.3|1.4|1.5}
 
 set -euo pipefail
@@ -34,7 +34,7 @@ case "$VERSION" in
         TIME_LIMIT="2:00:00"
         EPOCHS=3
         CONFIG_INDEX=13
-        BASE_MODEL_PATH="kuleshov-group/PlantCAD2-Small-l24-d0768"
+        BASE_MODEL_PATH="kuleshov-group/PlantCAD2-Small-l24-d0768"  # pragma: allowlist secret
         ;;
     "1.1")
         SPECIES_DESCRIPTION="Athaliana + Osativa (fresh start)"
@@ -42,7 +42,7 @@ case "$VERSION" in
         TIME_LIMIT="2:00:00"
         EPOCHS=3
         CONFIG_INDEX=13
-        BASE_MODEL_PATH="kuleshov-group/PlantCAD2-Small-l24-d0768"
+        BASE_MODEL_PATH="kuleshov-group/PlantCAD2-Small-l24-d0768"  # pragma: allowlist secret
         ;;
     "1.2")
         SPECIES_DESCRIPTION="Athaliana + Osativa + Gmax + Hvulgare + Ptrichocarpa (initialize from v1.1 checkpoint)"
@@ -50,7 +50,7 @@ case "$VERSION" in
         TIME_LIMIT="8:00:00"
         EPOCHS=1
         CONFIG_INDEX=13
-        BASE_MODEL_PATH="kuleshov-group/PlantCAD2-Small-l24-d0768"
+        BASE_MODEL_PATH="kuleshov-group/PlantCAD2-Small-l24-d0768"  # pragma: allowlist secret
         ;;
     "1.3")
         SPECIES_DESCRIPTION="Athaliana + Osativa with randomized base encoder (fresh start)"
@@ -58,7 +58,7 @@ case "$VERSION" in
         TIME_LIMIT="2:00:00"
         EPOCHS=3
         CONFIG_INDEX=16
-        BASE_MODEL_PATH="kuleshov-group/PlantCAD2-Small-l24-d0768"
+        BASE_MODEL_PATH="kuleshov-group/PlantCAD2-Small-l24-d0768"  # pragma: allowlist secret
         ;;
     "1.4")
         SPECIES_DESCRIPTION="Athaliana + Osativa with large PlantCAD base model (fresh start)"
@@ -66,7 +66,7 @@ case "$VERSION" in
         TIME_LIMIT="8:00:00"
         EPOCHS=3
         CONFIG_INDEX=13
-        BASE_MODEL_PATH="kuleshov-group/PlantCAD2-Large-l48-d1536"
+        BASE_MODEL_PATH="kuleshov-group/PlantCAD2-Large-l48-d1536"  # pragma: allowlist secret
         ;;
     "1.5")
         SPECIES_DESCRIPTION="All 5 species (initialize from v1.4 checkpoint, large base model)"
@@ -74,11 +74,11 @@ case "$VERSION" in
         TIME_LIMIT="8:00:00"
         EPOCHS=1
         CONFIG_INDEX=13
-        BASE_MODEL_PATH="kuleshov-group/PlantCAD2-Large-l48-d1536"
+        BASE_MODEL_PATH="kuleshov-group/PlantCAD2-Large-l48-d1536"  # pragma: allowlist secret
         ;;
 esac
 
-echo "Starting PC Quality Filter Experiment - Training v$VERSION"
+echo "Starting GeneCAD Pipeline Configuration Sweep - Training v$VERSION"
 echo "Species: $SPECIES_DESCRIPTION"
 echo "Run ID: v$VERSION"
 echo "$(date): Beginning training"
@@ -162,8 +162,8 @@ fi
 
 # Run training with proper resource allocation and run-id
 srun -p gh -N $N_NODES -n $N_NODES --tasks-per-node 1 -t $TIME_LIMIT \
-  --output local/logs/pc_quality_exp/train_v$VERSION.log \
-  --error local/logs/pc_quality_exp/train_v$VERSION.log \
+  --output local/logs/pipeline_config_sweep/train_v$VERSION.log \
+  --error local/logs/pipeline_config_sweep/train_v$VERSION.log \
   bin/tacc \
 python scripts/sweep.py run \
   --train-dataset "$PIPE_DIR/prep/v$VERSION/splits/train.zarr" \

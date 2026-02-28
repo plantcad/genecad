@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# PC Quality Filter Experiment - Main Orchestration Script
+# GeneCAD Pipeline Configuration Sweep - Main Orchestration Script
 # Usage: Run commands manually and incrementally
 
 set -euo pipefail
@@ -8,19 +8,19 @@ set -euo pipefail
 # Initialization
 # -------------------------------------------------
 # Define experiment directory path
-EXPERIMENT_DIR="pipelines/experiments/pc_quality_exp_v1.x"
+EXPERIMENT_DIR="pipelines/experiments/pipeline_config_sweep"
 
 # Source environment initialization
 source $EXPERIMENT_DIR/init.sh
 
 # Define log directory path
-LOG_DIR="local/logs/pc_quality_exp"
+LOG_DIR="local/logs/pipeline_config_sweep"
 
 # Define model versions to process
 MODEL_VERSIONS="1.0 1.1 1.2 1.3 1.4 1.5"
 # -------------------------------------------------
 
-echo "Starting PC Quality Filter Experiment Pipeline"
+echo "Starting GeneCAD Pipeline Configuration Sweep"
 echo "$(date): Beginning main orchestration"
 
 # Ensure log directory exists
@@ -108,4 +108,4 @@ done
 # $EXPERIMENT_DIR/evaluate.sh 1.0 original 2>&1 | tee -a $LOG_DIR/evaluate_v1.0_original.log
 
 echo "$(date): Evaluation phase completed successfully!"
-echo "$(date): PC Quality Filter Experiment pipeline completed!"
+echo "$(date): GeneCAD Pipeline Configuration Sweep completed!"
