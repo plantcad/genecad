@@ -36,7 +36,7 @@ def main():
 
     # --- EXECUTION FLOW ---
     # 1. Parse GFF and Genome
-    genes_data = reelprotein.parse_gff3(args.gff)
+    genes_data = reelprotein.build_orf_gene_index(args.gff)
     protein_candidates = reelprotein.extract_candidate_proteins(genes_data, args.genome)
 
     if not protein_candidates:
