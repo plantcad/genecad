@@ -1,7 +1,12 @@
+import importlib
 import pandas as pd
 
-from src import reelprotein
-from src import reelprotein_old
+from src.tests.reelprotein_test_support import install_reelprotein_dependency_stubs
+
+install_reelprotein_dependency_stubs()
+
+reelprotein = importlib.import_module("src.reelprotein")
+reelprotein_old = importlib.import_module("src.reelprotein_old")
 
 
 def test_old_parse_gff3_drops_transcript_parent_features(tmp_path):

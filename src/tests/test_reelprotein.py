@@ -1,7 +1,12 @@
+import importlib
 import pandas as pd
 import pytest
 
-from src import reelprotein
+from src.tests.reelprotein_test_support import install_reelprotein_dependency_stubs
+
+install_reelprotein_dependency_stubs()
+
+reelprotein = importlib.import_module("src.reelprotein")
 
 
 def test_build_orf_gene_index_resolves_transcript_parent_features(tmp_path):
