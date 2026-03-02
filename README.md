@@ -429,10 +429,10 @@ uv sync --dev
 pre-commit install
 
 # Check types
-pyrefly check --summarize-errors
+uv run pyrefly check --summarize-errors
 
 # Run tests that don't require GPUs
-pytest -vrs
+uv run pytest -vrs
 ```
 
 ### Hugging Face
