@@ -157,12 +157,6 @@ def parse_args(args: Optional[list[str]] = None) -> Args:
         help="number of layers in the head encoder",
     )
     parser.add_argument(
-        "--head-encoder-heads",
-        type=int,
-        default=8,
-        help="number of attention heads in the head encoder",
-    )
-    parser.add_argument(
         "--token-embedding-dim",
         type=int,
         default=512,
@@ -336,7 +330,6 @@ def train(args: Args) -> None:
             token_embedding_dim=args.token_embedding_dim,
             train_eval_frequency=args.train_eval_frequency,
             head_encoder_layers=args.head_encoder_layers,
-            head_encoder_heads=args.head_encoder_heads,
             base_encoder_path=args.base_encoder_path,
             base_encoder_dim=base_encoder_dim,
             enable_visualization=args.enable_visualization == "yes",

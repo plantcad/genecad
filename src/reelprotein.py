@@ -186,7 +186,7 @@ def extract_candidate_proteins(genes, genome_fasta):
                         prot = str(Seq(running).translate(to_stop=False))
                         # Replace special characters in ID for file safety logic
                         header_ids = "|".join(g["id"] for g in chain)
-                        merged_id = f"{chrom}_{header_ids}_{strand}"
+                        merged_id = f"{chrom}~{header_ids}~{strand}"
 
                         # Sanitize sequence for embedding
                         prot_clean = (
@@ -387,13 +387,14 @@ def read_gff_raw(gff_path):
         fields = line.rstrip("\n").split("\t")
         if len(fields) != 9:
             continue
+        seqid = fields[0]
         feature_type = fields[2]
         attrs = parse_attributes(fields[8])
 
         if feature_type == "gene":
             gid = attrs.get("ID")
             if gid:
-                gene_entries[gid] = {
+                gene_entries[(seqid, gid)] = {
                     "gene_line": fields,
                     "subfeatures": [],
                     "attributes": attrs,
@@ -407,8 +408,9 @@ def read_gff_raw(gff_path):
             else:
                 parent_gene = parent.split(".")[0]
 
-            if parent_gene in gene_entries:
-                gene_entries[parent_gene]["subfeatures"].append((fields, attrs))
+            key = (seqid, parent_gene)
+            if key in gene_entries:
+                gene_entries[key]["subfeatures"].append((fields, attrs))
     return header, gene_entries
 
 
@@ -469,44 +471,49 @@ def generate_final_gff(predictions_df, input_gff_path, output_gff_path):
         return
 
     # Extract Gene groupings from ProteinIDs
-    single_genes = set()
+    # single_genes stores (chrom, gene_id) tuples to avoid cross-chromosome deduplication
+    single_genes = []
     group_map = {}
     gene_to_group = {}
     group_strand = {}
+    group_chrom = {}
 
     for seq_id in df1["ProteinID"]:
-        if "_" not in seq_id:
+        # ID Format: Chrom~GeneA|GeneB~Strand (using ~ separator)
+        parts = seq_id.split("~")
+        if len(parts) != 3:
             continue
-        # ID Format: Chrom_GeneA|GeneB_Strand
-        base, strand = seq_id.rsplit("_", 1)
-        if "_" in base:
-            _, gene_part = base.split("_", 1)
-        else:
-            gene_part = base
+        chrom, gene_part, strand = parts
 
         genes = gene_part.split("|")
         if len(genes) == 1:
-            single_genes.add(genes[0])
+            single_genes.append((chrom, genes[0]))
         else:
-            key = tuple(genes)
+            key = (chrom, tuple(genes))
             group_strand[key] = strand
+            group_chrom[key] = chrom
             new_id = "concat_" + "_".join(genes)
             group_map[key] = new_id
             for g in genes:
-                gene_to_group[g] = key
+                gene_to_group[(chrom, g)] = key
 
     # Read original GFF
     header, gene_entries = read_gff_raw(input_gff_path)
 
     # Build Output Items
     items = []
-    for g in sorted(single_genes):
-        if g in gene_entries:
-            start = int(gene_entries[g]["gene_line"][3])
-            items.append({"type": "single", "id": g, "start": start})
+    seen_singles = set()
+    for chrom, g in single_genes:
+        composite_key = (chrom, g)
+        if composite_key in seen_singles:
+            continue
+        seen_singles.add(composite_key)
+        if composite_key in gene_entries:
+            start = int(gene_entries[composite_key]["gene_line"][3])
+            items.append({"type": "single", "key": composite_key, "start": start})
 
-    for group, new_id in group_map.items():
-        member_entries = [gene_entries[g] for g in group if g in gene_entries]
+    for (chrom, gene_tuple), new_id in group_map.items():
+        member_entries = [gene_entries[(chrom, g)] for g in gene_tuple if (chrom, g) in gene_entries]
         if not member_entries:
             continue
         starts = [int(e["gene_line"][3]) for e in member_entries]
@@ -514,11 +521,12 @@ def generate_final_gff(predictions_df, input_gff_path, output_gff_path):
         items.append(
             {
                 "type": "group",
-                "genes": group,
+                "genes": gene_tuple,
+                "chrom": chrom,
                 "new_id": new_id,
                 "start": min(starts),
                 "end": max(ends),
-                "strand": group_strand.get(group, member_entries[0]["gene_line"][6]),
+                "strand": group_strand.get((chrom, gene_tuple), member_entries[0]["gene_line"][6]),
             }
         )
 
@@ -529,7 +537,7 @@ def generate_final_gff(predictions_df, input_gff_path, output_gff_path):
         out.writelines(header)
         for itm in items:
             if itm["type"] == "single":
-                ge = gene_entries[itm["id"]]
+                ge = gene_entries[itm["key"]]
                 out.write("\t".join(ge["gene_line"]) + "\n")
                 for fields, attrs in ge["subfeatures"]:
                     fields[8] = format_attributes(attrs)
@@ -537,13 +545,14 @@ def generate_final_gff(predictions_df, input_gff_path, output_gff_path):
             else:
                 # Group logic
                 grp = itm["genes"]
+                chrom = itm["chrom"]
                 gid = itm["new_id"]
                 strand = itm.get("strand")
-                first_valid = next((g for g in grp if g in gene_entries), None)
-                if not first_valid:
+                first_valid_key = next(((chrom, g) for g in grp if (chrom, g) in gene_entries), None)
+                if not first_valid_key:
                     continue
 
-                first = gene_entries[first_valid]["gene_line"]
+                first = gene_entries[first_valid_key]["gene_line"]
                 seqid, source, _, _, _, score, _, phase, _ = first
 
                 gene_attrs = {"ID": gid, "Note": "concatenated"}
@@ -561,8 +570,10 @@ def generate_final_gff(predictions_df, input_gff_path, output_gff_path):
                 out.write("\t".join(gene_fields) + "\n")
 
                 synthetic_mrna_id = f"{gid}.t1"
+                # Pass composite keys for group members
+                grp_keys = [g for g in grp if (chrom, g) in gene_entries]
                 mrna_fields, merged_children = merge_group_transcripts(
-                    grp, gene_entries, synthetic_mrna_id
+                    grp_keys, {g: gene_entries[(chrom, g)] for g in grp_keys}, synthetic_mrna_id
                 )
 
                 if mrna_fields:
@@ -575,9 +586,9 @@ def generate_final_gff(predictions_df, input_gff_path, output_gff_path):
                 else:
                     # Fallback
                     for g in grp:
-                        if g not in gene_entries:
+                        if (chrom, g) not in gene_entries:
                             continue
-                        for fields, attrs in gene_entries[g]["subfeatures"]:
+                        for fields, attrs in gene_entries[(chrom, g)]["subfeatures"]:
                             if fields[2] == "mRNA":
                                 attrs["Parent"] = gid
                             fields[8] = format_attributes(attrs)

@@ -178,7 +178,6 @@ class GeneClassifierConfig:
     )
     token_embedding_dim: int = 512
     head_encoder_layers: int = 4
-    head_encoder_heads: int = 8
     base_encoder_dim: int = 1536
     base_encoder_path: str | None = None
     base_encoder_revision: str | None = None
@@ -319,7 +318,7 @@ class GeneClassifier(L.LightningModule):
                 hidden_size=self.config.hidden_size,
                 intermediate_size=self.config.hidden_size * 4,
                 num_hidden_layers=config.head_encoder_layers,
-                num_attention_heads=config.head_encoder_heads,
+                num_attention_heads=8,
                 pad_token_id=0,
                 max_position_embeddings=config.max_sequence_length,
                 attention_dropout=self.config.dropout,
