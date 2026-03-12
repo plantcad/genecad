@@ -460,12 +460,12 @@ def merge_group_transcripts(grp, gene_entries, synthetic_mrna_id):
     return synthetic_fields, merged_children
 
 
-def generate_final_gff(predictions_df, input_gff_path, output_gff_path):
+def generate_final_gff(predictions_df, input_gff_path, output_gff_path, keep_unmerged=True):
     logger.info("[Step 4] Filtering and merging GFF based on predictions...")
 
     # Filter for positive predictions
     df1 = predictions_df[predictions_df["Predicted_Label"] == 1].copy()
-    if df1.empty:
+    if df1.empty and not keep_unmerged:
         logger.warning("[WARN] No positive predictions found. Writing empty GFF.")
         open(output_gff_path, "w").close()
         return
@@ -500,17 +500,32 @@ def generate_final_gff(predictions_df, input_gff_path, output_gff_path):
     # Read original GFF
     header, gene_entries = read_gff_raw(input_gff_path)
 
+    # Track merged genes to avoid duplicate output
+    merged_genes = set()
+    for (chrom, gene_tuple) in group_map.keys():
+        for g in gene_tuple:
+            merged_genes.add((chrom, g))
+
     # Build Output Items
     items = []
     seen_singles = set()
-    for chrom, g in single_genes:
-        composite_key = (chrom, g)
-        if composite_key in seen_singles:
-            continue
-        seen_singles.add(composite_key)
-        if composite_key in gene_entries:
-            start = int(gene_entries[composite_key]["gene_line"][3])
-            items.append({"type": "single", "key": composite_key, "start": start})
+    
+    if keep_unmerged:
+        # Keep ALL unmerged genes (those not successfully grouped into a new chunk)
+        for key, ge in gene_entries.items():
+            if key not in merged_genes:
+                start = int(ge["gene_line"][3])
+                items.append({"type": "single", "key": key, "start": start})
+    else:
+        # Only keep the specifically predicted single genes
+        for chrom, g in single_genes:
+            composite_key = (chrom, g)
+            if composite_key in seen_singles:
+                continue
+            seen_singles.add(composite_key)
+            if composite_key in gene_entries:
+                start = int(gene_entries[composite_key]["gene_line"][3])
+                items.append({"type": "single", "key": composite_key, "start": start})
 
     for (chrom, gene_tuple), new_id in group_map.items():
         member_entries = [gene_entries[(chrom, g)] for g in gene_tuple if (chrom, g) in gene_entries]

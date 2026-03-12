@@ -3,6 +3,7 @@ import sys
 import argparse
 import os
 from pathlib import Path
+import concurrent.futures
 
 try:
     import pyBigWig
@@ -25,6 +26,7 @@ def main():
     parser.add_argument("--feature", default=None, help="Name of the feature to export. If not specified, all features will be exported.")
     parser.add_argument("--strand", choices=["positive", "negative", "both"], default="both", help="Strand to export")
     parser.add_argument("--batch-size", type=int, default=5_000_000, help="Number of records to process at once")
+    parser.add_argument("--threads", type=int, default=4, help="Number of threads to use for parallel processing")
     args = parser.parse_args()
 
     os.makedirs(args.output_dir, exist_ok=True)
@@ -47,50 +49,61 @@ def main():
         
     selected_features = [args.feature] if args.feature else features
     
+    def process_feature(strand, feat, feat_idx):
+        strand_ds = ds.sel(strand=strand)
+        out_file = Path(args.output_dir) / f"{chrom}_{strand}_{feat}.bw"
+        print(f"Writing {feat} probabilities for {strand} strand to {out_file}...")
+
+        bw = pyBigWig.open(str(out_file), "w")
+        bw.addHeader([(chrom, sequence_len)])
+
+        num_batches = int(np.ceil(sequence_len / args.batch_size))
+        for i in range(num_batches):
+            start = i * args.batch_size
+            end = min((i + 1) * args.batch_size, sequence_len)
+            
+            # Fetch logits for chunk from zarr
+            logits = strand_ds.feature_logits.isel(sequence=slice(start, end)).values
+            
+            # Apply softmax to convert back to probability
+            probs = softmax(logits, axis=-1)
+            
+            # Extract the probability for the feature of interest
+            val = probs[:, feat_idx].astype(np.float32)
+
+            starts = np.arange(start, end, dtype=np.int32)
+            ends = starts + 1
+            
+            try:
+                bw.addEntries([chrom] * len(val), starts.tolist(), ends=ends.tolist(), values=val.tolist())
+            except Exception as e:
+                print(f"Error adding entries to BigWig: {e}")
+                break
+                
+        bw.close()
+        print(f"Finished {out_file}")
+
+    tasks = []
     for strand in strands:
         if strand not in ds.strand.values:
             print(f"Warning: {strand} strand not found in dataset. Skipping.")
             continue
             
-        strand_ds = ds.sel(strand=strand)
-
         for feat in selected_features:
             if feat not in features:
                 print(f"Warning: feature '{feat}' not found in predictions. Skipping.")
                 continue
                 
             feat_idx = features.index(feat)
-            out_file = Path(args.output_dir) / f"{chrom}_{strand}_{feat}.bw"
-            print(f"Writing {feat} probabilities for {strand} strand to {out_file}...")
-
-            bw = pyBigWig.open(str(out_file), "w")
-            bw.addHeader([(chrom, sequence_len)])
-
-            num_batches = int(np.ceil(sequence_len / args.batch_size))
-            for i in range(num_batches):
-                start = i * args.batch_size
-                end = min((i + 1) * args.batch_size, sequence_len)
-                
-                # Fetch logits for chunk from zarr
-                logits = strand_ds.feature_logits.isel(sequence=slice(start, end)).values
-                
-                # Apply softmax to convert back to probability
-                probs = softmax(logits, axis=-1)
-                
-                # Extract the probability for the feature of interest
-                val = probs[:, feat_idx].astype(np.float32)
-
-                starts = np.arange(start, end, dtype=np.int32)
-                ends = starts + 1
-                
-                try:
-                    bw.addEntries([chrom] * len(val), starts.tolist(), ends=ends.tolist(), values=val.tolist())
-                except Exception as e:
-                    print(f"Error adding entries to BigWig: {e}")
-                    break
-                    
-            bw.close()
-            print(f"Finished {out_file}")
+            tasks.append((strand, feat, feat_idx))
+            
+    with concurrent.futures.ThreadPoolExecutor(max_workers=args.threads) as executor:
+        futures = [executor.submit(process_feature, s, f, idx) for s, f, idx in tasks]
+        for future in concurrent.futures.as_completed(futures):
+            try:
+                future.result()
+            except Exception as e:
+                print(f"Error in processing thread: {e}")
 
 if __name__ == "__main__":
     main()

@@ -27,6 +27,11 @@ def main():
         default="plantcad/reelprotein",
         help="Hugging Face Repo ID for models",
     )
+    parser.add_argument(
+        "--filter-unmerged",
+        action="store_true",
+        help="If set, strictly filter out any originally unmerged genes that the model did not score positively.",
+    )
 
     args = parser.parse_args()
 
@@ -50,7 +55,9 @@ def main():
     scored_df = reelprotein.score_proteins(embeddings_df, model_source)
 
     # 4. Generate Final GFF
-    reelprotein.generate_final_gff(scored_df, args.gff, args.out)
+    reelprotein.generate_final_gff(
+        scored_df, args.gff, args.out, keep_unmerged=not args.filter_unmerged
+    )
 
     logger.info("Pipeline Finished Successfully.")
 

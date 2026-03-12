@@ -255,6 +255,18 @@ athaliana_config = SpeciesConfig(
     split=DataSplitConfig(use_in_training=True, use_in_validation=True, use_in_evaluation=False)
 )
 
+# Athaliana (Chr 1-4 only) configuration
+athaliana_chr1to4_config = SpeciesConfig(
+    id="Athaliana_chr1to4",
+    name="Arabidopsis thaliana",
+    chromosome_map={
+        **{f"Chr{i}": f"chr{i}" for i in range(1, 5)},
+    },
+    gff=SpeciesGffConfig(filename="Athaliana_447_Araport11.gene.gff3"),
+    fasta=SpeciesFastaConfig(filename="Athaliana_447.fasta"),
+    split=DataSplitConfig(use_in_training=True, use_in_validation=True, use_in_evaluation=False)
+)
+
 # Osativa (Rice) configuration
 osativa_config = SpeciesConfig(
     id="Osativa",
@@ -392,6 +404,7 @@ ptrichocarpa_config = SpeciesConfig(
 SPECIES_CONFIGS = {
     "Zmays": zmays_config,
     "Athaliana": athaliana_config,
+    "Athaliana_chr1to4": athaliana_chr1to4_config,
     "Osativa": osativa_config,
     "Pvulgaris": pvulgaris_config,
     "Jregia": jregia_config,
