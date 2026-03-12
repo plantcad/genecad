@@ -523,7 +523,7 @@ def generate_final_gff(predictions_df, input_gff_path, output_gff_path, keep_unm
             if composite_key in seen_singles:
                 continue
             seen_singles.add(composite_key)
-            if composite_key in gene_entries:
+            if composite_key in gene_entries and composite_key not in merged_genes:
                 start = int(gene_entries[composite_key]["gene_line"][3])
                 items.append({"type": "single", "key": composite_key, "start": start})
 
