@@ -52,8 +52,18 @@ def load_classifier(args: Args) -> GeneClassifier:
         model_checkpoint = hf_hub_download(args.model_checkpoint, filename="model.ckpt")
         logger.info(f"Downloaded classifier to {model_checkpoint}")
 
+    # Load the config stored in the checkpoint and patch only base_encoder_path,
+    # preserving all other values (e.g. max_sequence_length) from the checkpoint.
+    ckpt = torch.load(model_checkpoint, map_location="cpu", weights_only=False)
+    saved_config: GeneClassifierConfig = ckpt["hyper_parameters"]["config"]
+    saved_config.base_encoder_path = args.model_path
+
     model = GeneClassifier.load_from_checkpoint(
-        model_checkpoint, map_location=args.device
+        model_checkpoint,
+        map_location=args.device,
+        # Override only the base_encoder_path to prevent path-not-found errors,
+        # while keeping the rest of the checkpoint config intact.
+        config=saved_config,
     )
     model = model.eval()
     model = model.to(args.device, dtype=dtype)
