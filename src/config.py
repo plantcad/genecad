@@ -298,10 +298,13 @@ acoerulea_config = SpeciesConfig(
     id="Acoerulea",
     name="Aquilegia coerulea",
     chromosome_map={
-        f"Chr_{i:02d}": f"chr{i}" for i in range(1, 8)
+        **{f"Chr_{i:02d}": f"chr{i}" for i in range(1, 8)},
+        **{f"Chr{i}": f"chr{i}" for i in range(1, 30)},
+        **{f"Chr{i:02d}": f"chr{i}" for i in range(1, 30)}, 
+        **{str(i): f"chr{i}" for i in range(1, 30)}
     },
-    gff=SpeciesGffConfig(filename="Acoerulea_322_v3.1.gene.no_scaffold.gff3.gz"),
-    fasta=SpeciesFastaConfig(filename="Acoerulea_322_v3.no_scaffold.fa.gz"),
+    gff=SpeciesGffConfig(filename="Acoerulea_top_transcript.gff3"),
+    fasta=SpeciesFastaConfig(filename="Acoerulea.softmasked_all.fa.gz"),
     split=DataSplitConfig(use_in_training=True, use_in_validation=False, use_in_evaluation=False)
 )
 
@@ -398,6 +401,101 @@ ptrichocarpa_config = SpeciesConfig(
     split=DataSplitConfig(use_in_training=True, use_in_validation=False, use_in_evaluation=False)
 )
 
+# Lotus japonicus configuration
+ljaponicus_config = SpeciesConfig(
+    id="Ljaponicus",
+    name="Lotus japonicus",
+    chromosome_map={**{f"Chr{i}": f"chr{i}" for i in range(1, 30)}, **{f"Chr{i:02d}": f"chr{i}" for i in range(1, 30)}, **{str(i): f"chr{i}" for i in range(1, 30)}},
+    gff=SpeciesGffConfig(filename="Ljaponicus_top_transcript.gff3"),
+    fasta=SpeciesFastaConfig(filename="Ljaponicus.softmasked_all.fa.gz"),
+    split=DataSplitConfig(use_in_training=True, use_in_validation=False, use_in_evaluation=False)
+)
+
+# Eutrema salsugineum configuration
+esalsugineum_config = SpeciesConfig(
+    id="Esalsugineum",
+    name="Eutrema salsugineum",
+    chromosome_map={**{f"Chr{i}": f"chr{i}" for i in range(1, 30)}, **{f"Chr{i:02d}": f"chr{i}" for i in range(1, 30)}, **{str(i): f"chr{i}" for i in range(1, 30)}},
+    gff=SpeciesGffConfig(filename="Esalsugineum_top_transcript.gff3"),
+    fasta=SpeciesFastaConfig(filename="Esalsugineum.softmasked_all.fa.gz"),
+    split=DataSplitConfig(use_in_training=True, use_in_validation=False, use_in_evaluation=False)
+)
+
+# Capsella rubella configuration
+crubella_config = SpeciesConfig(
+    id="Crubella",
+    name="Capsella rubella",
+    chromosome_map={**{f"Chr{i}": f"chr{i}" for i in range(1, 30)}, **{f"Chr{i:02d}": f"chr{i}" for i in range(1, 30)}, **{str(i): f"chr{i}" for i in range(1, 30)}},
+    gff=SpeciesGffConfig(filename="Crubella_top_transcript.gff3"),
+    fasta=SpeciesFastaConfig(filename="Crubella.softmasked_all.fa.gz"),
+    split=DataSplitConfig(use_in_training=True, use_in_validation=False, use_in_evaluation=False)
+)
+
+# Boechera stricta configuration
+bstricta_config = SpeciesConfig(
+    id="Bstricta",
+    name="Boechera stricta",
+    chromosome_map={**{f"Chr{i}": f"chr{i}" for i in range(1, 30)}, **{f"Chr{i:02d}": f"chr{i}" for i in range(1, 30)}, **{str(i): f"chr{i}" for i in range(1, 30)}},
+    gff=SpeciesGffConfig(filename="Bstricta_top_transcript.gff3"),
+    fasta=SpeciesFastaConfig(filename="Bstricta.softmasked_all.fa.gz"),
+    split=DataSplitConfig(use_in_training=True, use_in_validation=False, use_in_evaluation=False)
+)
+
+# Zostera marina configuration
+zmarina_config = SpeciesConfig(
+    id="Zmarina",
+    name="Zostera marina",
+    chromosome_map={**{f"Chr{i}": f"chr{i}" for i in range(1, 30)}, **{f"Chr{i:02d}": f"chr{i}" for i in range(1, 30)}, **{str(i): f"chr{i}" for i in range(1, 30)}},
+    gff=SpeciesGffConfig(filename="Zmarina_top_transcript.gff3"),
+    fasta=SpeciesFastaConfig(filename="Zmarina.softmasked_all.fa.gz"),
+    split=DataSplitConfig(use_in_training=True, use_in_validation=False, use_in_evaluation=False)
+)
+
+# Nymphaea colorata configuration
+ncolorata_config = SpeciesConfig(
+    id="Ncolorata",
+    name="Nymphaea colorata",
+    chromosome_map={
+        **{f"GWHAAYW{i:08d}": f"chr{i}" for i in range(1, 30)},
+        **{f"Chr{i}": f"chr{i}" for i in range(1, 30)},
+        **{f"Chr{i:02d}": f"chr{i}" for i in range(1, 30)},
+        **{str(i): f"chr{i}" for i in range(1, 30)}
+    },
+    gff=SpeciesGffConfig(filename="Ncolorata_top_transcript.gff3"),
+    fasta=SpeciesFastaConfig(filename="Ncolorata.softmasked_all.fa.gz"),
+    split=DataSplitConfig(use_in_training=True, use_in_validation=False, use_in_evaluation=False)
+)
+
+# Cinnamomum kanehirae configuration
+ckanehirae_config = SpeciesConfig(
+    id="Ckanehirae",
+    name="Cinnamomum kanehirae",
+    chromosome_map={
+        **{f"CKAN.scaff{i:04d}": f"chr{i}" for i in range(1, 30)},
+        **{f"Chr{i}": f"chr{i}" for i in range(1, 30)},
+        **{f"Chr{i:02d}": f"chr{i}" for i in range(1, 30)},
+        **{str(i): f"chr{i}" for i in range(1, 30)}
+    },
+    gff=SpeciesGffConfig(filename="Ckanehirae_top_transcript.gff3"),
+    fasta=SpeciesFastaConfig(filename="Ckanehirae.softmasked_all.fa.gz"),
+    split=DataSplitConfig(use_in_training=True, use_in_validation=False, use_in_evaluation=False)
+)
+
+# Daucus carota configuration
+dcarota_config = SpeciesConfig(
+    id="Dcarota",
+    name="Daucus carota",
+    chromosome_map={
+        **{f"DCARv3_Chr{i}": f"chr{i}" for i in range(1, 30)},
+        **{f"Chr{i}": f"chr{i}" for i in range(1, 30)},
+        **{f"Chr{i:02d}": f"chr{i}" for i in range(1, 30)},
+        **{str(i): f"chr{i}" for i in range(1, 30)}
+    },
+    gff=SpeciesGffConfig(filename="Dcarota_top_transcript.gff3"),
+    fasta=SpeciesFastaConfig(filename="Dcarota.softmasked_all.fa.gz"),
+    split=DataSplitConfig(use_in_training=True, use_in_validation=False, use_in_evaluation=False)
+)
+
 # fmt: on
 
 # Species configuration registry
@@ -420,4 +518,12 @@ SPECIES_CONFIGS = {
     "Gmax": gmax_config,
     "Hvulgare": hvulgare_config,
     "Ptrichocarpa": ptrichocarpa_config,
+    "Ljaponicus": ljaponicus_config,
+    "Esalsugineum": esalsugineum_config,
+    "Crubella": crubella_config,
+    "Bstricta": bstricta_config,
+    "Zmarina": zmarina_config,
+    "Ncolorata": ncolorata_config,
+    "Ckanehirae": ckanehirae_config,
+    "Dcarota": dcarota_config,
 }

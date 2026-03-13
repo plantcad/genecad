@@ -204,8 +204,10 @@ def _generate_training_windows(task):
     tag_stats = get_tag_stats(ds.tag_labels_masked, tag_class_map)
 
     # Validate strands
-    if (actual := set(ds.strand.values)) != (expected := {"positive", "negative"}):
-        raise ValueError(f"Expected strand values {expected}, got {actual}")
+    actual = {str(s) for s in ds.strand.values}
+    expected = {"positive", "negative"}
+    if not actual.issubset(expected) or len(actual) == 0:
+        raise ValueError(f"Expected strand values to be subset of {expected}, got {actual}")
 
     # Setup batched processing
     batch_samples = []

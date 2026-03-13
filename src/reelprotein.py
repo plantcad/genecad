@@ -371,6 +371,12 @@ def format_attributes(attr_dict):
     return ";".join(f"{k}={v}" for k, v in attr_dict.items())
 
 
+def _natural_sort_key(s):
+    """Sort key that handles numeric runs so chr2 < chr10."""
+    import re
+    return [int(c) if c.isdigit() else c.lower() for c in re.split(r"(\d+)", s)]
+
+
 def read_gff_raw(gff_path):
     with open(gff_path) as f:
         lines = f.readlines()
@@ -382,8 +388,15 @@ def read_gff_raw(gff_path):
             feats = lines[i:]
             break
 
+    # Guarantee ##gff-version 3 pragma is present
+    gff3_pragma = "##gff-version 3\n"
+    has_pragma = any(l.strip() == "##gff-version 3" for l in header)
+    if not has_pragma:
+        header = [gff3_pragma] + header
+
     gene_entries = {}
     for line in feats:
+        raw_attr_str = line.rstrip("\n").split("\t")[8] if len(line.rstrip("\n").split("\t")) == 9 else ""
         fields = line.rstrip("\n").split("\t")
         if len(fields) != 9:
             continue
@@ -410,7 +423,8 @@ def read_gff_raw(gff_path):
 
             key = (seqid, parent_gene)
             if key in gene_entries:
-                gene_entries[key]["subfeatures"].append((fields, attrs))
+                # Store both the fields list and the original verbatim attr string
+                gene_entries[key]["subfeatures"].append((fields, attrs, raw_attr_str))
     return header, gene_entries
 
 
@@ -420,7 +434,8 @@ def merge_group_transcripts(grp, gene_entries, synthetic_mrna_id):
     for g in grp:
         if g not in gene_entries:
             continue
-        for fields, attrs in gene_entries[g]["subfeatures"]:
+        for entry in gene_entries[g]["subfeatures"]:
+            fields, attrs = entry[0], entry[1]
             if fields[2] == "mRNA":
                 original_mrnas.append((fields.copy(), attrs.copy(), g))
             else:
@@ -456,7 +471,8 @@ def merge_group_transcripts(grp, gene_entries, synthetic_mrna_id):
         fields[8] = format_attributes(attrs)
         merged_children.append((fields, attrs))
 
-    merged_children.sort(key=lambda item: int(item[0][3]), reverse=(strand == "-"))
+    # Always sort children in ascending genomic coordinate order (GFF3 convention)
+    merged_children.sort(key=lambda item: int(item[0][3]))
     return synthetic_fields, merged_children
 
 
@@ -545,7 +561,8 @@ def generate_final_gff(predictions_df, input_gff_path, output_gff_path, keep_unm
             }
         )
 
-    items.sort(key=lambda x: x["start"])
+    # Use natural sort on chromosome names so chr2 < chr10 (not lexicographic)
+    items.sort(key=lambda x: (_natural_sort_key(x["chrom"] if x["type"] == "group" else x["key"][0]), x["start"]))
 
     # Write Output
     with open(output_gff_path, "w") as out:
@@ -554,8 +571,10 @@ def generate_final_gff(predictions_df, input_gff_path, output_gff_path, keep_unm
             if itm["type"] == "single":
                 ge = gene_entries[itm["key"]]
                 out.write("\t".join(ge["gene_line"]) + "\n")
-                for fields, attrs in ge["subfeatures"]:
-                    fields[8] = format_attributes(attrs)
+                for entry in ge["subfeatures"]:
+                    fields, attrs, orig_attr_str = entry[0], entry[1], entry[2]
+                    # Write verbatim attribute string to avoid lossy re-serialization
+                    fields[8] = orig_attr_str
                     out.write("\t".join(fields) + "\n")
             else:
                 # Group logic
