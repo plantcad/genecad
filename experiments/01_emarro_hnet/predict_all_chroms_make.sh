@@ -16,13 +16,21 @@ else
     CHROM_IDS=$(grep "^>" "$INPUT_FILE" | sed 's/^>//' | awk '{print $1}' | head -50)
 
 fi
+# Detect number of GPUs
+NUM_GPUS=$(nvidia-smi --list-gpus | wc -l || echo 1)
+echo "Detected $NUM_GPUS GPUs. Using all available GPUs for prediction."
+
+# Define GPU launcher using torchrun for multi-GPU support
+# We use --nproc_per_node=$NUM_GPUS to launch one process per GPU
+GPU_LAUNCHER="torchrun --nproc_per_node=$NUM_GPUS $(which uv) run --extra torch python"
+
 for CHR_ID in $CHROM_IDS; do
     echo "========================================"
     echo "Running Make pipeline for Chr: $CHR_ID"
     echo "========================================"
     
     # Run the Makefile for this specific chromosome
-    CUDA_VISIBLE_DEVICES=1 \
+    # No need for CUDA_VISIBLE_DEVICES as we use torchrun and local_rank assignment
     INPUT_FILE="$INPUT_FILE" \
     OUTPUT_DIR="${OUTPUT_DIR}/${CHR_ID}" \
     SPECIES_ID="$SPECIES_ID" \
@@ -31,7 +39,7 @@ for CHR_ID in $CHROM_IDS; do
     HEAD_MODEL_PATH="$HEAD_MODEL" \
     PRED_BATCH_SIZE=32 \
     REQUIRE_UTRS="no" \
-    LAUNCHER="uv run --extra torch python" \
+    LAUNCHER="$GPU_LAUNCHER" \
     make -f pipelines/prediction all
     
     # Process the generated GFF for this chromosome:

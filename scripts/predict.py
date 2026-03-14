@@ -184,7 +184,7 @@ def _create_predictions(
         Data tree containing predictions for both forward and reverse strands.
     """
     # Get distributed processing info
-    rank, world_size = process_group()
+    rank, local_rank, world_size = process_group()
 
     # Construct rank-specific output path
     dataset_path = os.path.join(args.output_dir, f"predictions.{rank}.zarr")
@@ -390,6 +390,14 @@ def create_predictions(args: Args):
     # Eager mode is fine in this pipeline so far -- compilation barely makes a difference
     if args.suppress_dynamo_errors == "yes":
         torch._dynamo.config.suppress_errors = True
+
+    # Run the windowed inference to generate and save logits per rank
+    rank, local_rank, world_size = process_group()
+
+    # Automatically set device if running in distributed mode on CUDA
+    if args.device == "cuda":
+        args.device = f"cuda:{local_rank}"
+        logger.info(f"Automatically assigned device: {args.device} (local_rank={local_rank})")
 
     # Load the models and tokenizer
     base_model, classifier, tokenizer = load_models(args)
