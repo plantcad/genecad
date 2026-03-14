@@ -16,13 +16,18 @@ else
     CHROM_IDS=$(grep "^>" "$INPUT_FILE" | sed 's/^>//' | awk '{print $1}' | head -50)
 
 fi
-# Detect number of GPUs
-NUM_GPUS=$(nvidia-smi --list-gpus | wc -l || echo 1)
-echo "Detected $NUM_GPUS GPUs. Using all available GPUs for prediction."
+# Detect number of GPUs (fallback to 1 if nvidia-smi not available)
+NUM_GPUS=$(nvidia-smi --list-gpus 2>/dev/null | wc -l)
+if [ "$NUM_GPUS" -eq 0 ]; then NUM_GPUS=1; fi
+echo "Detected $NUM_GPUS GPU(s). Using all for prediction."
 
-# Define GPU launcher using torchrun for multi-GPU support
-# We use --nproc_per_node=$NUM_GPUS to launch one process per GPU
-GPU_LAUNCHER="torchrun --nproc_per_node=$NUM_GPUS $(which uv) run --extra torch python"
+# Use the venv's torchrun, NOT system torchrun.
+# .venv/bin/torchrun automatically uses .venv/bin/python as the interpreter.
+# This is the correct syntax: torchrun [opts] script.py [args]
+GPU_LAUNCHER=".venv/bin/torchrun --nproc_per_node=$NUM_GPUS"
+
+# Single-GPU launcher for CPU-only steps (extract, detect_intervals, export_gff)
+CPU_LAUNCHER="uv run --extra torch python"
 
 for CHR_ID in $CHROM_IDS; do
     echo "========================================"
@@ -30,7 +35,8 @@ for CHR_ID in $CHROM_IDS; do
     echo "========================================"
     
     # Run the Makefile for this specific chromosome
-    # No need for CUDA_VISIBLE_DEVICES as we use torchrun and local_rank assignment
+    # CPU-only steps (extract, detect_intervals, export_gff) use LAUNCHER.
+    # GPU prediction step uses GPU_LAUNCHER (torchrun with all GPUs).
     INPUT_FILE="$INPUT_FILE" \
     OUTPUT_DIR="${OUTPUT_DIR}/${CHR_ID}" \
     SPECIES_ID="$SPECIES_ID" \
@@ -39,7 +45,8 @@ for CHR_ID in $CHROM_IDS; do
     HEAD_MODEL_PATH="$HEAD_MODEL" \
     PRED_BATCH_SIZE=32 \
     REQUIRE_UTRS="no" \
-    LAUNCHER="$GPU_LAUNCHER" \
+    LAUNCHER="$CPU_LAUNCHER" \
+    GPU_LAUNCHER="$GPU_LAUNCHER" \
     make -f pipelines/prediction all
     
     # Process the generated GFF for this chromosome:

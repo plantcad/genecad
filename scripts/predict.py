@@ -241,8 +241,9 @@ def _create_predictions(
         # pyrefly: ignore  # no-matching-overload
         windows = np.array_split(windows, world_size)[rank]
 
-        # Batch windows together
-        window_batches = np.array_split(windows, len(windows) // args.batch_size)
+        # Batch windows together (guard against fewer windows than batch_size)
+        n_batches = max(1, len(windows) // args.batch_size)
+        window_batches = np.array_split(windows, n_batches)
         logger.info(
             f"Processing {len(windows)} windows in {len(window_batches)} batches of size {args.batch_size}"
         )
