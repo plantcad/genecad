@@ -97,6 +97,12 @@ def parse_args(args: Optional[list[str]] = None) -> Args:
         help="how much of the validation dataset to check.",
     )
     parser.add_argument(
+        "--limit-train-batches",
+        type=float,
+        default=1.0,
+        help="how much of the training dataset to check.",
+    )
+    parser.add_argument(
         "--limit-train-examples",
         type=int,
         default=None,
@@ -383,6 +389,7 @@ def train(args: Args) -> None:
         accelerator="gpu",
         val_check_interval=args.val_check_interval,
         limit_val_batches=args.limit_val_batches,
+        limit_train_batches=args.limit_train_batches,
         accumulate_grad_batches=args.accumulate_grad_batches,
         logger=loggers,
         callbacks=callbacks,

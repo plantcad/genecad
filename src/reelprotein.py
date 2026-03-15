@@ -25,6 +25,12 @@ device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 def parse_gff3(gff_file):
     genes = defaultdict(list)
+    # Build a lookup from gene ID to gene dict, and a transcript→gene mapping
+    gene_by_id = {}
+    transcript_to_gene = {}
+
+    # Two-pass parse: first collect all rows, then resolve relationships
+    rows = []
     with open(gff_file) as fh:
         for raw in fh:
             line = raw.strip()
@@ -36,38 +42,68 @@ def parse_gff3(gff_file):
             chrom, src, feature, start, end, score, strand, phase, attr = parts
             start, end = int(start), int(end)
             attrs = dict(kv.split("=", 1) for kv in attr.split(";") if "=" in kv)
+            rows.append((chrom, src, feature, start, end, score, strand, phase, attrs))
 
-            if feature == "gene":
-                genes[chrom].append(
-                    {
-                        "id": attrs.get("ID"),
-                        "start": start,
-                        "end": end,
-                        "strand": strand,
-                        "cds": [],
-                        "utr5": [],
-                        "utr3": [],
-                        "feature_types": set(),
-                    }
+    # Pass 1: Collect genes and build transcript→gene mapping
+    for chrom, src, feature, start, end, score, strand, phase, attrs in rows:
+        if feature == "gene":
+            gene = {
+                "id": attrs.get("ID"),
+                "start": start,
+                "end": end,
+                "strand": strand,
+                "cds": [],
+                "utr5": [],
+                "utr3": [],
+                "feature_types": set(),
+            }
+            genes[chrom].append(gene)
+            if gene["id"]:
+                gene_by_id[gene["id"]] = gene
+        elif feature == "mRNA":
+            transcript_id = attrs.get("ID")
+            parent = attrs.get("Parent", "")
+            if transcript_id and parent:
+                # Map transcript ID to its parent gene ID
+                transcript_to_gene[transcript_id] = parent
+
+    # Pass 2: Assign CDS/UTR features to genes via transcript→gene resolution
+    for chrom, src, feature, start, end, score, strand, phase, attrs in rows:
+        if feature not in ("CDS", "five_prime_UTR", "three_prime_UTR"):
+            continue
+        parent = attrs.get("Parent", "")
+        if not parent:
+            continue
+
+        # Resolve to gene: either parent is a gene ID directly, or resolve
+        # through transcript→gene mapping
+        gene_id = None
+        if parent in gene_by_id:
+            gene_id = parent
+        elif parent in transcript_to_gene:
+            gene_id = transcript_to_gene[parent]
+        else:
+            # Legacy fallback: try prefix matching (parent starts with gene_id + ".")
+            for gid in gene_by_id:
+                if parent.startswith(gid + "."):
+                    gene_id = gid
+                    break
+
+        if gene_id and gene_id in gene_by_id:
+            g = gene_by_id[gene_id]
+            g["feature_types"].add(feature)
+            if feature == "CDS":
+                try:
+                    phase_int = int(phase)
+                except ValueError:
+                    phase_int = 0
+                g["cds"].append(
+                    {"start": start, "end": end, "phase": phase_int}
                 )
-            elif feature in ("CDS", "five_prime_UTR", "three_prime_UTR"):
-                parent = attrs.get("Parent", "")
-                for g in genes[chrom]:
-                    if g["id"] and parent.startswith(g["id"] + "."):
-                        g["feature_types"].add(feature)
-                        if feature == "CDS":
-                            try:
-                                phase_int = int(phase)
-                            except ValueError:
-                                phase_int = 0
-                            g["cds"].append(
-                                {"start": start, "end": end, "phase": phase_int}
-                            )
-                        elif feature == "five_prime_UTR":
-                            g["utr5"].append({"start": start, "end": end})
-                        elif feature == "three_prime_UTR":
-                            g["utr3"].append({"start": start, "end": end})
-                        break
+            elif feature == "five_prime_UTR":
+                g["utr5"].append({"start": start, "end": end})
+            elif feature == "three_prime_UTR":
+                g["utr3"].append({"start": start, "end": end})
 
     # Deterministic ordering
     for chrom in genes:
@@ -394,7 +430,10 @@ def read_gff_raw(gff_path):
     if not has_pragma:
         header = [gff3_pragma] + header
 
-    gene_entries = {}
+    # Two-pass parse to handle transcript-parent resolution
+    parsed_rows = []
+    transcript_to_gene = {}  # transcript_id → (seqid, gene_id)
+
     for line in feats:
         raw_attr_str = line.rstrip("\n").split("\t")[8] if len(line.rstrip("\n").split("\t")) == 9 else ""
         fields = line.rstrip("\n").split("\t")
@@ -403,7 +442,11 @@ def read_gff_raw(gff_path):
         seqid = fields[0]
         feature_type = fields[2]
         attrs = parse_attributes(fields[8])
+        parsed_rows.append((seqid, feature_type, fields, attrs, raw_attr_str))
 
+    # Pass 1: Collect genes and build transcript→gene map
+    gene_entries = {}
+    for seqid, feature_type, fields, attrs, raw_attr_str in parsed_rows:
         if feature_type == "gene":
             gid = attrs.get("ID")
             if gid:
@@ -412,19 +455,40 @@ def read_gff_raw(gff_path):
                     "subfeatures": [],
                     "attributes": attrs,
                 }
-        else:
+        elif feature_type == "mRNA":
+            transcript_id = attrs.get("ID")
             parent = attrs.get("Parent", "")
-            if not parent:
-                continue
-            if feature_type == "mRNA":
-                parent_gene = parent
-            else:
-                parent_gene = parent.split(".")[0]
+            if transcript_id and parent:
+                # Map transcript ID to its parent gene's (seqid, gene_id)
+                seqid_from_row = fields[0]
+                transcript_to_gene[transcript_id] = (seqid_from_row, parent)
 
-            key = (seqid, parent_gene)
-            if key in gene_entries:
-                # Store both the fields list and the original verbatim attr string
-                gene_entries[key]["subfeatures"].append((fields, attrs, raw_attr_str))
+    # Pass 2: Assign subfeatures to genes
+    for seqid, feature_type, fields, attrs, raw_attr_str in parsed_rows:
+        if feature_type == "gene":
+            continue
+        parent = attrs.get("Parent", "")
+        if not parent:
+            continue
+
+        if feature_type == "mRNA":
+            # mRNA parent is the gene directly
+            key = (seqid, parent)
+        else:
+            # Resolve through transcript→gene mapping first
+            if parent in transcript_to_gene:
+                key = transcript_to_gene[parent]
+            elif (seqid, parent) in gene_entries:
+                # Parent is directly a gene
+                key = (seqid, parent)
+            else:
+                # Legacy fallback: split by "." to get gene ID
+                parent_gene = parent.split(".")[0]
+                key = (seqid, parent_gene)
+
+        if key in gene_entries:
+            # Store both the fields list and the original verbatim attr string
+            gene_entries[key]["subfeatures"].append((fields, attrs, raw_attr_str))
     return header, gene_entries
 
 

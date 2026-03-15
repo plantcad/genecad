@@ -498,6 +498,98 @@ dcarota_config = SpeciesConfig(
 
 # fmt: on
 
+# -------------------------------------------------------------------------------------------------
+# Animal (vertebrate) species configurations
+# Source: Ensembl release 115 chromosome-level GFF3 + FASTA
+# NOTE: Chromosome IDs in Ensembl use bare integers ("1", "2", ...) without "chr" prefix.
+#       GFF files must be pre-processed first with prepare_animal_gff.py so that canonical
+#       transcripts carry the `longest=1` attribute expected by is_longest_transcript().
+# -------------------------------------------------------------------------------------------------
+
+# fmt: off
+
+# Danio rerio (Zebrafish) — GRCz11
+drerio_config = SpeciesConfig(
+    id="Drerio",
+    name="Danio rerio",
+    chromosome_map={
+        str(i): f"chr{i}" for i in range(1, 26)
+    },
+    gff=SpeciesGffConfig(filename="Drerio_GRCz11.gene.gff3.gz"),
+    fasta=SpeciesFastaConfig(filename="Drerio_GRCz11.fa.gz"),
+    split=DataSplitConfig(use_in_training=True, use_in_validation=True, use_in_evaluation=False)
+)
+
+# Gallus gallus (Chicken) — GRCg7b
+# Chicken lacks chromosome 29 historically; 30-33 are microchromosomes; Z/W are sex chromosomes.
+ggallus_config = SpeciesConfig(
+    id="Ggallus",
+    name="Gallus gallus",
+    chromosome_map={
+        **{str(i): f"chr{i}" for i in list(range(1, 29)) + list(range(30, 34))},
+        "Z": "chr34",
+        "W": "chr35",
+    },
+    gff=SpeciesGffConfig(filename="Ggallus_GRCg7b.gene.gff3.gz"),
+    fasta=SpeciesFastaConfig(filename="Ggallus_GRCg7b.fa.gz"),
+    split=DataSplitConfig(use_in_training=True, use_in_validation=True, use_in_evaluation=False)
+)
+
+# Homo sapiens (Human) — GRCh38
+hsapiens_config = SpeciesConfig(
+    id="Hsapiens",
+    name="Homo sapiens",
+    chromosome_map={
+        **{str(i): f"chr{i}" for i in range(1, 23)},
+        "X": "chr23",
+        "Y": "chr24",
+    },
+    gff=SpeciesGffConfig(filename="Hsapiens_GRCh38.gene.gff3.gz"),
+    fasta=SpeciesFastaConfig(filename="Hsapiens_GRCh38.fa.gz"),
+    split=DataSplitConfig(use_in_training=True, use_in_validation=True, use_in_evaluation=False)
+)
+
+# Xenopus tropicalis (Western clawed frog) — UCB_Xtro_10.0
+xtropicalis_config = SpeciesConfig(
+    id="Xtropicalis",
+    name="Xenopus tropicalis",
+    chromosome_map={
+        str(i): f"chr{i}" for i in range(1, 11)
+    },
+    gff=SpeciesGffConfig(filename="Xtropicalis_UCBXtro10.gene.gff3.gz"),
+    fasta=SpeciesFastaConfig(filename="Xtropicalis_UCBXtro10.fa.gz"),
+    split=DataSplitConfig(use_in_training=True, use_in_validation=True, use_in_evaluation=False)
+)
+
+# Callithrix jacchus (Common marmoset) — mCalJac1.pat.X (haplotype-resolved, 22 autosomes + X)
+cjacchus_config = SpeciesConfig(
+    id="Cjacchus",
+    name="Callithrix jacchus",
+    chromosome_map={
+        **{str(i): f"chr{i}" for i in range(1, 23)},
+        "X": "chr23",
+    },
+    gff=SpeciesGffConfig(filename="Cjacchus_mCalJac1.gene.gff3.gz"),
+    fasta=SpeciesFastaConfig(filename="Cjacchus_mCalJac1.fa.gz"),
+    split=DataSplitConfig(use_in_training=True, use_in_validation=True, use_in_evaluation=False)
+)
+
+# Mus musculus (Mouse) — GRCm39
+mmusculus_config = SpeciesConfig(
+    id="Mmusculus",
+    name="Mus musculus",
+    chromosome_map={
+        **{str(i): f"chr{i}" for i in range(1, 20)},
+        "X": "chr20",
+        "Y": "chr21",
+    },
+    gff=SpeciesGffConfig(filename="Mmusculus_GRCm39.gene.gff3.gz"),
+    fasta=SpeciesFastaConfig(filename="Mmusculus_GRCm39.fa.gz"),
+    split=DataSplitConfig(use_in_training=True, use_in_validation=True, use_in_evaluation=False)
+)
+
+# fmt: on
+
 # Species configuration registry
 SPECIES_CONFIGS = {
     "Zmays": zmays_config,
@@ -526,4 +618,11 @@ SPECIES_CONFIGS = {
     "Ncolorata": ncolorata_config,
     "Ckanehirae": ckanehirae_config,
     "Dcarota": dcarota_config,
+    # Animal (vertebrate) species
+    "Drerio": drerio_config,
+    "Ggallus": ggallus_config,
+    "Hsapiens": hsapiens_config,
+    "Xtropicalis": xtropicalis_config,
+    "Cjacchus": cjacchus_config,
+    "Mmusculus": mmusculus_config,
 }
