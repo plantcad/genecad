@@ -52,8 +52,18 @@ def load_classifier(args: Args) -> GeneClassifier:
         model_checkpoint = hf_hub_download(args.model_checkpoint, filename="model.ckpt")
         logger.info(f"Downloaded classifier to {model_checkpoint}")
 
+    # Load the config stored in the checkpoint and patch only base_encoder_path,
+    # preserving all other values (e.g. max_sequence_length) from the checkpoint.
+    ckpt = torch.load(model_checkpoint, map_location="cpu", weights_only=False)
+    saved_config: GeneClassifierConfig = ckpt["hyper_parameters"]["config"]
+    saved_config.base_encoder_path = args.model_path
+
     model = GeneClassifier.load_from_checkpoint(
-        model_checkpoint, map_location=args.device
+        model_checkpoint,
+        map_location=args.device,
+        # Override only the base_encoder_path to prevent path-not-found errors,
+        # while keeping the rest of the checkpoint config intact.
+        config=saved_config,
     )
     model = model.eval()
     model = model.to(args.device, dtype=dtype)
@@ -174,7 +184,7 @@ def _create_predictions(
         Data tree containing predictions for both forward and reverse strands.
     """
     # Get distributed processing info
-    rank, world_size = process_group()
+    rank, local_rank, world_size = process_group()
 
     # Construct rank-specific output path
     dataset_path = os.path.join(args.output_dir, f"predictions.{rank}.zarr")
@@ -231,8 +241,9 @@ def _create_predictions(
         # pyrefly: ignore  # no-matching-overload
         windows = np.array_split(windows, world_size)[rank]
 
-        # Batch windows together
-        window_batches = np.array_split(windows, len(windows) // args.batch_size)
+        # Batch windows together (guard against fewer windows than batch_size)
+        n_batches = max(1, len(windows) // args.batch_size)
+        window_batches = np.array_split(windows, n_batches)
         logger.info(
             f"Processing {len(windows)} windows in {len(window_batches)} batches of size {args.batch_size}"
         )
@@ -380,6 +391,14 @@ def create_predictions(args: Args):
     # Eager mode is fine in this pipeline so far -- compilation barely makes a difference
     if args.suppress_dynamo_errors == "yes":
         torch._dynamo.config.suppress_errors = True
+
+    # Run the windowed inference to generate and save logits per rank
+    rank, local_rank, world_size = process_group()
+
+    # Automatically set device if running in distributed mode on CUDA
+    if args.device == "cuda":
+        args.device = f"cuda:{local_rank}"
+        logger.info(f"Automatically assigned device: {args.device} (local_rank={local_rank})")
 
     # Load the models and tokenizer
     base_model, classifier, tokenizer = load_models(args)
