@@ -2,12 +2,12 @@
 set -e
 cd /workdir/zl843/genecad || exit 1
 
-INPUT_FILE="/workdir/zl843/GCA_978657495.1_TAIR12_genomic.fna"
-OUTPUT_DIR="/workdir/zl843/genecad_result/Athaliana/prediction_genecad_emarro_hnet_5species"
+INPUT_FILE="/workdir/zl843/data/input/GCA_978657495.1_TAIR12_genomic.fna"
+OUTPUT_DIR="/workdir/zl843/data/output/prediction_genecad_emarro_hnet_10species"
 SPECIES_ID="Athaliana"
 
 BASE_MODEL="emarro/pcad2-200M-cnet-baseline"
-HEAD_MODEL="plantcad/GeneCAD-pcad2-200M-cnet-baseline"
+HEAD_MODEL="Zong-Yan/genecad_10-species"
 
 # Extract main numbered chromosomes from FASTA or GFF
 if [[ "$INPUT_FILE" == *.gff* ]]; then

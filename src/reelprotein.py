@@ -11,12 +11,15 @@ import torch
 import xgboost as xgb
 from transformers import T5EncoderModel, T5Tokenizer
 from huggingface_hub import snapshot_download
+import torch.multiprocessing as mp
+
+try:
+    mp.set_start_method('spawn', force=True)
+except RuntimeError:
+    pass
 
 # Initialize module logger
 logger = logging.getLogger(__name__)
-
-# Set device
-device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 # =============================================================================
 # PART 1: GENE PARSING & ORF EXTRACTION
@@ -245,40 +248,65 @@ def extract_candidate_proteins(genes, genome_fasta):
 # =============================================================================
 
 
-def get_prot_t5_model():
-    logger.info("[Step 2] Loading ProtT5 Model...")
+def get_free_gpus(min_memory_mb=4000):
+    import subprocess
+    import torch
+    if not torch.cuda.is_available():
+        return []
+    try:
+        output = subprocess.check_output(
+            ["nvidia-smi", "--query-gpu=index,memory.free", "--format=csv,nounits,noheader"],
+            encoding="utf-8"
+        )
+        gpu_info = []
+        for line in output.strip().split("\n"):
+            if not line: continue
+            idx, mem = line.split(",")
+            gpu_info.append((int(idx), int(mem)))
+        # Sort by free memory descending
+        gpu_info.sort(key=lambda x: x[1], reverse=True)
+        available_gpus = [g[0] for g in gpu_info if g[1] >= min_memory_mb]
+        if not available_gpus and gpu_info:
+            available_gpus = [gpu_info[0][0]]
+        return available_gpus
+    except Exception as e:
+        logger.warning(f"Failed to query nvidia-smi: {e}")
+        return list(range(torch.cuda.device_count()))
+
+def _embedding_worker(args):
+    """
+    Worker function to process a chunk of sequences on a specific device.
+    """
+    device_id, seq_items, max_residues, max_seq_len, max_batch, worker_idx = args
+    import torch
+    from transformers import T5EncoderModel, T5Tokenizer
+    import gc
+    from tqdm import tqdm
+    
+    device_str = f"cuda:{device_id}" if device_id is not None else "cpu"
+    device = torch.device(device_str)
+    
+    # Load model and tokenizer on this specific worker/device
     model = T5EncoderModel.from_pretrained("Rostlab/prot_t5_xl_half_uniref50-enc")
     model = model.to(device)
     model = model.eval()
     tokenizer = T5Tokenizer.from_pretrained(
         "Rostlab/prot_t5_xl_half_uniref50-enc", do_lower_case=False
     )
-    return model, tokenizer
-
-
-def generate_embeddings(seqs_dict, max_residues=4000, max_seq_len=1000, max_batch=1):
-    """
-    Returns a pandas DataFrame where index is ProteinID and columns are 0-1023 (features).
-    """
-    model, tokenizer = get_prot_t5_model()
-
-    # Sort sequences by length (descending)
-    seq_items = sorted(seqs_dict.items(), key=lambda kv: len(kv[1]), reverse=True)
-
-    from tqdm import tqdm
-
+    
     results_list = []
     batch = []
-    logger.info(f"[Step 2] Generating embeddings for {len(seq_items)} sequences...")
+    
+    # Only show tqdm on the first worker to avoid console spam
+    iterable = tqdm(seq_items, desc=f"Worker {worker_idx} ({device_str})", unit="seq") if worker_idx == 0 else seq_items
 
-    for seq_idx, (pdb_id, seq) in enumerate(tqdm(seq_items, desc="Embedding Sequences", unit="seq"), 1):
+    for seq_idx, (pdb_id, seq) in enumerate(iterable, 1):
         seq_len = len(seq)
         seq_spaced = " ".join(list(seq))
         batch.append((pdb_id, seq_spaced, seq_len))
 
         n_res_batch = sum([s_len for _, _, s_len in batch]) + seq_len
 
-        # Process batch
         if (
             len(batch) >= max_batch
             or n_res_batch >= max_residues
@@ -286,7 +314,7 @@ def generate_embeddings(seqs_dict, max_residues=4000, max_seq_len=1000, max_batc
             or seq_len > max_seq_len
         ):
             pdb_ids, batch_seqs, batch_lens = zip(*batch)
-            batch = []  # reset
+            batch = []
 
             token_encoding = tokenizer(
                 list(batch_seqs), add_special_tokens=True, padding="longest"
@@ -298,28 +326,63 @@ def generate_embeddings(seqs_dict, max_residues=4000, max_seq_len=1000, max_batc
                 with torch.no_grad():
                     embedding_repr = model(input_ids, attention_mask=attention_mask)
             except RuntimeError as e:
-                logger.error(f"RuntimeError during embedding: {e}")
+                # Fallback to CPU if OOM occurs on a single strange sequence
+                print(f"[Worker {worker_idx}] RuntimeError during embedding: {e}")
                 continue
 
             for batch_idx, identifier in enumerate(pdb_ids):
                 s_len = batch_lens[batch_idx]
-                # Slice off padding -> avg pool
                 emb = embedding_repr.last_hidden_state[batch_idx, :s_len]
                 protein_emb = emb.mean(dim=0).detach().cpu().numpy().squeeze()
-
-                # Append to results
                 results_list.append([identifier] + protein_emb.tolist())
+
+    del model
+    del tokenizer
+    if 'embedding_repr' in locals():
+        del embedding_repr
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    gc.collect()
+
+    return results_list
+
+def generate_embeddings(seqs_dict, max_residues=4000, max_seq_len=1000, max_batch=1):
+    """
+    Returns a pandas DataFrame where index is ProteinID and columns are 0-1023 (features).
+    """
+    device_ids = get_free_gpus()
+    num_gpus = len(device_ids) if device_ids else 1
+    
+    # Sort sequences by length (descending) so hardest ones are distributed
+    seq_items = sorted(seqs_dict.items(), key=lambda kv: len(kv[1]), reverse=True)
+
+    logger.info(f"[Step 2] Generating embeddings for {len(seq_items)} sequences using {num_gpus} GPU(s) via Multiprocessing...")
+
+    if not device_ids:
+        # CPU fallback directly
+        args_tuple = (None, seq_items, max_residues, max_seq_len, max_batch, 0)
+        final_results = _embedding_worker(args_tuple)
+    else:
+        # Chunk the sequences. To balance load, deal them round-robin
+        chunks = [[] for _ in range(num_gpus)]
+        for i, item in enumerate(seq_items):
+            chunks[i % num_gpus].append(item)
+
+        worker_args = []
+        for i, chunk in enumerate(chunks):
+            worker_args.append((device_ids[i], chunk, max_residues, max_seq_len, max_batch, i))
+
+        with mp.Pool(processes=num_gpus) as pool:
+            results = pool.map(_embedding_worker, worker_args)
+            
+        # Flatten results
+        final_results = []
+        for res in results:
+            final_results.extend(res)
 
     logger.info("[Step 2] Embedding generation complete.")
     cols = ["ProteinID"] + list(range(1024))
-    df = pd.DataFrame(results_list, columns=cols)
-
-    # Cleanup GPU memory
-    del model
-    del tokenizer
-    del embedding_repr
-    torch.cuda.empty_cache()
-    gc.collect()
+    df = pd.DataFrame(final_results, columns=cols)
 
     return df
 

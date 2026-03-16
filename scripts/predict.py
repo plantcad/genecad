@@ -398,6 +398,7 @@ def create_predictions(args: Args):
     # Automatically set device if running in distributed mode on CUDA
     if args.device == "cuda":
         args.device = f"cuda:{local_rank}"
+        torch.cuda.set_device(local_rank)
         logger.info(f"Automatically assigned device: {args.device} (local_rank={local_rank})")
 
     # Load the models and tokenizer
