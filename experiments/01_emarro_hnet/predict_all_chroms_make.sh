@@ -2,9 +2,9 @@
 set -e
 cd /workdir/zl843/genecad || exit 1
 
-INPUT_FILE="/workdir/zl843/data/input/GCA_978657495.1_TAIR12_genomic.fna"
-OUTPUT_DIR="/workdir/zl843/data/output/prediction_genecad_emarro_hnet_10species"
-SPECIES_ID="Athaliana"
+INPUT_FILE="/workdir/zl843/data/input/Juglans_regia.Walnut_2.0.dna.toplevel.fa"
+OUTPUT_DIR="/workdir/zl843/data/output/prediction_genecad_emarro_hnet_10species_Juglans_regia"
+SPECIES_ID="Juglans_regia"
 
 BASE_MODEL="emarro/pcad2-200M-cnet-baseline"
 HEAD_MODEL="Zong-Yan/genecad_10-species"

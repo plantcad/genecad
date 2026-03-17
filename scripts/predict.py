@@ -248,11 +248,15 @@ def _create_predictions(
             f"Processing {len(windows)} windows in {len(window_batches)} batches of size {args.batch_size}"
         )
 
-        # Process batches
-        for batch_index, window_batch in enumerate(window_batches):
-            logger.info(
-                f"Processing batch {batch_index + 1} of {len(window_batches)} [{rank=}, {world_size=}]"
-            )
+        # Process batches — show a progress bar on rank 0 only to avoid interleaved output
+        batch_iter = tqdm.tqdm(
+            enumerate(window_batches),
+            total=len(window_batches),
+            desc=f"Predicting ({strand} strand)",
+            unit="batch",
+            disable=(rank != 0),
+        )
+        for batch_index, window_batch in batch_iter:
             current_batch_size = len(window_batch)
 
             # Get equally sized sequence windows to process for batch
