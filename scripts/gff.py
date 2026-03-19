@@ -383,6 +383,10 @@ def filter_to_min_gene_length(
     features = load_gff(input_path)
 
     original_count = features.shape[0]
+    if original_count == 0:
+        logger.info("Empty GFF file, saving as is")
+        save_gff(output_path, features)
+        return
 
     # Filter to only gene features for length checking
     genes = features[features["type"] == GffFeatureType.GENE.value]
@@ -437,6 +441,10 @@ def filter_to_min_feature_length(
     # Read GFF file
     features = load_gff(input_path)
     original_count = features.shape[0]
+    if original_count == 0:
+        logger.info("Empty GFF file, saving as is")
+        save_gff(output_path, features)
+        return
 
     # Validate feature types against schema
     # pyrefly: ignore  # no-matching-overload
@@ -588,6 +596,10 @@ def filter_to_representative_transcripts(
     features = load_gff(input_path)
 
     original_count = features.shape[0]
+    if original_count == 0:
+        logger.info("Empty GFF file, saving as is")
+        save_gff(output_path, features)
+        return
 
     # Check if the canonical_transcript column exists when using annotated modes
     has_canonical_column = "canonical_transcript" in features.columns
@@ -732,6 +744,10 @@ def filter_to_valid_genes(
     # Read GFF file
     features = load_gff(input_path)
     original_count = features.shape[0]
+    if original_count == 0:
+        logger.info("Empty GFF file, saving as is")
+        save_gff(output_path, features)
+        return
 
     # Find all mRNAs
     mrnas = features[features["type"] == GffFeatureType.MRNA.value]
@@ -824,6 +840,10 @@ def remove_exon_utrs(input_path: str, output_path: str) -> None:
     # Read GFF file
     features = load_gff(input_path)
     original_count = features.shape[0]
+    if original_count == 0:
+        logger.info("Empty GFF file, saving as is")
+        save_gff(output_path, features)
+        return
 
     # Find all UTR features (note: "exon" is not in GffFeatureType so we keep it as string)
     utr_types = [

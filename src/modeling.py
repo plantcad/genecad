@@ -206,6 +206,7 @@ class GeneClassifierConfig:
     sentinel_names: tuple[str, str] = field(
         default_factory=lambda: TOKEN_SENTINEL_NAMES
     )
+    class_weights: Optional[list[float]] = None
 
     @property
     def hidden_size(self) -> int:
@@ -277,6 +278,11 @@ def validate_config(config: GeneClassifierConfig) -> None:
             "token_embedding_dim must be less than or equal to hidden_size; "
             f"got {config.token_embedding_dim=} and {config.hidden_size=}"
         )
+    if config.class_weights is not None and len(config.class_weights) != config.num_labels:
+        raise ValueError(
+            "Length of class_weights must exactly match num_labels; "
+            f"got len(class_weights)={len(config.class_weights)} but num_labels={config.num_labels}"
+        )
 
 
 class GeneClassifier(L.LightningModule):
@@ -300,7 +306,11 @@ class GeneClassifier(L.LightningModule):
         self.num_total_entities = (
             self.num_core_entities + 1
         )  # Entity count w/ background
-        self.criterion = torch.nn.CrossEntropyLoss()
+        
+        weight_tensor = None
+        if config.class_weights is not None:
+            weight_tensor = torch.tensor(config.class_weights, dtype=torch.float32)
+        self.criterion = torch.nn.CrossEntropyLoss(weight=weight_tensor)
 
         self.classifier = MLP(
             input_dim=self.config.hidden_size,

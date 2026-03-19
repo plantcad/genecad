@@ -62,9 +62,19 @@ def merge_prediction_datasets(
         )
         dataset = xr.concat(rank_strand_data, dim="sequence")
         dataset = dataset.sortby("sequence")
-        assert np.array_equal(
-            np.sort(dataset.sequence.values), np.arange(dataset.sizes["sequence"])
-        )
+        expected_seq = np.arange(dataset.sizes["sequence"])
+        actual_seq = np.sort(dataset.sequence.values)
+        if not np.array_equal(actual_seq, expected_seq):
+            import collections
+            duplicates = [item for item, count in collections.Counter(actual_seq).items() if count > 1]
+            missing = np.setdiff1d(expected_seq, actual_seq)
+            logger.error(f"Sequence array mismatch!")
+            logger.error(f"Expected size: {len(expected_seq)}, Actual size: {len(actual_seq)}")
+            if len(duplicates) > 0:
+                logger.error(f"Found {len(duplicates)} duplicate sequence coordinates. Example duplicates: {duplicates[:10]}")
+            if len(missing) > 0:
+                logger.error(f"Found {len(missing)} missing sequence coordinates. Example missing: {missing[:10]}")
+            assert False, "Sequence array mismatch"
         strand_datasets.append(dataset.expand_dims(strand=[strand]))
     logger.info(
         f"Concatenating {len(strand_datasets)} datasets along the strand dimension."

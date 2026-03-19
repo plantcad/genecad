@@ -241,12 +241,68 @@ def _create_predictions(
         # pyrefly: ignore  # no-matching-overload
         windows = np.array_split(windows, world_size)[rank]
 
-        # Batch windows together (guard against fewer windows than batch_size)
+        # Batch windows together using a fixed batch size to ensure uniform Zarr chunk sizes.
+        # np.array_split produces variable sizes (e.g. 33 and 32) which corrupts Zarr appends!
+        window_batches = [
+            windows[i : i + args.batch_size] 
+            for i in range(0, len(windows), args.batch_size)
+        ]
         n_batches = max(1, len(windows) // args.batch_size)
-        window_batches = np.array_split(windows, n_batches)
         logger.info(
             f"Processing {len(windows)} windows in {len(window_batches)} batches of size {args.batch_size}"
         )
+
+        all_token_logits = []
+        all_feature_logits = []
+        all_sequence_coords = []
+        is_first_write = True
+
+        def flush_accumulators():
+            if not all_sequence_coords:
+                return
+            
+            total_elements = sum(len(x) for x in all_sequence_coords)
+            logger.info(f"Writing all {total_elements} sequence items to Zarr completely at once...")
+            flush_token_logits = np.concatenate(all_token_logits, axis=0)
+            flush_feature_logits = np.concatenate(all_feature_logits, axis=0)
+            flush_sequence_coords = np.concatenate(all_sequence_coords, axis=0)
+            
+            all_token_logits.clear()
+            all_feature_logits.clear()
+            all_sequence_coords.clear()
+
+            flush_result = xr.Dataset(
+                data_vars={
+                    "token_logits": (["sequence", "token"], flush_token_logits),
+                    "feature_logits": (["sequence", "feature"], flush_feature_logits),
+                },
+                coords={
+                    "sequence": flush_sequence_coords,
+                    "token": token_class_names,
+                    "feature": feature_class_names,
+                },
+                attrs={
+                    "strand": strand,
+                    "species_id": args.species_id,
+                    "chromosome_id": args.chromosome_id,
+                    "model_checkpoint": args.model_checkpoint,
+                    "model_path": args.model_path,
+                },
+            )
+
+            flush_result["token_predictions"] = flush_result.token_logits.argmax(dim="token")
+            flush_result["feature_predictions"] = flush_result.feature_logits.argmax(dim="feature")
+
+            os.makedirs(args.output_dir, exist_ok=True)
+            
+            # Write entirely from memory precisely once avoiding any append chunk mismatches
+            flush_result.to_zarr(
+                dataset_path,
+                group=f"/{strand}",
+                zarr_format=2,
+                mode="a" if os.path.exists(dataset_path) else "w",
+                consolidated=True,
+            )
 
         # Process batches — show a progress bar on rank 0 only to avoid interleaved output
         batch_iter = tqdm.tqdm(
@@ -326,48 +382,17 @@ def _create_predictions(
                 feature_logits = flip(feature_logits)
                 sequence_coords = flip(sequence_coords)
 
-            # Create resulting dataset for batch
-            result = xr.Dataset(
-                data_vars={
-                    "token_logits": (["sequence", "token"], token_logits),
-                    "feature_logits": (["sequence", "feature"], feature_logits),
-                },
-                coords={
-                    "sequence": sequence_coords,
-                    "token": token_class_names,
-                    "feature": feature_class_names,
-                },
-                attrs={
-                    "strand": strand,
-                    "species_id": args.species_id,
-                    "chromosome_id": args.chromosome_id,
-                    "model_checkpoint": args.model_checkpoint,
-                    "model_path": args.model_path,
-                },
-            )
+            all_token_logits.append(token_logits)
+            all_feature_logits.append(feature_logits)
+            all_sequence_coords.append(sequence_coords)
 
-            # Assign predictions as max logits
-            result["token_predictions"] = result.token_logits.argmax(dim="token")
-            result["feature_predictions"] = result.feature_logits.argmax(dim="feature")
-
-            # Chunk in sequence dim only and save
-            result = set_dimension_chunks(result, "sequence", result.sizes["sequence"])
-            os.makedirs(args.output_dir, exist_ok=True)
-            # pyrefly: ignore  # no-matching-overload
-            result.to_zarr(
-                dataset_path,
-                group=f"/{strand}",
-                zarr_format=2,
-                **(
-                    dict(append_dim="sequence")
-                    if os.path.exists(os.path.join(dataset_path, strand))
-                    else {}
-                ),
-                consolidated=True,
-            )
+        # Flush all accumulated items exactly once at the end of the strand
+        flush_accumulators()
     logger.info(
-        f"Loading completed predictions from {dataset_path} ({rank=}, {world_size=})"
+        f"Consolidating metadata sequentially at {dataset_path} ({rank=}, {world_size=})"
     )
+    import zarr
+    zarr.consolidate_metadata(dataset_path)
     result = open_datatree(dataset_path)
     return result
 

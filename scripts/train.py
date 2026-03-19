@@ -202,6 +202,13 @@ def parse_args(args: Optional[list[str]] = None) -> Args:
         choices=["yes", "no"],
         help="Randomize the base encoder model instead of loading pretrained weights",
     )
+    parser.add_argument(
+        "--class-weights",
+        type=float,
+        nargs="+",
+        default=None,
+        help="List of class weights to apply to the CrossEntropyLoss (must match num_labels).",
+    )
     return parser.parse_args(args)
 
 
@@ -341,6 +348,7 @@ def train(args: Args) -> None:
             enable_visualization=args.enable_visualization == "yes",
             base_encoder_frozen=args.base_encoder_frozen == "yes",
             base_encoder_randomize=args.randomize_base == "yes",
+            class_weights=args.class_weights,
         )
         model = GeneClassifier(
             config,
