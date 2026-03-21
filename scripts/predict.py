@@ -207,51 +207,70 @@ def _create_predictions(
 
     strands = ds.strand.values.tolist()
     assert set(strands) == {"positive", "negative"}
+    for strand in strands:
+        logger.info(f"Processing strand: {strand}")
+        negative_strand = strand == "negative"
 
-    logger.info("Processing both strands simultaneously to reuse base embeddings")
-    
-    sequence_input_ids_pos = ds.sel(strand="positive").sequence_input_ids.values
-    sequence_coordinates = ds.sel(strand="positive").sequence.values
-    sequence_input_ids_neg_raw = ds.sel(strand="negative").sequence_input_ids.values
-    
-    windows = list(
-        create_sequence_windows(
-            sequence_input_ids_pos,
-            window_size=args.window_size,
-            stride=args.stride,
-            pad_value=pad_value,
+        # Get sequence input ids for this strand
+        sequence_input_ids = ds.sel(strand=strand).sequence_input_ids.values
+        assert sequence_input_ids.ndim == 1
+        sequence_coordinates = ds.sel(strand=strand).sequence.values
+        assert sequence_coordinates.ndim == 1
+        # While not strictly necessary, ensure that coordinates are autoincrementing,
+        # 0-based integers until there is a good reason to support any other coordinates
+        assert sequence_coordinates.tolist() == list(range(len(sequence_coordinates)))
+
+        # Flip token ids on negative strand from 3'->5' to 5'->3'
+        if negative_strand:
+            sequence_input_ids = flip(sequence_input_ids)
+            sequence_coordinates = flip(sequence_coordinates)
+
+        # Create windows of input ids to process
+        windows: list[tuple[npt.ArrayLike, tuple[int, int], tuple[int, int]]] = list(
+            create_sequence_windows(
+                sequence_input_ids,
+                window_size=args.window_size,
+                stride=args.stride,
+                pad_value=pad_value,
+            )
         )
-    )
 
-    windows = np.array(windows, dtype=object)
-    windows = np.array_split(windows, world_size)[rank]
+        # Select windows for this rank
+        # pyrefly: ignore  # bad-assignment
+        windows = np.array(windows, dtype=object)
+        # pyrefly: ignore  # no-matching-overload
+        windows = np.array_split(windows, world_size)[rank]
 
-    window_batches = [
-        windows[i : i + args.batch_size] 
-        for i in range(0, len(windows), args.batch_size)
-    ]
+        # Batch windows together using a fixed batch size to ensure uniform Zarr chunk sizes.
+        # np.array_split produces variable sizes (e.g. 33 and 32) which corrupts Zarr appends!
+        window_batches = [
+            windows[i : i + args.batch_size] 
+            for i in range(0, len(windows), args.batch_size)
+        ]
+        n_batches = max(1, len(windows) // args.batch_size)
+        logger.info(
+            f"Processing {len(windows)} windows in {len(window_batches)} batches of size {args.batch_size}"
+        )
 
-    logger.info(
-        f"Processing {len(windows)} windows in {len(window_batches)} batches of size {args.batch_size}"
-    )
+        all_token_logits = []
+        all_feature_logits = []
+        all_sequence_coords = []
+        is_first_write = True
 
-    all_token_logits = {"positive": [], "negative": []}
-    all_feature_logits = {"positive": [], "negative": []}
-    all_sequence_coords = []
-
-    def flush_accumulators():
-        if not all_sequence_coords:
-            return
-        
-        total_elements = sum(len(x) for x in all_sequence_coords)
-        logger.info(f"Writing all {total_elements} sequence items to Zarr completely at once...")
-        
-        flush_sequence_coords = np.concatenate(all_sequence_coords, axis=0)
-        
-        for strand in ["positive", "negative"]:
-            flush_token_logits = np.concatenate(all_token_logits[strand], axis=0)
-            flush_feature_logits = np.concatenate(all_feature_logits[strand], axis=0)
+        def flush_accumulators():
+            if not all_sequence_coords:
+                return
             
+            total_elements = sum(len(x) for x in all_sequence_coords)
+            logger.info(f"Writing all {total_elements} sequence items to Zarr completely at once...")
+            flush_token_logits = np.concatenate(all_token_logits, axis=0)
+            flush_feature_logits = np.concatenate(all_feature_logits, axis=0)
+            flush_sequence_coords = np.concatenate(all_sequence_coords, axis=0)
+            
+            all_token_logits.clear()
+            all_feature_logits.clear()
+            all_sequence_coords.clear()
+
             flush_result = xr.Dataset(
                 data_vars={
                     "token_logits": (["sequence", "token"], flush_token_logits),
@@ -276,6 +295,7 @@ def _create_predictions(
 
             os.makedirs(args.output_dir, exist_ok=True)
             
+            # Write entirely from memory precisely once avoiding any append chunk mismatches
             flush_result.to_zarr(
                 dataset_path,
                 group=f"/{strand}",
@@ -283,82 +303,91 @@ def _create_predictions(
                 mode="a" if os.path.exists(dataset_path) else "w",
                 consolidated=True,
             )
-            
-            all_token_logits[strand].clear()
-            all_feature_logits[strand].clear()
-            
-        all_sequence_coords.clear()
 
-    batch_iter = tqdm.tqdm(
-        enumerate(window_batches),
-        total=len(window_batches),
-        desc=f"Predicting (both strands)",
-        unit="batch",
-        disable=(rank != 0),
-    )
+        # Process batches — show a progress bar on rank 0 only to avoid interleaved output
+        batch_iter = tqdm.tqdm(
+            enumerate(window_batches),
+            total=len(window_batches),
+            desc=f"Predicting ({strand} strand)",
+            unit="batch",
+            disable=(rank != 0),
+        )
+        for batch_index, window_batch in batch_iter:
+            current_batch_size = len(window_batch)
 
-    for batch_index, window_batch in batch_iter:
-        current_batch_size = len(window_batch)
+            # Get equally sized sequence windows to process for batch
+            input_ids = np.array([w[0] for w in window_batch])
+            input_ids = torch.tensor(input_ids, device=args.device)
+            assert input_ids.shape == (current_batch_size, args.window_size)
 
-        input_ids_pos = np.array([w[0] for w in window_batch])
-        input_ids_pos = torch.tensor(input_ids_pos, device=args.device)
+            # Generate embeddings, if necessary
+            inputs_embeds = None
+            if classifier.config.use_precomputed_base_encodings:
+                # pyrefly: ignore  # not-callable
+                inputs_embeds = base_model(input_ids=input_ids).last_hidden_state
+                assert inputs_embeds.ndim == 3
+                assert inputs_embeds.shape[:2] == (current_batch_size, args.window_size)
 
-        neg_arrays = []
-        for w in window_batch:
-            raw_neg = sequence_input_ids_neg_raw[w[2][0]:w[2][1]]
-            pad_width = args.window_size - len(raw_neg)
-            if pad_width > 0:
-                raw_neg = np.pad(raw_neg, (0, pad_width), constant_values=pad_value)
-            neg_arrays.append(raw_neg)
-            
-        input_ids_neg = torch.tensor(np.array(neg_arrays), device=args.device)
-        input_ids_neg = torch.flip(input_ids_neg, dims=[1])
+            # Get predictions from classifier
+            # pyrefly: ignore  # not-callable
+            token_logits = classifier(input_ids=input_ids, inputs_embeds=inputs_embeds)
+            assert token_logits.shape == (
+                current_batch_size,
+                args.window_size,
+                num_token_classes,
+            )
 
-        inputs_embeds_pos = None
-        inputs_embeds_neg = None
-        if classifier.config.use_precomputed_base_encodings:
-            inputs_embeds_pos = base_model(input_ids=input_ids_pos).last_hidden_state
-            inputs_embeds_neg = torch.flip(inputs_embeds_pos, dims=[1, 2])
+            # Aggregate token logits to entity/feature logits
+            feature_logits = classifier.aggregate_logits(token_logits)
+            assert feature_logits.shape == (
+                current_batch_size,
+                args.window_size,
+                num_feature_classes,
+            )
 
-        token_logits_pos = classifier(input_ids=input_ids_pos, inputs_embeds=inputs_embeds_pos)
-        feature_logits_pos = classifier.aggregate_logits(token_logits_pos)
+            token_logits = token_logits.float().cpu().numpy()
+            feature_logits = feature_logits.float().cpu().numpy()
 
-        token_logits_neg = classifier(input_ids=input_ids_neg, inputs_embeds=inputs_embeds_neg)
-        feature_logits_neg = classifier.aggregate_logits(token_logits_neg)
+            # Extract valid regions from the processed windows
+            token_logits_arrays, feature_logits_arrays, sequence_coord_arrays = (
+                [],
+                [],
+                [],
+            )
+            for i in range(current_batch_size):
+                _, local_window, global_window = window_batch[i]
+                token_logits_window = token_logits[
+                    i, local_window[0] : local_window[1], :
+                ]
+                feature_logits_window = feature_logits[
+                    i, local_window[0] : local_window[1], :
+                ]
+                # pyrefly: ignore  # index-error
+                sequence_coords_window = sequence_coordinates[
+                    # pyrefly: ignore  # index-error
+                    global_window[0] : global_window[1]
+                ]
+                token_logits_arrays.append(token_logits_window)
+                feature_logits_arrays.append(feature_logits_window)
+                sequence_coord_arrays.append(sequence_coords_window)
 
-        token_logits_neg = torch.flip(token_logits_neg, dims=[1])
-        feature_logits_neg = torch.flip(feature_logits_neg, dims=[1])
+            # Concatenate all extracted regions
+            token_logits = np.concatenate(token_logits_arrays, axis=0)
+            feature_logits = np.concatenate(feature_logits_arrays, axis=0)
+            sequence_coords = np.concatenate(sequence_coord_arrays, axis=0)
 
-        token_logits_pos = token_logits_pos.float().cpu().numpy()
-        feature_logits_pos = feature_logits_pos.float().cpu().numpy()
-        token_logits_neg = token_logits_neg.float().cpu().numpy()
-        feature_logits_neg = feature_logits_neg.float().cpu().numpy()
+            # Flip back to 3'->5' if on negative strand
+            if negative_strand:
+                token_logits = flip(token_logits)
+                feature_logits = flip(feature_logits)
+                sequence_coords = flip(sequence_coords)
 
-        seq_c_arrays = []
-        tk_pos_arr = []
-        ft_pos_arr = []
-        tk_neg_arr = []
-        ft_neg_arr = []
+            all_token_logits.append(token_logits)
+            all_feature_logits.append(feature_logits)
+            all_sequence_coords.append(sequence_coords)
 
-        for i in range(current_batch_size):
-            _, local_window, global_window = window_batch[i]
-            
-            tk_pos_arr.append(token_logits_pos[i, local_window[0]:local_window[1], :])
-            ft_pos_arr.append(feature_logits_pos[i, local_window[0]:local_window[1], :])
-            
-            tk_neg_arr.append(token_logits_neg[i, local_window[0]:local_window[1], :])
-            ft_neg_arr.append(feature_logits_neg[i, local_window[0]:local_window[1], :])
-            
-            seq_c_arrays.append(sequence_coordinates[global_window[0]:global_window[1]])
-
-        all_token_logits["positive"].append(np.concatenate(tk_pos_arr, axis=0))
-        all_feature_logits["positive"].append(np.concatenate(ft_pos_arr, axis=0))
-        all_token_logits["negative"].append(np.concatenate(tk_neg_arr, axis=0))
-        all_feature_logits["negative"].append(np.concatenate(ft_neg_arr, axis=0))
-        all_sequence_coords.append(np.concatenate(seq_c_arrays, axis=0))
-
-    flush_accumulators()
-
+        # Flush all accumulated items exactly once at the end of the strand
+        flush_accumulators()
     logger.info(
         f"Consolidating metadata sequentially at {dataset_path} ({rank=}, {world_size=})"
     )

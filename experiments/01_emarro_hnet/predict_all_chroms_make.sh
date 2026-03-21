@@ -2,18 +2,18 @@
 set -e
 cd /workdir/zl843/GeneCAD/genecad || exit 1
 
-INPUT_FILE="/workdir/zl843/GeneCAD/fine-tuning/input_file/arabidopsis/GCA_978657495.1_TAIR12_genomic_5.fna"
-OUTPUT_DIR="/workdir/zl843/GeneCAD/genecad_result/prediction_genecad_emarro_5species/Arabidopsis_thaliana_onetimeGPU"
-SPECIES_ID="Arabidopsis_thaliana"
+INPUT_FILE="/workdir/zl843/GeneCAD/fine-tuning/input_file/test_species/walnut_Juglans_regia/Juglans_regia.Walnut_2.0.dna.toplevel.fa"
+OUTPUT_DIR="/workdir/zl843/GeneCAD/genecad_result/prediction_genecad_emarro_10species/Juglans_regia"
+SPECIES_ID="Juglans_regia"
 
 BASE_MODEL="emarro/pcad2-200M-cnet-baseline"
 HEAD_MODEL="Zong-Yan/genecad_10-species"
 
 # Extract main numbered chromosomes from FASTA or GFF
 if [[ "$INPUT_FILE" == *.gff* ]]; then
-    CHROM_IDS=$(awk -F'\t' '!/^#/ {print $1}' "$INPUT_FILE" | sort -u)
+    CHROM_IDS=$(awk -F'\t' '!/^#/ {print $1}' "$INPUT_FILE" | sort -u | grep -iE '^(chr)?[0-9]+$')
 else
-    CHROM_IDS=$(grep "^>" "$INPUT_FILE" | sed 's/^>//' | awk '{print $1}')
+    CHROM_IDS=$(grep "^>" "$INPUT_FILE" | sed 's/^>//' | awk '{print $1}' | grep -iE '^(chr)?[0-9]+$')
 fi
 for CHR_ID in $CHROM_IDS; do
     echo "========================================"
