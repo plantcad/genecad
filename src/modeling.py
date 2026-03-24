@@ -173,7 +173,7 @@ class GeneClassifierConfig:
     dropout: float = 0.1
     max_sequence_length: Optional[int] = None
 
-    architecture: Literal["encoder-only", "sequence-only", "classifier-only", "all"] = (
+    architecture: Literal["encoder-only", "sequence-only", "classifier-only", "cnn", "all"] = (
         "encoder-only"
     )
     token_embedding_dim: int = 512
@@ -183,6 +183,9 @@ class GeneClassifierConfig:
     base_encoder_revision: str | None = None
     base_encoder_frozen: bool = True
     base_encoder_randomize: bool = False
+
+    loss_weighting: str = "none"  # "none" | "inverse-frequency" | "focal"
+    focal_gamma: float = 2.0      # focusing parameter γ for focal loss (ignored when loss_weighting != "focal")
 
     train_eval_frequency: Optional[int] = 250
     enable_visualization: bool = True
@@ -209,7 +212,7 @@ class GeneClassifierConfig:
 
     @property
     def hidden_size(self) -> int:
-        if self.architecture in ["all"]:
+        if self.architecture in ["all", "cnn"]:
             return min(self.base_encoder_dim, self.token_embedding_dim * 6)
         if self.architecture in ["classifier-only"]:
             return self.base_encoder_dim
@@ -219,15 +222,19 @@ class GeneClassifierConfig:
 
     @property
     def use_base_encoder(self) -> bool:
-        return self.architecture in ["all", "encoder-only", "classifier-only"]
+        return self.architecture in ["all", "cnn", "encoder-only", "classifier-only"]
 
     @property
     def use_head_encoder(self) -> bool:
         return self.architecture in ["all", "sequence-only", "encoder-only"]
 
     @property
+    def use_cnn_head(self) -> bool:
+        return self.architecture == "cnn"
+
+    @property
     def use_token_embedding(self) -> bool:
-        return self.architecture in ["all", "sequence-only"]
+        return self.architecture in ["all", "cnn", "sequence-only"]
 
     @property
     def use_precomputed_base_encodings(self) -> bool:
@@ -279,13 +286,54 @@ def validate_config(config: GeneClassifierConfig) -> None:
         )
 
 
+# ------------------------------------------------------------------------------------------------
+# Focal Loss
+# ------------------------------------------------------------------------------------------------
+
+
+class FocalLoss(nn.Module):
+    """Focal loss with per-class inverse-frequency weighting.
+
+    FL(p_t) = -α_t * (1 - p_t)^γ * log(p_t)
+
+    Args:
+        weight: Per-class weights (α_t). Shape: (num_classes,).
+        gamma: Focusing parameter γ ≥ 0. At γ=0 this reduces to weighted CE.
+        ignore_index: Label value to ignore when computing the loss.
+    """
+
+    def __init__(self, weight: Tensor, gamma: float = 2.0, ignore_index: int = -100):
+        super().__init__()
+        self.register_buffer("weight", weight)
+        self.gamma = gamma
+        self.ignore_index = ignore_index
+
+    def forward(self, logits: Tensor, targets: Tensor) -> Tensor:
+        # logits: (N, C), targets: (N,)
+        # Step 1: standard CE loss per token (unweighted, unreduced)
+        ce_loss = F.cross_entropy(
+            logits, targets, ignore_index=self.ignore_index, reduction="none"
+        )  # (N,)
+        # Step 2: compute p_t = exp(-CE) for each token
+        p_t = torch.exp(-ce_loss)  # (N,)  — p_t ∈ (0, 1]
+        # Step 3: gather per-class α weight, masking ignored positions
+        valid_mask = targets != self.ignore_index  # (N,)
+        alpha_t = torch.zeros_like(ce_loss)  # (N,)
+        alpha_t[valid_mask] = self.weight[targets[valid_mask]]  # type: ignore[index]
+        # Step 4: focal modulation
+        focal_loss = alpha_t * (1.0 - p_t) ** self.gamma * ce_loss  # (N,)
+        # Step 5: mean over valid tokens only
+        n_valid = valid_mask.sum().clamp(min=1)
+        return focal_loss[valid_mask].sum() / n_valid
+
+
 class GeneClassifier(L.LightningModule):
     def __init__(
         self,
         config: GeneClassifierConfig,
         learning_rate: float = 8e-4,
         learning_rate_decay: str = "none",
-        learning_rate_warmup_ratio: float = 0.1,
+        learning_rate_warmup_ratio: float = 0.02,
         torch_compile: bool = False,
     ):
         super(GeneClassifier, self).__init__()
@@ -300,7 +348,7 @@ class GeneClassifier(L.LightningModule):
         self.num_total_entities = (
             self.num_core_entities + 1
         )  # Entity count w/ background
-        self.criterion = torch.nn.CrossEntropyLoss()
+        self.criterion = self._build_criterion(config)
 
         self.classifier = MLP(
             input_dim=self.config.hidden_size,
@@ -309,6 +357,19 @@ class GeneClassifier(L.LightningModule):
             bias=True,
             dropout=self.config.dropout,
         )
+
+        self.cnn_head: nn.Sequential | None = None
+        if config.use_cnn_head:
+            # 1D Convolutional Neural Network for ultra-fast local boundary detection.
+            # Kernel sizes (5, 3, 3) give a receptive field of 9 tokens.
+            self.cnn_head = nn.Sequential(
+                nn.Conv1d(self.config.hidden_size, self.config.hidden_size, kernel_size=5, padding=2, groups=4),
+                nn.SiLU(),
+                nn.Conv1d(self.config.hidden_size, self.config.hidden_size, kernel_size=3, padding=1),
+                nn.SiLU(),
+                nn.Conv1d(self.config.hidden_size, self.config.hidden_size, kernel_size=3, padding=1),
+                nn.SiLU()
+            )
 
         self.head_config: ModernBertConfig | None = None
         self.head_encoder: ModernBertModel | None = None
@@ -370,7 +431,8 @@ class GeneClassifier(L.LightningModule):
                 config.base_encoder_dim, self.embedding_projection_dim
             )
 
-        if self.config.token_class_frequencies is not None:
+        if self.config.token_class_frequencies is not None and self.config.loss_weighting == "none":
+            # For unweighted loss, initialize bias to log-frequencies (optimal prior)
             # Clip class frequencies on low side to 1:1M
             freqs = np.clip(
                 np.array(
@@ -384,6 +446,9 @@ class GeneClassifier(L.LightningModule):
             )
             self.bias = nn.Parameter(torch.tensor(np.log10(freqs), dtype=self.dtype))
         else:
+            # If we are using weighted loss (like Focal), the target distribution is artificially flattened.
+            # Starting with log(freq) biases is mathematically incorrect and will force Adam to waste 
+            # 100,000 steps just dragging the rare class biases from -6 back up to 0.
             self.bias = nn.Parameter(torch.zeros(self.num_labels))
 
         if self.torch_compile:
@@ -470,6 +535,41 @@ class GeneClassifier(L.LightningModule):
         return [optimizer], [scheduler_config]
 
     # -------------------------------------------------------------------------
+    # Criterion
+    # -------------------------------------------------------------------------
+
+    def _build_criterion(self, config: "GeneClassifierConfig") -> nn.Module:
+        """Build the loss criterion based on config.loss_weighting.
+
+        Weight function: w_c = 1 / sqrt(freq_c), normalised to mean=1.
+
+        sqrt inverse-frequency is preferred over raw 1/freq because it naturally
+        tames the extreme weight ratio (~8,000×  →  ~90×) without needing an
+        artificial frequency clip. log(1/freq) would be too soft; exp(1/freq)
+        explodes for rare classes; sqrt is the practical sweet spot for
+        token-level imbalance in NLP/genomics.
+        """
+        if config.loss_weighting == "none":
+            return nn.CrossEntropyLoss(ignore_index=IGNORE_INDEX)
+
+        # sqrt inverse-frequency weights — no clipping required
+        freqs = np.array(
+            [config.token_class_frequencies[c] for c in config.token_class_names],
+            dtype=np.float64,
+        )
+        assert (freqs > 0).all(), "All class frequencies must be positive"
+        raw_weights = 1.0 / np.sqrt(freqs)
+        raw_weights = raw_weights / raw_weights.mean()  # normalise so mean weight ≈ 1
+        weight = torch.tensor(raw_weights, dtype=torch.float32)
+
+        if config.loss_weighting == "inverse-frequency":
+            return nn.CrossEntropyLoss(weight=weight, ignore_index=IGNORE_INDEX)
+        elif config.loss_weighting == "focal":
+            return FocalLoss(weight=weight, gamma=config.focal_gamma, ignore_index=IGNORE_INDEX)
+        else:
+            raise ValueError(f"Unknown loss_weighting: {config.loss_weighting!r}")
+
+    # -------------------------------------------------------------------------
     # Model Methods
     # -------------------------------------------------------------------------
 
@@ -537,6 +637,17 @@ class GeneClassifier(L.LightningModule):
                 inputs_embeds=hidden_states
             ).last_hidden_state
             assert hidden_states.shape == (B, S, H)
+            
+        # Compute CNN head encoding
+        if self.config.use_cnn_head:
+            # Conv1d expects (Batch, Channels, Length), so we permute
+            hidden_states = hidden_states.permute(0, 2, 1)
+            # pyrefly: ignore
+            hidden_states = self.cnn_head(hidden_states)
+            # Permute back to (Batch, Length, Channels)
+            hidden_states = hidden_states.permute(0, 2, 1)
+            assert hidden_states.shape == (B, S, H)
+            
         return hidden_states
 
     def _token_logits(self, hidden_states: Tensor) -> Tensor:

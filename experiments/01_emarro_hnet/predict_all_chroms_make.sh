@@ -1,21 +1,21 @@
 #!/bin/bash
 set -e
-cd /workdir/zl843/genecad || exit 1
+cd /workdir/zl843/GeneCAD/genecad || exit 1
 
-INPUT_FILE="/workdir/zl843/data/input/Juglans_regia.Walnut_2.0.dna.toplevel.fa"
-OUTPUT_DIR="/workdir/zl843/data/output/prediction_genecad_emarro_hnet_10species_Juglans_regia"
-SPECIES_ID="Juglans_regia"
+INPUT_FILE="/workdir/zl843/GeneCAD/fine-tuning/input_file/arabidopsis/GCA_978657495.1_TAIR12_genomic.fna"
+OUTPUT_DIR="/workdir/zl843/GeneCAD/genecad_result/prediction_genecad_emarro_mlp_full_5species/Arabidopsis_thaliana"
+SPECIES_ID="arabidopsis"
 
 BASE_MODEL="emarro/pcad2-200M-cnet-baseline"
-HEAD_MODEL="Zong-Yan/genecad_10-species"
+HEAD_MODEL="/workdir/zl843/GeneCAD/genecad_result/training_emarro_multispecies_focal_sqrt_v6_BERT/checkpoints/last.ckpt"
 
 # Extract main numbered chromosomes from FASTA or GFF
 if [[ "$INPUT_FILE" == *.gff* ]]; then
     CHROM_IDS=$(awk -F'\t' '!/^#/ {print $1}' "$INPUT_FILE" | sort -u | grep -iE '^(chr)?[0-9]+$')
 else
     CHROM_IDS=$(grep "^>" "$INPUT_FILE" | sed 's/^>//' | awk '{print $1}' | head -50)
-
 fi
+
 # Detect number of GPUs (fallback to 1 if nvidia-smi not available)
 NUM_GPUS=$(nvidia-smi --list-gpus 2>/dev/null | wc -l)
 if [ "$NUM_GPUS" -eq 0 ]; then NUM_GPUS=1; fi

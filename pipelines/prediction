@@ -8,6 +8,7 @@ LAUNCHER ?= python
 PRED_BATCH_SIZE ?= 32
 PRED_DTYPE ?= bfloat16
 PRED_STRIDE ?= 4096
+DECODING_METHOD ?= viterbi
 
 # GPU launcher for the prediction step (defaults to LAUNCHER if not set).
 # When using torchrun for multi-GPU support, pass GPU_LAUNCHER=torchrun --nproc_per_node=N
@@ -102,7 +103,7 @@ $(PIPELINE_DIR)/predictions__raw.gff: $(PIPELINE_DIR)/intervals.zarr
 	$(LAUNCHER) scripts/predict.py export_gff \
 	  --input $(PIPELINE_DIR)/intervals.zarr \
 	  --output $(PIPELINE_DIR)/predictions__raw.gff \
-	  --decoding-method viterbi \
+	  --decoding-method $(DECODING_METHOD) \
 	  --min-transcript-length 3 \
 	  --strip-introns yes
 

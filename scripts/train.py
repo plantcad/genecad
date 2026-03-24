@@ -202,6 +202,19 @@ def parse_args(args: Optional[list[str]] = None) -> Args:
         choices=["yes", "no"],
         help="Randomize the base encoder model instead of loading pretrained weights",
     )
+    parser.add_argument(
+        "--loss-weighting",
+        type=str,
+        default="none",
+        choices=["none", "inverse-frequency", "focal"],
+        help="Loss weighting strategy to handle class imbalance",
+    )
+    parser.add_argument(
+        "--focal-gamma",
+        type=float,
+        default=2.0,
+        help="Focusing parameter gamma for focal loss (only used when --loss-weighting focal)",
+    )
     return parser.parse_args(args)
 
 
@@ -306,41 +319,47 @@ def train(args: Args) -> None:
     loggers = [wandb_logger, csv_logger]
 
     # Initialize model
-    # Load checkpoint if provided
     logger.info(
         f"Initializing model (learning_rate={args.learning_rate}, learning_rate_decay={args.learning_rate_decay})"
     )
+    
+    # Create configuration first so it can override saved hyperparameters
+    _base_config = AutoConfig.from_pretrained(args.base_encoder_path, trust_remote_code=True)
+    _d_model = _base_config.d_model
+    # HNet models store d_model as a list (e.g. [1024])
+    if isinstance(_d_model, (list, tuple)):
+        _d_model = _d_model[0]
+    # Only double for Caduceus models that use RCPS (forward + reverse-complement sequences)
+    _is_rcps = getattr(_base_config, 'rcps', False)
+    base_encoder_dim = _d_model * (2 if _is_rcps else 1)
+    
+    config = GeneClassifierConfig(
+        architecture=args.architecture,
+        max_sequence_length=args.window_size,
+        token_embedding_dim=args.token_embedding_dim,
+        train_eval_frequency=args.train_eval_frequency,
+        head_encoder_layers=args.head_encoder_layers,
+        base_encoder_path=args.base_encoder_path,
+        base_encoder_dim=base_encoder_dim,
+        enable_visualization=args.enable_visualization == "yes",
+        base_encoder_frozen=args.base_encoder_frozen == "yes",
+        base_encoder_randomize=args.randomize_base == "yes",
+        loss_weighting=args.loss_weighting,
+        focal_gamma=args.focal_gamma,
+    )
+
     if args.checkpoint and args.checkpoint_type == "model":
         logger.info(f"Loading model from checkpoint: {args.checkpoint}")
         model = GeneClassifier.load_from_checkpoint(
             args.checkpoint,
+            config=config,
             learning_rate=args.learning_rate,
             learning_rate_decay=args.learning_rate_decay,
+            strict=False, # Allow missing head_encoder if architecture changed to classifier-only
         )
-        config = model.config
     else:
         logger.info(
             f"Creating new model (architecture={args.architecture}, base_encoder_path={args.base_encoder_path})"
-        )
-        _base_config = AutoConfig.from_pretrained(args.base_encoder_path, trust_remote_code=True)
-        _d_model = _base_config.d_model
-        # HNet models store d_model as a list (e.g. [1024])
-        if isinstance(_d_model, (list, tuple)):
-            _d_model = _d_model[0]
-        # Only double for Caduceus models that use RCPS (forward + reverse-complement sequences)
-        _is_rcps = getattr(_base_config, 'rcps', False)
-        base_encoder_dim = _d_model * (2 if _is_rcps else 1)
-        config = GeneClassifierConfig(
-            architecture=args.architecture,
-            max_sequence_length=args.window_size,
-            token_embedding_dim=args.token_embedding_dim,
-            train_eval_frequency=args.train_eval_frequency,
-            head_encoder_layers=args.head_encoder_layers,
-            base_encoder_path=args.base_encoder_path,
-            base_encoder_dim=base_encoder_dim,
-            enable_visualization=args.enable_visualization == "yes",
-            base_encoder_frozen=args.base_encoder_frozen == "yes",
-            base_encoder_randomize=args.randomize_base == "yes",
         )
         model = GeneClassifier(
             config,
@@ -349,7 +368,7 @@ def train(args: Args) -> None:
             torch_compile=args.torch_compile == "yes",
         )
 
-    logger.info(f"Model for training:\n{model}")
+    logger.info(f"Model for training:\\n{model}")
 
     # Setup callbacks
     logger.info("Setting up callbacks")
@@ -369,9 +388,9 @@ def train(args: Args) -> None:
     callbacks = [checkpoint_callback, lr_monitor_callback, throughput_monitor_callback]
 
     strategy = args.strategy
-    if config.use_head_encoder and strategy == "ddp":
+    if (config.use_head_encoder or not config.base_encoder_frozen) and strategy == "ddp":
         logger.warning(
-            "Coercing strategy from 'ddp' to 'ddp_find_unused_parameters_true' when using ModernBERT head encoder"
+            "Coercing strategy from 'ddp' to 'ddp_find_unused_parameters_true' when using ModernBERT head encoder or full fine-tuning"
         )
         strategy = "ddp_find_unused_parameters_true"
 
