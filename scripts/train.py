@@ -15,7 +15,13 @@ from typing import Optional
 from transformers import AutoConfig
 from src.dataset import XarrayDataset
 from src.config import WINDOW_SIZE
-from src.modeling import GeneClassifier, GeneClassifierConfig, ThroughputMonitor
+from src.analysis import get_token_class_weights
+from src.modeling import (
+    GeneClassifier,
+    GeneClassifierConfig,
+    ThroughputMonitor,
+    TOKEN_CLASS_NAMES,
+)
 from src.logging import rank_zero_logger
 from src.visualization import set_visualization_save_dir
 
@@ -215,6 +221,13 @@ def parse_args(args: Optional[list[str]] = None) -> Args:
         default=2.0,
         help="Focusing parameter gamma for focal loss (only used when --loss-weighting focal)",
     )
+    parser.add_argument(
+        "--compute-class-frequencies",
+        type=str,
+        default="no",
+        choices=["yes", "no"],
+        help="Automatically compute class frequencies from the training dataset at runtime",
+    )
     return parser.parse_args(args)
 
 
@@ -322,7 +335,18 @@ def train(args: Args) -> None:
     logger.info(
         f"Initializing model (learning_rate={args.learning_rate}, learning_rate_decay={args.learning_rate_decay})"
     )
-    
+
+    token_class_frequencies = None
+    if args.compute_class_frequencies == "yes":
+        logger.info(
+            f"Automatically calculating class frequencies from dynamic dataset: {args.train_dataset}"
+        )
+        _, weights_df = get_token_class_weights(
+            path=args.train_dataset, split="train", class_names=TOKEN_CLASS_NAMES
+        )
+        token_class_frequencies = weights_df.set_index("label_name")["label_freq"].to_dict()
+        logger.info(f"Calculated frequencies: {token_class_frequencies}")
+
     # Create configuration first so it can override saved hyperparameters
     _base_config = AutoConfig.from_pretrained(args.base_encoder_path, trust_remote_code=True)
     _d_model = _base_config.d_model
@@ -330,9 +354,9 @@ def train(args: Args) -> None:
     if isinstance(_d_model, (list, tuple)):
         _d_model = _d_model[0]
     # Only double for Caduceus models that use RCPS (forward + reverse-complement sequences)
-    _is_rcps = getattr(_base_config, 'rcps', False)
+    _is_rcps = getattr(_base_config, "rcps", False)
     base_encoder_dim = _d_model * (2 if _is_rcps else 1)
-    
+
     config = GeneClassifierConfig(
         architecture=args.architecture,
         max_sequence_length=args.window_size,
@@ -346,6 +370,7 @@ def train(args: Args) -> None:
         base_encoder_randomize=args.randomize_base == "yes",
         loss_weighting=args.loss_weighting,
         focal_gamma=args.focal_gamma,
+        token_class_frequencies=token_class_frequencies,
     )
 
     if args.checkpoint and args.checkpoint_type == "model":

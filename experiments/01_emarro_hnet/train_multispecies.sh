@@ -273,8 +273,9 @@ $PYTHON scripts/train.py \
     --limit-val-batches 1.0 \
     --log-frequency 1 \
     --enable-visualization yes \
-    --torch-compile no \
-    --loss-weighting none \
+    --randomize-base no \
+    --loss-weighting inverse-frequency \
+    --compute-class-frequencies yes \
     --project-name "$PROJECT_NAME" \
     --run-name "$RUN_NAME" \
     2>&1 | tee "$OUTPUT_DIR/training.log"

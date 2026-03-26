@@ -130,24 +130,24 @@ TOKEN_CLASS_NAMES = [
 ]
 # fmt: off
 TOKEN_CLASS_FREQUENCIES: dict[str, float] = {
-    # Computed from https://github.com/Open-Athena/oa-cornell-dna/issues/50#issuecomment-2986102331
-    TokenBiluoClass.INTERGENIC.value: 7.531898e-01, # [0]
-    TokenBiluoClass.B_INTRON.value: 3.422340e-04, # [1]
-    TokenBiluoClass.I_INTRON.value: 1.071083e-01, # [2]
-    TokenBiluoClass.L_INTRON.value: 3.426275e-04, # [3]
-    TokenBiluoClass.U_INTRON.value: 2.781372e-08, # [4]
-    TokenBiluoClass.B_FIVE_PRIME_UTR.value: 9.035149e-05, # [5]
-    TokenBiluoClass.I_FIVE_PRIME_UTR.value: 1.633261e-02, # [6]
-    TokenBiluoClass.L_FIVE_PRIME_UTR.value: 9.067691e-05, # [7]
-    TokenBiluoClass.U_FIVE_PRIME_UTR.value: 2.447608e-07, # [8]
-    TokenBiluoClass.B_CDS.value: 3.960827e-04, # [9]
-    TokenBiluoClass.I_CDS.value: 9.466096e-02, # [10]
-    TokenBiluoClass.L_CDS.value: 3.961328e-04, # [11]
-    TokenBiluoClass.U_CDS.value: 2.781372e-08, # [12]
-    TokenBiluoClass.B_THREE_PRIME_UTR.value: 8.391818e-05, # [13]
-    TokenBiluoClass.I_THREE_PRIME_UTR.value: 2.688256e-02, # [14]
-    TokenBiluoClass.L_THREE_PRIME_UTR.value: 8.319502e-05, # [15]
-    TokenBiluoClass.U_THREE_PRIME_UTR.value: 2.072122e-07, # [16]
+    # Computed from multispecies training data (Athaliana, Osativa, Gmax, Hvulgare, Ptrichocarpa)
+    TokenBiluoClass.INTERGENIC.value: 7.379643e-01, # [0]
+    TokenBiluoClass.B_INTRON.value: 3.037204e-04, # [1]
+    TokenBiluoClass.I_INTRON.value: 1.298960e-01, # [2]
+    TokenBiluoClass.L_INTRON.value: 3.037204e-04, # [3]
+    TokenBiluoClass.U_INTRON.value: 5.163757e-08, # [4]
+    TokenBiluoClass.B_FIVE_PRIME_UTR.value: 8.010285e-05, # [5]
+    TokenBiluoClass.I_FIVE_PRIME_UTR.value: 1.585692e-02, # [6]
+    TokenBiluoClass.L_FIVE_PRIME_UTR.value: 8.042778e-05, # [7]
+    TokenBiluoClass.U_FIVE_PRIME_UTR.value: 1.479673e-07, # [8]
+    TokenBiluoClass.B_CDS.value: 3.555225e-04, # [9]
+    TokenBiluoClass.I_CDS.value: 8.515201e-02, # [10]
+    TokenBiluoClass.L_CDS.value: 3.555760e-04, # [11]
+    TokenBiluoClass.U_CDS.value: 5.163757e-08, # [12]
+    TokenBiluoClass.B_THREE_PRIME_UTR.value: 7.472892e-05, # [13]
+    TokenBiluoClass.I_THREE_PRIME_UTR.value: 2.950223e-02, # [14]
+    TokenBiluoClass.L_THREE_PRIME_UTR.value: 7.435508e-05, # [15]
+    TokenBiluoClass.U_THREE_PRIME_UTR.value: 1.407199e-07, # [16]
 }
 # fmt: on
 # Assert equality of pre-calculated frequency classes until support for dynamic configuration is necessary

@@ -33,14 +33,31 @@ def get_sequence_modeling_labels(ds: xr.Dataset) -> xr.DataArray:
 def get_token_class_weights(
     path: str, split: str, class_names: list[str]
 ) -> tuple[xr.Dataset, pd.DataFrame]:
-    path_fmt = os.path.join(path, f"{split}.{{rank}}.zarr")
-    drop_variables = [v for v in xr.open_zarr(path_fmt.format(rank=0)) if v != "labels"]
-    paths = glob.glob(path_fmt.format(rank="*"))
-    dataset = xr.concat(
-        [xr.open_zarr(p, drop_variables=drop_variables, chunks=None) for p in paths],
-        dim="sample",
-    )
-    labels, counts = np.unique(dataset.labels.values, return_counts=True)
+    # Determine potential paths for either consolidated or sharded zarr stores
+    consolidated_path = os.path.join(path, f"{split}.zarr")
+    if os.path.isdir(consolidated_path):
+        dataset = xr.open_zarr(consolidated_path, chunks=None)
+    elif path.endswith(".zarr") and os.path.isdir(path):
+        dataset = xr.open_zarr(path, chunks=None)
+    else:
+        path_fmt = os.path.join(path, f"{split}.{{rank}}.zarr")
+        paths = sorted(glob.glob(path_fmt.format(rank="*")))
+        if not paths:
+            raise FileNotFoundError(f"No Zarr datasets found for split '{split}' at {path}")
+        
+        # Determine variables to drop (keep only label-related ones)
+        first_ds = xr.open_zarr(paths[0])
+        label_var = "labels" if "labels" in first_ds else "tag_labels"
+        drop_variables = [v for v in first_ds if v != label_var]
+        
+        dataset = xr.concat(
+            [xr.open_zarr(p, drop_variables=drop_variables, chunks=None) for p in paths],
+            dim="sample",
+        )
+
+    # Use whatever label variable was found
+    label_var = "labels" if "labels" in dataset else "tag_labels"
+    labels, counts = np.unique(dataset[label_var].values, return_counts=True)
     label_names = {i: name for i, name in enumerate(class_names)}
 
     weights = (
