@@ -254,19 +254,19 @@ Note that currently only one GPU per-node is supported.  This means that you can
 
 ## Inference
 
-The inference pipeline requires these inputs at a minimum:
+The easiest way to generate predictions is to use our included wrapper script. It will automatically download the default 5-species `Zong-Yan/genecad_5-species` model checkpoint from Hugging Face and process your genome:
 
 ```bash
-INPUT_FILE=/path/to/input.fasta \
-OUTPUT_DIR=/path/to/output \
-SPECIES_ID=species_id \
-CHR_ID=chromosome_id \
-make -f pipelines/prediction all
+bash scripts/predict.sh \
+  --input /path/to/genome.fa \
+  --output /path/to/results \
+  --species unknown_species
 ```
+*Note: The script warns if your FASTA contains more than 50 sequences, as the model is optimized for chromosome-level assemblies. Processing thousands of unplaced contigs may result in long inference times.*
 
-Note that the `SPECIES_ID` variable is used for more informative logging and it is added to attributes in resulting Xarray datasets (along with `CHR_ID`).  It can be any descriptive string, e.g. `athaliana` or `arabidopsis_thaliana`.  The `CHR_ID` variable must be a string matching the name of the target chromosome in the input FASTA file.  It too will be included in logging and attributes.
+If you want to use a locally fine-tuned model checkpoint instead of the default 5-species model, simply pass `--model checkpoints/your_model.ckpt`.
 
-See the [pipelines/prediction](pipelines/prediction) Makefile for more details on other configurable parameters.
+See the [pipelines/prediction](pipelines/prediction) Makefile if you wish to run the underlying steps manually instead of using `predict.sh`.
 
 ### Steps
 
@@ -280,9 +280,23 @@ Each of these has an associated `make` target, i.e. `make sequences`, `make pred
 
 ### Dry run
 
-The shell commands run by `make` can be seen with either the `--dry-run` or `-n` flags, each of which does the same thing.  This tells `make` to print all the commands that *would* be executed, which can be helpful for debugging or clarity on what the pipeline actually does.  It can also be useful for executing individual steps manually.
+The internal shell commands run by `make` can be seen with either the `--dry-run` or `-n` flags. This tells `make` to print all the commands that *would* be executed, which can be helpful for debugging or clarity on what the pipeline actually does.  It can also be useful for executing individual steps manually.
 
 Additionally, this can be very useful for determining what targets already exist.  I.e. if you run `make predictions` instead of `make all`, the pipeline will only run up to the target for generating token logits from the GeneCAD classifier.  Running `make -n annotations` (or `make -n all`, which is an alias), would then show that only the GFF export needs to be run rather than the whole pipeline.
+
+## Fine-Tuning
+
+If you want to train the model on a new genome, you do not need to start from scratch! You can seamlessly fine-tune from our previous multi-species checkpoint using the included training wrapper:
+
+```bash
+bash scripts/train.sh \
+  --data-dir /path/to/data \
+  --species "Mynewgenome Athaliana" \
+  --output /path/to/results \
+  --model Zong-Yan/genecad_5-species
+```
+
+This script handles the entire 8-step extraction, tokenization, filtering, and PyTorch Lightning training pipeline automatically. To train a completely fresh model on the base encoder, simply pass `--model none`.
 
 ### Outputs
 
@@ -378,47 +392,29 @@ uv run python scripts/refine.py \
 
 A simple way to evaluate predicted annotations is with the gffcompare tool.  It can either be [built from source](https://github.com/gpertea/gffcompare?tab=readme-ov-file#building-from-source) or [installed via conda](https://anaconda.org/bioconda/gffcompare).  See [examples/scripts/run_evaluation.sh](examples/scripts/run_evaluation.sh) for an example of how to use it.  See [Dockerfile](Dockerfile) for an example installation from source.
 
-While `gffcompare` offers a useful starting point for evaluating in silico annotations, it is limited by its inability to accurately assess regions independent of predicted UTRs.  UTRs are known to be very difficult to predict accurately from DNA alone and these predictions are of limited utility in many applications.  As a result, we offer a separate evaluation tool for assessing performance of whole-transcript annotations that excludes UTRs.  This tool produces metrics aggregated to several levels (much like `gffcompare`) as well as a `transcript_cds` score that scores perfect, predicted annotations of introns and exons over translated regions only.  Here is some example usage:
+While `gffcompare` offers a useful starting point for evaluating in silico annotations, it is limited by its inability to accurately assess regions independent of predicted UTRs. As a result, we offer a comprehensive evaluation script (`scripts/evaluate.py`) that performs four key assessments:
+
+1. **CDS and Transcript Matching**: Evaluates exact intron/exon boundary matches over translated regions (ignoring UTRs).
+2. **Structural Evaluation**: Performs `gffcompare`-style evaluation of base, exon, intron, and locus-level accuracy based purely on predicted coding sequences.
+3. **Splice Site Verification**: Checks predicted intron boundaries for canonical (GT-AG / GC-AG) motifs.
+4. **BUSCO Assessment**: Automatically evaluates transcriptome completeness. The script will automatically detect and use `busco` if it's available in your `PATH` or in a conda environment (e.g., `busco-5.5.0`).
+
+Here is an example usage on a single chromosome:
 
 ```bash
-python scripts/gff.py evaluate \
-  --reference /path/to/reference.gff \
-  --input /path/to/predictions.gff \
-  --output /path/to/results
-cat /path/to/results/gffeval.stats.tsv
-# level                                precision   recall   f1
-# transcript_cds                          77.34    47.39  58.77
-# transcript_intron                       68.70    42.09  52.20
-# transcript                               0.00     0.00   0.00
-# exon_cds_longest_transcript_only        83.06    60.16  69.78
-# exon_longest_transcript_only            60.05    40.73  48.54
-# intron_cds_longest_transcript_only      87.58    66.24  75.43
-# intron_longest_transcript_only          89.21    62.00  73.16
-# exon_cds                                94.04    47.10  62.77
-# exon                                    65.14    28.72  39.86
-# intron_cds                              97.29    51.15  67.05
-# intron                                  96.32    45.36  61.68
+python scripts/evaluate.py \
+  --ref /path/to/reference.gff \
+  --pred /path/to/predictions.gff \
+  --fasta /path/to/genome.fa \
+  --lineage embryophyta_odb10 \
+  --cpu 8 \
+  --output report.txt
 ```
 
-For each metric level, three values are reported: precision, recall, and F1 score. The GFF specified by `--reference` contains all true features, while the gff specified by `--input` provides the predicted features. Below is a definition of a match, or true positive, for each level.
-
-| Level                              | Description                                                                                                                                                                                                                                                                 |
-|------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| transcript_cds                     | Instances where a predicted transcript's CDS exactly matches the true transcript's CDS. Discrepancies in the UTRs are allowed.                                                                                                                                              |
-| transcript_intron                  | Instances where a predicted transcript's intron boundaries exactly match the true transcript's intron boundaries. Discrepancies in the transcription start and stop are allowed, as long as they do not alter splice sites.                                                 |
-| transcript                         | Instances where a predicted transcript exactly matches the true transcript, including CDS and UTRs.                                                                                                                                                                         |
-| exon_cds_longest_transcript_only   | Instances where a predicted exon's boundaries exactly match the true exon's boundaries, taking into account only the exons from the longest true transcript and excluding UTR exons. If an exon is split between UTR and CDS sequence, only the CDS portion is condsidered. |
-| exon_longest_transcript_only       | Instances where a predicted exon's boundaries exactly match a true exon's boundaries, taking into account only the exons from the longest true transcript.                                                                                                                  |
-| intron_cds_longest_transcript_only | Instances where a predicted intron's boundaries exactly match the true intron's boundaries, taking into account only the introns from the longest true transcript and excluding introns that border UTR sequence.                                                           |
-| intron_longest_transcript_only     | Instances where a predicted intron's boundaries exactly match a true intron's boundaries, taking into account only the introns from the longest true transcript.                                                                                                            |
-| exon_cds                           | Instances where a predicted exon's boundaries exactly match the true exon's boundaries, excluding UTR exons. If an exon is split between UTR and CDS sequence, only the CDS portion is condsidered. Exons from alternative transcripts are considered.                      |
-| exon                               | Instances where a predicted exon's boundaries exactly match a true exon's boundaries. Exons from alternative transcripts are considered.                                                                                                                                    |
-| intron_cds                         | Instances where a predicted intron's boundaries exactly match the true intron's boundaries, excluding introns that border UTR sequence. Introns from alternative transcripts are considered.                                                                                |
-| intron                             | Instances where a predicted intron's boundaries exactly match a true intron's boundaries. Exons from alternative transcripts are considered.                                                                                                                                |
-
-Note: for the first three transcript-level metrics, a true positive result is counted whenever the predicted transcript matches at least one of the true transcripts for a gene with alternative splicing.
+This will produce a detailed text report (`report.txt`) summarizing all four metrics, and generate the corresponding complete BUSCO output directory completely securely alongside it.
 
 ## Development
+
 
 ### Environment
 
