@@ -97,12 +97,6 @@ def parse_args(args: Optional[list[str]] = None) -> Args:
         help="how much of the validation dataset to check.",
     )
     parser.add_argument(
-        "--limit-train-batches",
-        type=float,
-        default=1.0,
-        help="how much of the training dataset to check.",
-    )
-    parser.add_argument(
         "--limit-train-examples",
         type=int,
         default=None,
@@ -201,13 +195,6 @@ def parse_args(args: Optional[list[str]] = None) -> Args:
         default="no",
         choices=["yes", "no"],
         help="Randomize the base encoder model instead of loading pretrained weights",
-    )
-    parser.add_argument(
-        "--class-weights",
-        type=float,
-        nargs="+",
-        default=None,
-        help="List of class weights to apply to the CrossEntropyLoss (must match num_labels).",
     )
     return parser.parse_args(args)
 
@@ -348,7 +335,6 @@ def train(args: Args) -> None:
             enable_visualization=args.enable_visualization == "yes",
             base_encoder_frozen=args.base_encoder_frozen == "yes",
             base_encoder_randomize=args.randomize_base == "yes",
-            class_weights=args.class_weights,
         )
         model = GeneClassifier(
             config,
@@ -397,7 +383,6 @@ def train(args: Args) -> None:
         accelerator="gpu",
         val_check_interval=args.val_check_interval,
         limit_val_batches=args.limit_val_batches,
-        limit_train_batches=args.limit_train_batches,
         accumulate_grad_batches=args.accumulate_grad_batches,
         logger=loggers,
         callbacks=callbacks,

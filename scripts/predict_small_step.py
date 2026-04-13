@@ -965,8 +965,8 @@ def main():
     inference_parser.add_argument(
         "--stride",
         type=int,
-        default=WINDOW_SIZE // 2,
-        help="Stride size for overlapping windows",
+        default=WINDOW_SIZE // 4,
+        help="Stride size for overlapping windows (smaller step for finer-grained predictions)",
     )
     inference_parser.add_argument(
         "--batch-size", type=int, default=64, help="Batch size for inference"

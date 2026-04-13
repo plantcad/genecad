@@ -1,9 +1,10 @@
 import os
 
 
-def process_group() -> tuple[int, int, int]:
-    """Determine the rank, local rank, and world size from environment variables."""
-    rank = int(os.environ.get("RANK", 0))
-    local_rank = int(os.environ.get("LOCAL_RANK", 0))
-    world_size = int(os.environ.get("WORLD_SIZE", 1))
-    return rank, local_rank, world_size
+def process_group() -> tuple[int, int]:
+    """Determine the rank and world size from environment variables."""
+    if os.environ.get("RANK") and os.environ.get("WORLD_SIZE"):
+        rank = int(os.environ["RANK"])
+        world_size = int(os.environ["WORLD_SIZE"])
+        return rank, world_size
+    return 0, 1

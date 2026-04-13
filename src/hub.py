@@ -148,16 +148,6 @@ def load_base_model(
         be wrapped to expose `last_hidden_state` from the backbone.
     """
     config = AutoConfig.from_pretrained(path, revision=revision, trust_remote_code=True)
-    # Fix stale auto_map entries that reference a renamed file:
-    # 'models_mixer_seq' was renamed to 'mixer_seq' in the emarro/pcad2-200M-cnet-baseline repo,
-    # but the config.json auto_map still points to the old name.
-    if hasattr(config, "auto_map"):
-        fixed_auto_map = {
-            k: v.replace("models_mixer_seq.", "mixer_seq.") if isinstance(v, str) else v
-            for k, v in config.auto_map.items()
-        }
-        config.auto_map = fixed_auto_map
-        logger.info(f"Patched auto_map: {config.auto_map}")
     if randomize:
         base_model = AutoModel.from_config(config, dtype=dtype, trust_remote_code=True)
     else:

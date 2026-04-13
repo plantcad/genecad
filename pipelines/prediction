@@ -9,10 +9,6 @@ PRED_BATCH_SIZE ?= 32
 PRED_DTYPE ?= bfloat16
 PRED_STRIDE ?= 4096
 
-# GPU launcher for the prediction step (defaults to LAUNCHER if not set).
-# When using torchrun for multi-GPU support, pass GPU_LAUNCHER=torchrun --nproc_per_node=N
-GPU_LAUNCHER ?= $(LAUNCHER)
-
 # Model configuration
 HEAD_MODEL_PATH ?= plantcad/GeneCAD-l8-d768-PC2-Small
 BASE_MODEL_PATH ?= kuleshov-group/PlantCAD2-Small-l24-d0768
@@ -78,7 +74,7 @@ $(PIPELINE_DIR)/sequences.zarr: $(INPUT_FILE)
 
 # Generate predictions from pre-trained model
 $(PIPELINE_DIR)/predictions.zarr: $(PIPELINE_DIR)/sequences.zarr
-	$(GPU_LAUNCHER) scripts/predict.py create_predictions \
+	$(LAUNCHER) scripts/predict.py create_predictions \
 	  --input $(PIPELINE_DIR)/sequences.zarr \
 	  --output-dir $(PIPELINE_DIR)/predictions.zarr \
 	  --model-path $(BASE_MODEL_PATH) \

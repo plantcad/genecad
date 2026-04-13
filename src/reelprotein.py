@@ -11,15 +11,12 @@ import torch
 import xgboost as xgb
 from transformers import T5EncoderModel, T5Tokenizer
 from huggingface_hub import snapshot_download
-import torch.multiprocessing as mp
-
-try:
-    mp.set_start_method('spawn', force=True)
-except RuntimeError:
-    pass
 
 # Initialize module logger
 logger = logging.getLogger(__name__)
+
+# Set device
+device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 # =============================================================================
 # PART 1: GENE PARSING & ORF EXTRACTION
@@ -28,12 +25,6 @@ logger = logging.getLogger(__name__)
 
 def parse_gff3(gff_file):
     genes = defaultdict(list)
-    # Build a lookup from gene ID to gene dict, and a transcript→gene mapping
-    gene_by_id = {}
-    transcript_to_gene = {}
-
-    # Two-pass parse: first collect all rows, then resolve relationships
-    rows = []
     with open(gff_file) as fh:
         for raw in fh:
             line = raw.strip()
@@ -45,68 +36,38 @@ def parse_gff3(gff_file):
             chrom, src, feature, start, end, score, strand, phase, attr = parts
             start, end = int(start), int(end)
             attrs = dict(kv.split("=", 1) for kv in attr.split(";") if "=" in kv)
-            rows.append((chrom, src, feature, start, end, score, strand, phase, attrs))
 
-    # Pass 1: Collect genes and build transcript→gene mapping
-    for chrom, src, feature, start, end, score, strand, phase, attrs in rows:
-        if feature == "gene":
-            gene = {
-                "id": attrs.get("ID"),
-                "start": start,
-                "end": end,
-                "strand": strand,
-                "cds": [],
-                "utr5": [],
-                "utr3": [],
-                "feature_types": set(),
-            }
-            genes[chrom].append(gene)
-            if gene["id"]:
-                gene_by_id[gene["id"]] = gene
-        elif feature == "mRNA":
-            transcript_id = attrs.get("ID")
-            parent = attrs.get("Parent", "")
-            if transcript_id and parent:
-                # Map transcript ID to its parent gene ID
-                transcript_to_gene[transcript_id] = parent
-
-    # Pass 2: Assign CDS/UTR features to genes via transcript→gene resolution
-    for chrom, src, feature, start, end, score, strand, phase, attrs in rows:
-        if feature not in ("CDS", "five_prime_UTR", "three_prime_UTR"):
-            continue
-        parent = attrs.get("Parent", "")
-        if not parent:
-            continue
-
-        # Resolve to gene: either parent is a gene ID directly, or resolve
-        # through transcript→gene mapping
-        gene_id = None
-        if parent in gene_by_id:
-            gene_id = parent
-        elif parent in transcript_to_gene:
-            gene_id = transcript_to_gene[parent]
-        else:
-            # Legacy fallback: try prefix matching (parent starts with gene_id + ".")
-            for gid in gene_by_id:
-                if parent.startswith(gid + "."):
-                    gene_id = gid
-                    break
-
-        if gene_id and gene_id in gene_by_id:
-            g = gene_by_id[gene_id]
-            g["feature_types"].add(feature)
-            if feature == "CDS":
-                try:
-                    phase_int = int(phase)
-                except ValueError:
-                    phase_int = 0
-                g["cds"].append(
-                    {"start": start, "end": end, "phase": phase_int}
+            if feature == "gene":
+                genes[chrom].append(
+                    {
+                        "id": attrs.get("ID"),
+                        "start": start,
+                        "end": end,
+                        "strand": strand,
+                        "cds": [],
+                        "utr5": [],
+                        "utr3": [],
+                        "feature_types": set(),
+                    }
                 )
-            elif feature == "five_prime_UTR":
-                g["utr5"].append({"start": start, "end": end})
-            elif feature == "three_prime_UTR":
-                g["utr3"].append({"start": start, "end": end})
+            elif feature in ("CDS", "five_prime_UTR", "three_prime_UTR"):
+                parent = attrs.get("Parent", "")
+                for g in genes[chrom]:
+                    if g["id"] and parent.startswith(g["id"] + "."):
+                        g["feature_types"].add(feature)
+                        if feature == "CDS":
+                            try:
+                                phase_int = int(phase)
+                            except ValueError:
+                                phase_int = 0
+                            g["cds"].append(
+                                {"start": start, "end": end, "phase": phase_int}
+                            )
+                        elif feature == "five_prime_UTR":
+                            g["utr5"].append({"start": start, "end": end})
+                        elif feature == "three_prime_UTR":
+                            g["utr3"].append({"start": start, "end": end})
+                        break
 
     # Deterministic ordering
     for chrom in genes:
@@ -248,65 +209,40 @@ def extract_candidate_proteins(genes, genome_fasta):
 # =============================================================================
 
 
-def get_free_gpus(min_memory_mb=4000):
-    import subprocess
-    import torch
-    if not torch.cuda.is_available():
-        return []
-    try:
-        output = subprocess.check_output(
-            ["nvidia-smi", "--query-gpu=index,memory.free", "--format=csv,nounits,noheader"],
-            encoding="utf-8"
-        )
-        gpu_info = []
-        for line in output.strip().split("\n"):
-            if not line: continue
-            idx, mem = line.split(",")
-            gpu_info.append((int(idx), int(mem)))
-        # Sort by free memory descending
-        gpu_info.sort(key=lambda x: x[1], reverse=True)
-        available_gpus = [g[0] for g in gpu_info if g[1] >= min_memory_mb]
-        if not available_gpus and gpu_info:
-            available_gpus = [gpu_info[0][0]]
-        return available_gpus
-    except Exception as e:
-        logger.warning(f"Failed to query nvidia-smi: {e}")
-        return list(range(torch.cuda.device_count()))
-
-def _embedding_worker(args):
-    """
-    Worker function to process a chunk of sequences on a specific device.
-    """
-    device_id, seq_items, max_residues, max_seq_len, max_batch, worker_idx = args
-    import torch
-    from transformers import T5EncoderModel, T5Tokenizer
-    import gc
-    from tqdm import tqdm
-    
-    device_str = f"cuda:{device_id}" if device_id is not None else "cpu"
-    device = torch.device(device_str)
-    
-    # Load model and tokenizer on this specific worker/device
+def get_prot_t5_model():
+    logger.info("[Step 2] Loading ProtT5 Model...")
     model = T5EncoderModel.from_pretrained("Rostlab/prot_t5_xl_half_uniref50-enc")
     model = model.to(device)
     model = model.eval()
     tokenizer = T5Tokenizer.from_pretrained(
         "Rostlab/prot_t5_xl_half_uniref50-enc", do_lower_case=False
     )
-    
+    return model, tokenizer
+
+
+def generate_embeddings(seqs_dict, max_residues=4000, max_seq_len=1000, max_batch=1):
+    """
+    Returns a pandas DataFrame where index is ProteinID and columns are 0-1023 (features).
+    """
+    model, tokenizer = get_prot_t5_model()
+
+    # Sort sequences by length (descending)
+    seq_items = sorted(seqs_dict.items(), key=lambda kv: len(kv[1]), reverse=True)
+
+    from tqdm import tqdm
+
     results_list = []
     batch = []
-    
-    # Only show tqdm on the first worker to avoid console spam
-    iterable = tqdm(seq_items, desc=f"Worker {worker_idx} ({device_str})", unit="seq") if worker_idx == 0 else seq_items
+    logger.info(f"[Step 2] Generating embeddings for {len(seq_items)} sequences...")
 
-    for seq_idx, (pdb_id, seq) in enumerate(iterable, 1):
+    for seq_idx, (pdb_id, seq) in enumerate(tqdm(seq_items, desc="Embedding Sequences", unit="seq"), 1):
         seq_len = len(seq)
         seq_spaced = " ".join(list(seq))
         batch.append((pdb_id, seq_spaced, seq_len))
 
         n_res_batch = sum([s_len for _, _, s_len in batch]) + seq_len
 
+        # Process batch
         if (
             len(batch) >= max_batch
             or n_res_batch >= max_residues
@@ -314,7 +250,7 @@ def _embedding_worker(args):
             or seq_len > max_seq_len
         ):
             pdb_ids, batch_seqs, batch_lens = zip(*batch)
-            batch = []
+            batch = []  # reset
 
             token_encoding = tokenizer(
                 list(batch_seqs), add_special_tokens=True, padding="longest"
@@ -326,63 +262,28 @@ def _embedding_worker(args):
                 with torch.no_grad():
                     embedding_repr = model(input_ids, attention_mask=attention_mask)
             except RuntimeError as e:
-                # Fallback to CPU if OOM occurs on a single strange sequence
-                print(f"[Worker {worker_idx}] RuntimeError during embedding: {e}")
+                logger.error(f"RuntimeError during embedding: {e}")
                 continue
 
             for batch_idx, identifier in enumerate(pdb_ids):
                 s_len = batch_lens[batch_idx]
+                # Slice off padding -> avg pool
                 emb = embedding_repr.last_hidden_state[batch_idx, :s_len]
                 protein_emb = emb.mean(dim=0).detach().cpu().numpy().squeeze()
+
+                # Append to results
                 results_list.append([identifier] + protein_emb.tolist())
-
-    del model
-    del tokenizer
-    if 'embedding_repr' in locals():
-        del embedding_repr
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
-    gc.collect()
-
-    return results_list
-
-def generate_embeddings(seqs_dict, max_residues=4000, max_seq_len=1000, max_batch=1):
-    """
-    Returns a pandas DataFrame where index is ProteinID and columns are 0-1023 (features).
-    """
-    device_ids = get_free_gpus()
-    num_gpus = len(device_ids) if device_ids else 1
-    
-    # Sort sequences by length (descending) so hardest ones are distributed
-    seq_items = sorted(seqs_dict.items(), key=lambda kv: len(kv[1]), reverse=True)
-
-    logger.info(f"[Step 2] Generating embeddings for {len(seq_items)} sequences using {num_gpus} GPU(s) via Multiprocessing...")
-
-    if not device_ids:
-        # CPU fallback directly
-        args_tuple = (None, seq_items, max_residues, max_seq_len, max_batch, 0)
-        final_results = _embedding_worker(args_tuple)
-    else:
-        # Chunk the sequences. To balance load, deal them round-robin
-        chunks = [[] for _ in range(num_gpus)]
-        for i, item in enumerate(seq_items):
-            chunks[i % num_gpus].append(item)
-
-        worker_args = []
-        for i, chunk in enumerate(chunks):
-            worker_args.append((device_ids[i], chunk, max_residues, max_seq_len, max_batch, i))
-
-        with mp.Pool(processes=num_gpus) as pool:
-            results = pool.map(_embedding_worker, worker_args)
-            
-        # Flatten results
-        final_results = []
-        for res in results:
-            final_results.extend(res)
 
     logger.info("[Step 2] Embedding generation complete.")
     cols = ["ProteinID"] + list(range(1024))
-    df = pd.DataFrame(final_results, columns=cols)
+    df = pd.DataFrame(results_list, columns=cols)
+
+    # Cleanup GPU memory
+    del model
+    del tokenizer
+    del embedding_repr
+    torch.cuda.empty_cache()
+    gc.collect()
 
     return df
 
@@ -470,12 +371,6 @@ def format_attributes(attr_dict):
     return ";".join(f"{k}={v}" for k, v in attr_dict.items())
 
 
-def _natural_sort_key(s):
-    """Sort key that handles numeric runs so chr2 < chr10."""
-    import re
-    return [int(c) if c.isdigit() else c.lower() for c in re.split(r"(\d+)", s)]
-
-
 def read_gff_raw(gff_path):
     with open(gff_path) as f:
         lines = f.readlines()
@@ -487,29 +382,15 @@ def read_gff_raw(gff_path):
             feats = lines[i:]
             break
 
-    # Guarantee ##gff-version 3 pragma is present
-    gff3_pragma = "##gff-version 3\n"
-    has_pragma = any(l.strip() == "##gff-version 3" for l in header)
-    if not has_pragma:
-        header = [gff3_pragma] + header
-
-    # Two-pass parse to handle transcript-parent resolution
-    parsed_rows = []
-    transcript_to_gene = {}  # transcript_id → (seqid, gene_id)
-
+    gene_entries = {}
     for line in feats:
-        raw_attr_str = line.rstrip("\n").split("\t")[8] if len(line.rstrip("\n").split("\t")) == 9 else ""
         fields = line.rstrip("\n").split("\t")
         if len(fields) != 9:
             continue
         seqid = fields[0]
         feature_type = fields[2]
         attrs = parse_attributes(fields[8])
-        parsed_rows.append((seqid, feature_type, fields, attrs, raw_attr_str))
 
-    # Pass 1: Collect genes and build transcript→gene map
-    gene_entries = {}
-    for seqid, feature_type, fields, attrs, raw_attr_str in parsed_rows:
         if feature_type == "gene":
             gid = attrs.get("ID")
             if gid:
@@ -518,40 +399,18 @@ def read_gff_raw(gff_path):
                     "subfeatures": [],
                     "attributes": attrs,
                 }
-        elif feature_type == "mRNA":
-            transcript_id = attrs.get("ID")
-            parent = attrs.get("Parent", "")
-            if transcript_id and parent:
-                # Map transcript ID to its parent gene's (seqid, gene_id)
-                seqid_from_row = fields[0]
-                transcript_to_gene[transcript_id] = (seqid_from_row, parent)
-
-    # Pass 2: Assign subfeatures to genes
-    for seqid, feature_type, fields, attrs, raw_attr_str in parsed_rows:
-        if feature_type == "gene":
-            continue
-        parent = attrs.get("Parent", "")
-        if not parent:
-            continue
-
-        if feature_type == "mRNA":
-            # mRNA parent is the gene directly
-            key = (seqid, parent)
         else:
-            # Resolve through transcript→gene mapping first
-            if parent in transcript_to_gene:
-                key = transcript_to_gene[parent]
-            elif (seqid, parent) in gene_entries:
-                # Parent is directly a gene
-                key = (seqid, parent)
+            parent = attrs.get("Parent", "")
+            if not parent:
+                continue
+            if feature_type == "mRNA":
+                parent_gene = parent
             else:
-                # Legacy fallback: split by "." to get gene ID
                 parent_gene = parent.split(".")[0]
-                key = (seqid, parent_gene)
 
-        if key in gene_entries:
-            # Store both the fields list and the original verbatim attr string
-            gene_entries[key]["subfeatures"].append((fields, attrs, raw_attr_str))
+            key = (seqid, parent_gene)
+            if key in gene_entries:
+                gene_entries[key]["subfeatures"].append((fields, attrs))
     return header, gene_entries
 
 
@@ -561,8 +420,7 @@ def merge_group_transcripts(grp, gene_entries, synthetic_mrna_id):
     for g in grp:
         if g not in gene_entries:
             continue
-        for entry in gene_entries[g]["subfeatures"]:
-            fields, attrs = entry[0], entry[1]
+        for fields, attrs in gene_entries[g]["subfeatures"]:
             if fields[2] == "mRNA":
                 original_mrnas.append((fields.copy(), attrs.copy(), g))
             else:
@@ -598,8 +456,7 @@ def merge_group_transcripts(grp, gene_entries, synthetic_mrna_id):
         fields[8] = format_attributes(attrs)
         merged_children.append((fields, attrs))
 
-    # Always sort children in ascending genomic coordinate order (GFF3 convention)
-    merged_children.sort(key=lambda item: int(item[0][3]))
+    merged_children.sort(key=lambda item: int(item[0][3]), reverse=(strand == "-"))
     return synthetic_fields, merged_children
 
 
@@ -688,8 +545,7 @@ def generate_final_gff(predictions_df, input_gff_path, output_gff_path, keep_unm
             }
         )
 
-    # Use natural sort on chromosome names so chr2 < chr10 (not lexicographic)
-    items.sort(key=lambda x: (_natural_sort_key(x["chrom"] if x["type"] == "group" else x["key"][0]), x["start"]))
+    items.sort(key=lambda x: x["start"])
 
     # Write Output
     with open(output_gff_path, "w") as out:
@@ -698,10 +554,8 @@ def generate_final_gff(predictions_df, input_gff_path, output_gff_path, keep_unm
             if itm["type"] == "single":
                 ge = gene_entries[itm["key"]]
                 out.write("\t".join(ge["gene_line"]) + "\n")
-                for entry in ge["subfeatures"]:
-                    fields, attrs, orig_attr_str = entry[0], entry[1], entry[2]
-                    # Write verbatim attribute string to avoid lossy re-serialization
-                    fields[8] = orig_attr_str
+                for fields, attrs in ge["subfeatures"]:
+                    fields[8] = format_attributes(attrs)
                     out.write("\t".join(fields) + "\n")
             else:
                 # Group logic
