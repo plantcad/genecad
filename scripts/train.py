@@ -15,9 +15,10 @@ from typing import Optional
 from transformers import AutoConfig
 from src.dataset import XarrayDataset
 from src.config import WINDOW_SIZE
-from src.modeling import GeneClassifier, GeneClassifierConfig, ThroughputMonitor
+from src.modeling import GeneClassifier, GeneClassifierConfig, ThroughputMonitor, TOKEN_CLASS_NAMES, TOKEN_NUM_CLASSES
 from src.logging import rank_zero_logger
 from src.visualization import set_visualization_save_dir
+import numpy as np
 
 logger = rank_zero_logger(logging.getLogger(__name__))
 
@@ -196,6 +197,13 @@ def parse_args(args: Optional[list[str]] = None) -> Args:
         choices=["yes", "no"],
         help="Randomize the base encoder model instead of loading pretrained weights",
     )
+    parser.add_argument(
+        "--auto-class-weights",
+        type=str,
+        default="no",
+        choices=["yes", "no"],
+        help="Automatically compute class weights from the training dataset",
+    )
     return parser.parse_args(args)
 
 
@@ -262,6 +270,32 @@ def train(args: Args) -> None:
     logger.info(
         f"Validation dataset loaded with {len(val_dataset)} samples ({len(val_dataset.datasets)} datasets)"
     )
+
+    # Compute dynamic class frequencies if requested
+    token_class_frequencies = None
+    if args.auto_class_weights == "yes":
+        logger.info("Computing auto class weights from training dataset... (this may take a minute)")
+        counts = np.zeros(TOKEN_NUM_CLASSES, dtype=np.int64)
+        for ds in train_dataset.datasets:
+            chunk_size = 2000
+            n_samples = ds.sizes["sample"]
+            for start in range(0, n_samples, chunk_size):
+                end = min(start + chunk_size, n_samples)
+                # Load block into memory
+                tag_labels = ds["tag_labels"].isel(sample=slice(start, end)).values
+                label_mask = ds["label_mask"].isel(sample=slice(start, end)).values
+                valid_labels = tag_labels[label_mask]
+                counts += np.bincount(valid_labels, minlength=TOKEN_NUM_CLASSES)
+        
+        total_valid = counts.sum()
+        if total_valid > 0:
+            freqs = counts / total_valid
+            token_class_frequencies = {c: float(freqs[i]) for i, c in enumerate(TOKEN_CLASS_NAMES)}
+            logger.info(f"Computed dynamic token class frequencies:")
+            for i, c in enumerate(TOKEN_CLASS_NAMES):
+                logger.info(f"  {c}: {token_class_frequencies[c]:.6e} (count: {counts[i]})")
+        else:
+            logger.warning("No valid labels found in training dataset. Falling back to default class frequencies.")
 
     # Create data loaders
     logger.info(f"Creating data loaders with batch_size={args.batch_size}")
@@ -336,6 +370,9 @@ def train(args: Args) -> None:
             base_encoder_frozen=args.base_encoder_frozen == "yes",
             base_encoder_randomize=args.randomize_base == "yes",
         )
+        if token_class_frequencies is not None:
+            config.token_class_frequencies = token_class_frequencies
+            
         model = GeneClassifier(
             config,
             learning_rate=args.learning_rate,

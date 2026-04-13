@@ -8,7 +8,7 @@ set -euo pipefail
 # =============================================================================
 
 # Emarro HNet base model (local path required — HF repo is incomplete)
-BASE_MODEL="/workdir/zl843/GeneCAD/pcad2-200M-cnet-baseline"
+BASE_MODEL="emarro/pcad2-200M-cnet-baseline"
 
 # Training data paths
 RAW_GFF_DIR="/workdir/plantcad_architecture_tests/zero_shot_filter/gff_filtered_top_transcripts"
@@ -17,26 +17,26 @@ SPECIES_IDS="Athaliana Osativa Gmax Hvulgare Ptrichocarpa"
 
 # Pipeline directories
 WORK_DIR="/workdir/zl843/GeneCAD/genecad_result"
-PIPELINE_DIR="$WORK_DIR/training_emarro_multispecies_frozen"
+PIPELINE_DIR="$WORK_DIR/training_emarro_multispecies_full"
 EXTRACT_DIR="$PIPELINE_DIR/extract"
 TRANSFORM_DIR="$PIPELINE_DIR/transform"
 PREP_DIR="$PIPELINE_DIR/prep"
 
 # Training hyperparameters
 BATCH_SIZE=4          # Per-GPU batch size (reduce to 2 if OOM)
-ACCUM_GRAD=256       # Effective batch size = BATCH_SIZE * ACCUM_GRAD * NUM_GPUS = 4*4*2 = 32
+ACCUM_GRAD=384       # Effective batch size = BATCH_SIZE * ACCUM_GRAD * NUM_GPUS = 4*384*2 = 3072
 EPOCHS=1
 LEARNING_RATE=2e-4
 ARCHITECTURE="all"    # encoder-only | sequence-only | classifier-only | all
 HEAD_LAYERS=8
-TOKEN_EMBED_DIM=128   # hidden_size = min(1024, 128*6) = 768 (full base dim preserved)
-BASE_FROZEN="yes"     # Freeze Emarro base encoder
-NUM_WORKERS=4
+TOKEN_EMBED_DIM=256   # hidden_size = min(1024, 256*6) = 1024 (full base dim preserved perfectly)
+BASE_FROZEN="no"     # Freeze Emarro base encoder
+NUM_WORKERS=8
 VALID_PROPORTION=0.05
 
 # Output
-OUTPUT_DIR="$PIPELINE_DIR/training_output"
-RUN_NAME="emarro-hnet-multispecies-v3"
+OUTPUT_DIR="$PIPELINE_DIR/training_emarro_multispecies_full"
+RUN_NAME="emarro-hnet-multispecies-5species"
 PROJECT_NAME="genecad-emarro"
 
 # Python executable
@@ -214,7 +214,7 @@ if [ ! -d "$TRANSFORM_DIR/windows.zarr" ]; then
     $PYTHON scripts/sample.py generate_training_windows \
         --input "$TRANSFORM_DIR/sequences.zarr" \
         --output "$TRANSFORM_DIR/windows.zarr" \
-        --intergenic-proportion 0.3 \
+        --intergenic-proportion 0.15 \
         --num-workers $NUM_WORKERS
     echo "  Created: $TRANSFORM_DIR/windows.zarr"
 fi
@@ -261,13 +261,14 @@ $PYTHON scripts/train.py \
     --prefetch-factor 2 \
     --gpu 2 \
     --strategy ddp \
-    --checkpoint-frequency 100 \
-    --val-check-interval 100 \
-    --train-eval-frequency 100 \
+    --checkpoint-frequency 1000 \
+    --val-check-interval 1000 \
+    --train-eval-frequency 1000 \
     --limit-val-batches 1.0 \
     --log-frequency 1 \
-    --enable-visualization yes \
-    --torch-compile no \
+    --enable-visualization no \
+    --torch-compile yes \
+    --auto-class-weights yes \
     --project-name "$PROJECT_NAME" \
     --run-name "$RUN_NAME" \
     2>&1 | tee "$OUTPUT_DIR/training.log"

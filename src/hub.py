@@ -148,6 +148,19 @@ def load_base_model(
         be wrapped to expose `last_hidden_state` from the backbone.
     """
     config = AutoConfig.from_pretrained(path, revision=revision, trust_remote_code=True)
+    
+    # HF repository emarro/pcad2-200M-cnet-baseline has a bug in its config.json where it refers to 
+    # models_mixer_seq instead of mixer_seq. We patch this dynamically here to allow downloading from HF.
+    if hasattr(config, "auto_map"):
+        patched = False
+        for k in list(config.auto_map.keys()):
+            val = config.auto_map[k]
+            if isinstance(val, str) and "models_mixer_seq." in val:
+                config.auto_map[k] = val.replace("models_mixer_seq.", "mixer_seq.")
+                patched = True
+        if patched:
+            logger.info("Patched config.auto_map to fix HuggingFace repo typo (models_mixer_seq -> mixer_seq)")
+
     if randomize:
         base_model = AutoModel.from_config(config, dtype=dtype, trust_remote_code=True)
     else:

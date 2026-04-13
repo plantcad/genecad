@@ -29,8 +29,8 @@ LEARNING_RATE=1e-4
 ARCHITECTURE="all"    # encoder-only | sequence-only | classifier-only | all
 HEAD_LAYERS=8
 TOKEN_EMBED_DIM=128   # Reduced when using "all" architecture
-BASE_FROZEN="yes"     # Freeze Emarro base encoder
-NUM_WORKERS=4
+BASE_FROZEN="no"     # Freeze Emarro base encoder
+NUM_WORKERS=8
 VALID_PROPORTION=0.05
 
 # Output
@@ -277,7 +277,7 @@ $PYTHON scripts/train.py \
     --train-eval-frequency 200 \
     --limit-val-batches 1.0 \
     --log-frequency 1 \
-    --enable-visualization yes \
+    --enable-visualization no \
     --torch-compile no \
     --project-name "$PROJECT_NAME" \
     --run-name "$RUN_NAME" \

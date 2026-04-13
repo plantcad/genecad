@@ -300,7 +300,6 @@ class GeneClassifier(L.LightningModule):
         self.num_total_entities = (
             self.num_core_entities + 1
         )  # Entity count w/ background
-        self.criterion = torch.nn.CrossEntropyLoss()
 
         self.classifier = MLP(
             input_dim=self.config.hidden_size,
@@ -383,15 +382,30 @@ class GeneClassifier(L.LightningModule):
                 a_max=1,
             )
             self.bias = nn.Parameter(torch.tensor(np.log10(freqs), dtype=self.dtype))
+            
+            # Compute smoothed inverse square-root class weights to amplify gradients for rare classes
+            inv_sqrt_freqs = 1.0 / np.sqrt(freqs)
+            # Clip to a maximum of 100x the minimum weight to avoid exploding gradients
+            max_weight = inv_sqrt_freqs.min() * 100.0
+            weights = np.clip(inv_sqrt_freqs, a_min=0, a_max=max_weight)
+            # Normalize the weights
+            weights = weights / weights.sum() * self.num_labels
+            self.criterion = torch.nn.CrossEntropyLoss(weight=torch.tensor(weights, dtype=torch.float32))
         else:
             self.bias = nn.Parameter(torch.zeros(self.num_labels))
+            self.criterion = torch.nn.CrossEntropyLoss()
 
         if self.torch_compile:
             # Avoid base model compilation due to https://github.com/pytorch/pytorch/issues/146129
             self.head_encoder = torch.compile(self.head_encoder, fullgraph=False)
             self.classifier = torch.compile(self.classifier, fullgraph=False)
 
-        self.save_hyperparameters()
+        # Unpack kwargs and config into distinct keys to prevent WandB stacking
+        self.save_hyperparameters(ignore=["config"])
+        hparams = vars(config).copy()
+        if "token_class_frequencies" in hparams:
+            del hparams["token_class_frequencies"]  # exclude large dictionary
+        self.save_hyperparameters(hparams)
 
     # -------------------------------------------------------------------------
     # Lightning Methods
@@ -413,8 +427,11 @@ class GeneClassifier(L.LightningModule):
         )
         loss = self._compute_loss(batch)
         self.log("train/loss", loss)
-        for i in range(self.bias.shape[0]):
-            self.log(f"bias/class_{i:02d}", self.bias[i])
+        # Log bias terms periodically to track if token classes are balancing
+        if hasattr(self, "bias") and self.bias is not None:
+            for i in range(self.bias.shape[0]):
+                class_name = self.config.token_class_names[i]
+                self.log(f"bias/{i:02d}-{class_name}", self.bias[i])
 
         if (
             self.config.train_eval_frequency
@@ -439,8 +456,22 @@ class GeneClassifier(L.LightningModule):
         self._evaluate(batch, "valid", visualize=visualize)
 
     def configure_optimizers(self):
+        base_params = []
+        head_params = []
+        for name, param in self.named_parameters():
+            if not param.requires_grad:
+                continue
+            if "base_encoder" in name:
+                base_params.append(param)
+            else:
+                head_params.append(param)
+
         optimizer = torch.optim.AdamW(
-            self.parameters(), lr=self.learning_rate, weight_decay=1e-5
+            [
+                {"params": head_params, "lr": self.learning_rate},
+                {"params": base_params, "lr": self.learning_rate * 0.1},
+            ],
+            weight_decay=0.01,
         )
 
         expected_steps = self.trainer.estimated_stepping_batches
