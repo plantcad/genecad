@@ -1,25 +1,89 @@
 #!/bin/bash
 set -e
-cd /workdir/zl843/GeneCAD/genecad || exit 1
+cd "$(dirname "$0")/../.." || exit 1
 
 # =================================================================
 # Multi-Chromosome GeneCAD Prediction Pipeline
-# Usage: ./predict_all_chroms.sh
-#
-# Runs the full GeneCAD prediction pipeline on ALL chromosomes in a
-# multi-chromosome FASTA file, then merges the per-chromosome GFF
-# outputs into a single GFF with unique, chromosome-prefixed IDs.
 # =================================================================
 
-# 1. Configuration
-# ----------------
-INPUT_FILE="/workdir/zl843/GeneCAD/fine-tuning/input_file/Zmays/Zmays_833_Zm-B73-REFERENCE-NAM-5.0.fa"
-OUTPUT_DIR="/workdir/zl843/GeneCAD/genecad_result/prediction_emarro_hnet_zmays_all"
-SPECIES_ID="Zmays"
+usage() {
+    cat << 'USAGE'
+Usage: predict_all_chroms.sh [OPTIONS]
 
-# Model Paths
-BASE_MODEL="/workdir/zl843/GeneCAD/pcad2-200M-cnet-baseline"
-HEAD_MODEL="/workdir/zl843/GeneCAD/genecad_result/training_emarro/training_output/checkpoints/last-v1.ckpt"
+Run the complete GeneCAD annotation pipeline on a genomic FASTA file.
+Models are downloaded automatically from Hugging Face on first run.
+
+Options:
+  -i, --input PATH      Input genome FASTA file
+                        (default: downloads Arabidopsis thaliana TAIR12 example)
+  -o, --output DIR      Output directory (default: genecad_result/Athaliana_predictions)
+  -s, --species NAME    Species label prefixed on output filenames (default: Athaliana)
+  -m, --mode MODE       Model to use: plant | animal  (default: plant)
+  -h, --help            Show this help message
+
+Examples:
+  # Annotate a plant genome (default)
+  bash predict_all_chroms.sh -i data/my_plant.fa -o output/ -s Zmays -m plant
+
+  # Annotate an animal genome
+  bash predict_all_chroms.sh -i data/my_animal.fa -o output/ -s Hsapiens -m animal
+USAGE
+    exit 0
+}
+
+INPUT_FILE="data/example/GCA_978657495.1_TAIR12_genomic_5.fna"
+OUTPUT_DIR="genecad_result/Athaliana_predictions"
+SPECIES_ID="Athaliana"
+MODE="plant"
+
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    -i|--input)   INPUT_FILE="$2"; shift 2 ;;
+    -o|--output)  OUTPUT_DIR="$2"; shift 2 ;;
+    -s|--species) SPECIES_ID="$2"; shift 2 ;;
+    -m|--mode)    MODE="$2";       shift 2 ;;
+    -h|--help) usage ;;
+    *) echo "Unknown option: $1"; usage ;;
+  esac
+done
+
+echo "================================================================="
+echo "GeneCAD Prediction Pipeline"
+echo "================================================================="
+
+# Download default Arabidopsis sequence if missing
+if [[ "$INPUT_FILE" == "data/example/GCA_978657495.1_TAIR12_genomic_5.fna" && ! -f "$INPUT_FILE" ]]; then
+    echo "Downloading default Arabidopsis thaliana sequence..."
+    mkdir -p "$(dirname "$INPUT_FILE")"
+    wget -qO "$INPUT_FILE" "https://huggingface.co/datasets/plantcad/genecad-dev/resolve/main/data/fasta/GCA_978657495.1_TAIR12_genomic_5.fna"
+fi
+
+if [[ ! -f "$INPUT_FILE" ]]; then
+    echo "Error: Input FASTA file '$INPUT_FILE' not found."
+    exit 1
+fi
+
+# Model selection based on --mode
+case "$MODE" in
+  plant)
+    BASE_MODEL="plantcad/pcad2-200M-cnet-baseline"
+    HEAD_MODEL="Zong-Yan/genecad_plant"
+    ;;
+  animal)
+    BASE_MODEL="emarro/pcad2_vert_small"
+    HEAD_MODEL="Zong-Yan/genecad_vert"
+    ;;
+  *)
+    echo "Error: Unknown mode '$MODE'. Valid options are: plant, animal"
+    exit 1
+    ;;
+esac
+
+echo "Input FASTA: $INPUT_FILE"
+echo "Output Dir:  $OUTPUT_DIR"
+echo "Species ID:  $SPECIES_ID"
+echo "Mode:        $MODE  ($BASE_MODEL + $HEAD_MODEL)"
+echo "================================================================="
 
 # Pipeline Config
 TOKENIZER_PATH="$BASE_MODEL"
@@ -51,7 +115,6 @@ echo ""
 
 # 3. Loop over each chromosome
 # -----------------------------
-PRECISION_GFFS=()
 RECALL_GFFS=()
 
 for CHR_ID in $CHROM_IDS; do
@@ -122,12 +185,6 @@ for CHR_ID in $CHROM_IDS; do
         --output "$PIPELINE_DIR/predictions__raw__feat_len_2__gene_len_30.gff" \
         --min-length 30
 
-    # Filter invalid genes (precision: require UTRs)
-    $PYTHON scripts/gff.py filter_to_valid_genes \
-        --input "$PIPELINE_DIR/predictions__raw__feat_len_2__gene_len_30.gff" \
-        --output "$PIPELINE_DIR/predictions_precision__raw.gff" \
-        --require-utrs "yes"
-
     # Filter invalid genes (recall: no UTRs required)
     $PYTHON scripts/gff.py filter_to_valid_genes \
         --input "$PIPELINE_DIR/predictions__raw__feat_len_2__gene_len_30.gff" \
@@ -136,10 +193,8 @@ for CHR_ID in $CHROM_IDS; do
 
     # --- Step 6: Copy final per-chromosome outputs ---
     echo "[${CHR_ID}] [6/6] Saving per-chromosome results..."
-    cp "$PIPELINE_DIR/predictions_precision__raw.gff" "$CHR_OUTPUT_DIR/predictions_precision.gff"
     cp "$PIPELINE_DIR/predictions_recall__raw.gff" "$CHR_OUTPUT_DIR/predictions_recall.gff"
 
-    PRECISION_GFFS+=("$CHR_OUTPUT_DIR/predictions_precision.gff")
     RECALL_GFFS+=("$CHR_OUTPUT_DIR/predictions_recall.gff")
 
     echo "[${CHR_ID}] Done!"
@@ -152,19 +207,25 @@ echo "================================================================="
 echo "Merging per-chromosome GFFs into single files..."
 echo "================================================================="
 
-# Merge precision GFFs
-python3 "$MERGE_SCRIPT" \
-    --output "$OUTPUT_DIR/predictions_precision_merged.gff" \
-    --inputs "${PRECISION_GFFS[@]}"
-
 # Merge recall GFFs
 python3 "$MERGE_SCRIPT" \
-    --output "$OUTPUT_DIR/predictions_recall_merged.gff" \
+    --output "$OUTPUT_DIR/${SPECIES_ID}_GeneCAD_raw.gff" \
     --inputs "${RECALL_GFFS[@]}"
 
 echo ""
 echo "================================================================="
-echo "All done! Final merged predictions saved to:"
-echo "Precision: $OUTPUT_DIR/predictions_precision_merged.gff"
-echo "Recall:    $OUTPUT_DIR/predictions_recall_merged.gff"
+echo "5. Running protein refinement on merged predictions..."
+echo "================================================================="
+
+$PYTHON scripts/refine.py \
+    --gff "$OUTPUT_DIR/${SPECIES_ID}_GeneCAD_raw.gff" \
+    --genome "$INPUT_FILE" \
+    --out "$OUTPUT_DIR/${SPECIES_ID}_GeneCAD_final.gff" \
+    --filter-unmerged
+
+echo ""
+echo "================================================================="
+echo "All done! Final predictions saved to:"
+echo "Raw:   $OUTPUT_DIR/${SPECIES_ID}_GeneCAD_raw.gff"
+echo "Final: $OUTPUT_DIR/${SPECIES_ID}_GeneCAD_final.gff"
 echo "================================================================="

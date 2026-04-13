@@ -238,10 +238,13 @@ def _create_predictions(
         )
 
         # Process batches
-        for batch_index, window_batch in enumerate(window_batches):
-            logger.info(
-                f"Processing batch {batch_index + 1} of {len(window_batches)} [{rank=}, {world_size=}]"
+        for batch_index, window_batch in enumerate(
+            tqdm.tqdm(
+                window_batches,
+                desc=f"[{strand}] Processing batches (rank={rank}/{world_size})",
+                dynamic_ncols=True,
             )
+        ):
             current_batch_size = len(window_batch)
 
             # Get equally sized sequence windows to process for batch

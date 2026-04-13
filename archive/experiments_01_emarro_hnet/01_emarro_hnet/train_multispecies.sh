@@ -35,7 +35,7 @@ NUM_WORKERS=8
 VALID_PROPORTION=0.05
 
 # Output
-OUTPUT_DIR="$PIPELINE_DIR/training_emarro_multispecies_full"
+OUTPUT_DIR="$PIPELINE_DIR/training_emarro_multispecies_full_weight_CEL"
 RUN_NAME="emarro-hnet-multispecies-5species"
 PROJECT_NAME="genecad-emarro"
 
@@ -267,7 +267,7 @@ $PYTHON scripts/train.py \
     --limit-val-batches 1.0 \
     --log-frequency 1 \
     --enable-visualization no \
-    --torch-compile yes \
+    --torch-compile no \
     --auto-class-weights yes \
     --project-name "$PROJECT_NAME" \
     --run-name "$RUN_NAME" \

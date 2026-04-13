@@ -1,7 +1,7 @@
 FROM pytorch/pytorch:2.7.1-cuda12.8-cudnn9-devel
 
 # Install curl, git, and uv package manager
-RUN apt-get update && apt-get install -y curl git && \
+RUN apt-get update && apt-get install -y curl git wget && \
     curl -LsSf https://astral.sh/uv/install.sh | sh && \
     rm -rf /var/lib/apt/lists/*
 ENV PATH="/root/.local/bin:$PATH"
@@ -11,14 +11,6 @@ WORKDIR /build
 
 # Copy project files and directories
 COPY pyproject.toml LICENSE ./
-
-# Build gffcompare from source
-RUN mkdir -p /tmp/gffcompare && cd /tmp/gffcompare && \
-    git clone https://github.com/gpertea/gffcompare && \
-    cd gffcompare && \
-    make release && \
-    cp gffcompare /usr/local/bin/ && \
-    cd / && rm -rf /tmp/gffcompare
 
 # Install dependencies
 RUN uv sync --extra torch --extra mamba
