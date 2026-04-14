@@ -145,9 +145,10 @@ def _extract_gff_features(
     """Extract data from a single GFF file into a structured DataFrame."""
     logger.info(f"Parsing GFF file: {path}")
 
-    # Determine file opening method based on extension
-    open_func = gzip.open if path.endswith(".gz") else open
-    mode = "rt" if path.endswith(".gz") else "r"
+    # Determine file opening method based on extension of the real file
+    real_path = os.path.realpath(path)
+    open_func = gzip.open if real_path.endswith(".gz") else open
+    mode = "rt" if real_path.endswith(".gz") else "r"
 
     # Parse GFF file
     with open_func(path, mode) as in_handle:
@@ -562,9 +563,10 @@ def _extract_fasta_sequences(
 
     logger.info(f"[species={species_id}] Processing FASTA file: {fasta_file}")
 
-    # Determine file opening method based on extension
-    open_func = gzip.open if fasta_file.endswith(".gz") else open
-    mode = "rt" if fasta_file.endswith(".gz") else "r"
+    # Determine file opening method based on extension of the real file
+    real_path = os.path.realpath(fasta_file)
+    open_func = gzip.open if real_path.endswith(".gz") else open
+    mode = "rt" if real_path.endswith(".gz") else "r"
 
     # Dictionary to collect sequences by species/chromosome
     sequence_records = {}
@@ -861,9 +863,10 @@ def _extract_fasta_seq_ids(path: str) -> list[str]:
     list[str]
         List of sequence IDs
     """
-    # Determine file opening method based on extension
-    open_func = gzip.open if path.endswith(".gz") else open
-    mode = "rt" if path.endswith(".gz") else "r"
+    # Determine file opening method based on extension of the real file
+    real_path = os.path.realpath(path)
+    open_func = gzip.open if real_path.endswith(".gz") else open
+    mode = "rt" if real_path.endswith(".gz") else "r"
 
     # Parse FASTA file and extract sequence IDs
     seq_ids = []

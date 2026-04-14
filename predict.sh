@@ -23,11 +23,14 @@ Options:
   -h, --help            Show this help message
 
 Batch size is chosen automatically based on available GPU VRAM:
-  >= 70 GB  ->  32   (A100 80G / H100)
-  >= 35 GB  ->  16   (A100 40G)
-  >= 20 GB  ->   8   (RTX 3090/4090, L40S)
-  >= 14 GB  ->   4   (RTX 3080 Ti, V100 16G, T4)
-  <  14 GB  ->   2   (older / smaller GPUs)
+  >= 70 GB  ->  80   (A100 80G / H100)
+  >= 35 GB  ->  40   (A100 40G)
+  >= 20 GB  ->  24   (RTX 3090/4090, L40S)
+  >= 14 GB  ->  16   (RTX 3080 Ti, V100 16G, T4)
+  <  14 GB  ->   8   (older / smaller GPUs)
+
+Note: This auto-scaling pushes GPU utility to its limit. If you encounter CUDA Out-Of-Memory 
+      (OOM) errors, manually lower the batch size with the '-b' flag (e.g., '-b 32').
 
 Examples:
   # Annotate a plant genome (default, batch size auto-detected)
@@ -106,13 +109,14 @@ if [[ "$BATCH_SIZE_ARG" == "auto" ]]; then
     if command -v nvidia-smi &>/dev/null; then
         GPU_MEM_MB=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')
         GPU_MEM_GB=$(( GPU_MEM_MB / 1024 ))
-        if   [[ $GPU_MEM_GB -ge 70 ]]; then BATCH_SIZE=32
-        elif [[ $GPU_MEM_GB -ge 35 ]]; then BATCH_SIZE=16
-        elif [[ $GPU_MEM_GB -ge 20 ]]; then BATCH_SIZE=8
-        elif [[ $GPU_MEM_GB -ge 14 ]]; then BATCH_SIZE=4
-        else                                BATCH_SIZE=2
+        if   [[ $GPU_MEM_GB -ge 70 ]]; then BATCH_SIZE=80
+        elif [[ $GPU_MEM_GB -ge 35 ]]; then BATCH_SIZE=40
+        elif [[ $GPU_MEM_GB -ge 20 ]]; then BATCH_SIZE=24
+        elif [[ $GPU_MEM_GB -ge 14 ]]; then BATCH_SIZE=16
+        else                                BATCH_SIZE=8
         fi
         echo "Auto batch size: ${BATCH_SIZE} (detected ${GPU_MEM_GB} GB GPU VRAM)"
+        echo "  > TIP: If you run into CUDA Out-Of-Memory (OOM) errors, safely lower this using '-b <size>'"
     else
         BATCH_SIZE=8
         echo "Warning: nvidia-smi not found. Defaulting to batch size ${BATCH_SIZE}."

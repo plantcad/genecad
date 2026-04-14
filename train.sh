@@ -11,8 +11,9 @@
 #                           (default: genecad_result/training)
 #   -r, --run-name NAME     WandB run name  (default: genecad-plant-multispecies)
 #   -p, --project NAME      WandB project   (default: genecad)
-#   -g, --gpus N            Number of GPUs  (default: 2)
+#   -g, --gpus N            Number of GPUs  (default: 1)
 #   -b, --batch-size N      Per-GPU batch size (default: 4)
+#   -e, --effective N       Effective batch size (default: 384)
 #   -l, --lr RATE           Learning rate   (default: 2e-4)
 #   -h, --help              Show this message
 #
@@ -34,6 +35,7 @@ RUN_NAME="genecad-plant-multispecies"
 PROJECT_NAME="genecad"
 NUM_GPUS=1
 BATCH_SIZE=4
+TARGET_EFFECTIVE_BATCH=384
 LEARNING_RATE=2e-4
 
 while [[ $# -gt 0 ]]; do
@@ -43,16 +45,26 @@ while [[ $# -gt 0 ]]; do
     -p|--project)    PROJECT_NAME="$2";  shift 2 ;;
     -g|--gpus)       NUM_GPUS="$2";      shift 2 ;;
     -b|--batch-size) BATCH_SIZE="$2";    shift 2 ;;
+    -e|--effective)  TARGET_EFFECTIVE_BATCH="$2"; shift 2 ;;
     -l|--lr)         LEARNING_RATE="$2"; shift 2 ;;
     -h|--help) usage ;;
     *) echo "Unknown option: $1"; usage ;;
   esac
 done
 
+# ── Dynamic Memory Settings ───────────────────────────────────────────────────
+# Minimize GPU fragmentation out-of-memory errors
+export PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True"
+
+# Maintain effective batch size regardless of physical GPU constraints
+ACCUM_GRAD=$(( TARGET_EFFECTIVE_BATCH / (BATCH_SIZE * NUM_GPUS) ))
+if [ $ACCUM_GRAD -lt 1 ]; then
+    ACCUM_GRAD=1
+fi
+
 # ── Fixed hyperparameters ─────────────────────────────────────────────────────
 BASE_MODEL="emarro/pcad2-200M-cnet-baseline"   # Downloaded from HuggingFace
 SPECIES_IDS="Athaliana Osativa Gmax Hvulgare Ptrichocarpa"
-ACCUM_GRAD=384        # Effective batch = BATCH_SIZE * ACCUM_GRAD * NUM_GPUS
 EPOCHS=1
 ARCHITECTURE="all"
 HEAD_LAYERS=8
@@ -159,13 +171,11 @@ ln -sf "Osativa_top_transcript.gff3"     "$DATA_DIR/gff/Osativa_323_v7.0.gene.gf
 ln -sf "Osativa_323_v7.0.fa.gz"          "$DATA_DIR/fasta/Osativa_323.fasta"                  2>/dev/null || true
 
 ln -sf "Gmax_top_transcript.gff3"        "$DATA_DIR/gff/Gmax_880_Wm82.a6.v1.gene.gff3"       2>/dev/null || true
-# Gmax FASTA already has the correct name, no symlink needed
 
 ln -sf "Hvulgare_top_transcript.gff3"    "$DATA_DIR/gff/HvulgareMorex_702_V3.gene.gff3"       2>/dev/null || true
 ln -sf "Hvulgare_462_r1.fa.gz"           "$DATA_DIR/fasta/HvulgareMorex_702_V3.fa.gz"         2>/dev/null || true
 
 ln -sf "Ptrichocarpa_top_transcript.gff3" "$DATA_DIR/gff/Ptrichocarpa_533_v4.1.gene.gff3"    2>/dev/null || true
-# Ptrichocarpa FASTA already has the correct name, no symlink needed
 
 echo "  Done."
 
