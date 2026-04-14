@@ -28,7 +28,6 @@ dependencies = [
   "pyarrow>=23.0.1",
   "wandb>=0.25.0",
   "optree>=0.19.0",
-  "flash-attn>=2.8.3",
   "omegaconf>=2.3.0",
 ]
 
@@ -37,6 +36,7 @@ torch = [
   "torch==2.7.1",
   "lightning~=2.5.1",
   "torchmetrics~=1.7.0",
+  "flash-attn>=2.8.3",
 ]
 mamba = [
   "causal-conv1d==1.5.0.post8",
@@ -59,7 +59,7 @@ url = "https://download.pytorch.org/whl/cu128"
 explicit = true
 
 [tool.uv]
-no-build-isolation-package = ["mamba-ssm", "causal-conv1d"]
+no-build-isolation-package = ["mamba-ssm", "causal-conv1d", "flash-attn"]
 
 [[tool.uv.dependency-metadata]]
 name = "mamba-ssm"

@@ -199,7 +199,13 @@ MERGE_SCRIPT="scripts/merge_gff.py"
 # Pipeline config
 TOKENIZER_PATH="$BASE_MODEL"
 DTYPE="bfloat16"
-PYTHON="uv run python"
+# Use the pre-built venv python if available (Docker container sets VIRTUAL_ENV=/build/.venv),
+# otherwise fall back to uv run (local dev mode).
+if [[ -n "$VIRTUAL_ENV" && -x "$VIRTUAL_ENV/bin/python" ]]; then
+    PYTHON="$VIRTUAL_ENV/bin/python"
+else
+    PYTHON="uv run python"
+fi
 export PYTHONPATH=.
 
 # Create top-level output directory

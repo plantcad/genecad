@@ -81,7 +81,11 @@ PREP_DIR="$PIPELINE_DIR/prep"
 DATA_DIR="$PIPELINE_DIR/data"
 CHECKPOINT_DIR="$OUTPUT_DIR/checkpoints"
 
-PYTHON="uv run python"
+if [[ -n "$VIRTUAL_ENV" && -x "$VIRTUAL_ENV/bin/python" ]]; then
+    PYTHON="$VIRTUAL_ENV/bin/python"
+else
+    PYTHON="uv run python"
+fi
 export PYTHONPATH=.
 
 # Download a single file from a HuggingFace dataset repo using the Python API

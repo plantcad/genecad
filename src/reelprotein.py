@@ -223,11 +223,34 @@ def get_prot_t5_model():
     return model, tokenizer
 
 
-def generate_embeddings(seqs_dict, max_residues=4000, max_seq_len=1000, max_batch=1):
+def generate_embeddings(seqs_dict, max_residues=None, max_seq_len=1300, max_batch=None):
     """
     Returns a pandas DataFrame where index is ProteinID and columns are 0-1023 (features).
     """
     model, tokenizer = get_prot_t5_model()
+
+    # Dynamic batch size logic based on available GPU VRAM
+    if max_residues is None or max_batch is None:
+        try:
+            total_vram_gb = torch.cuda.get_device_properties(device).total_memory / (1024**3)
+            if total_vram_gb >= 70:       # e.g., A100 80G, H100
+                _res, _batch = 40000, 200
+            elif total_vram_gb >= 35:     # e.g., A100 40G
+                _res, _batch = 20000, 100
+            elif total_vram_gb >= 20:     # e.g., RTX 3090/4090, L40S 24G
+                _res, _batch = 12000, 60
+            elif total_vram_gb >= 14:     # e.g., V100 16G, RTX 3080/4080 16G, T4 16G
+                _res, _batch = 8000, 32
+            else:                         # e.g., 8-12GB (safe defaults)
+                _res, _batch = 3000, 8
+                
+            logger.info(f"[Step 2] Detected {total_vram_gb:.1f}GB VRAM -> dynamically setting max_residues={_res}, max_batch={_batch}")
+        except Exception as e:
+            logger.warning(f"[Step 2] VRAM detection failed ({e}). Defaulting to safe fallback: max_residues=3000, max_batch=8")
+            _res, _batch = 3000, 8
+            
+        max_residues = max_residues or _res
+        max_batch = max_batch or _batch
 
     # Sort sequences by length (descending)
     seq_items = sorted(seqs_dict.items(), key=lambda kv: len(kv[1]), reverse=True)
@@ -409,7 +432,7 @@ def read_gff_raw(gff_path):
             if feature_type == "mRNA":
                 parent_gene = parent
             else:
-                parent_gene = parent.split(".")[0]
+                parent_gene = parent.rsplit(".", 1)[0]
 
             key = (seqid, parent_gene)
             if key in gene_entries:

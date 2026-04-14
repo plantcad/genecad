@@ -368,7 +368,6 @@ version = "1.0.0"
 source = { editable = "." }
 dependencies = [
     { name = "biopython" },
-    { name = "flash-attn" },
     { name = "matplotlib" },
     { name = "numba" },
     { name = "numpy" },
@@ -396,6 +395,7 @@ mamba = [
     { name = "mamba-ssm" },
 ]
 torch = [
+    { name = "flash-attn" },
     { name = "lightning" },
     { name = "torch" },
     { name = "torchmetrics" },
@@ -413,7 +413,7 @@ dev = [
 requires-dist = [
     { name = "biopython", specifier = "~=1.85" },
     { name = "causal-conv1d", marker = "extra == 'mamba'", git = "https://github.com/Dao-AILab/causal-conv1d?tag=v1.5.0.post8" },
-    { name = "flash-attn", specifier = ">=2.8.3" },
+    { name = "flash-attn", marker = "extra == 'torch'", specifier = ">=2.8.3" },
     { name = "lightning", marker = "extra == 'torch'", specifier = "~=2.5.1" },
     { name = "mamba-ssm", marker = "extra == 'mamba'", git = "https://github.com/state-spaces/mamba?tag=v2.2.4" },
     { name = "matplotlib", specifier = "~=3.10.1" },
@@ -1571,9 +1571,9 @@ dependencies = [
     { name = "typing-extensions" },
 ]
 wheels = [
-    { url = "https://download.pytorch.org/whl/cu128/torch-2.7.1%2Bcu128-cp312-cp312-manylinux_2_28_aarch64.whl", hash = "sha256:268e54db9f0bc2b7b9eb089852d3e592c2dea2facc3db494100c3d3b796549fa" },
-    { url = "https://download.pytorch.org/whl/cu128/torch-2.7.1%2Bcu128-cp312-cp312-manylinux_2_28_x86_64.whl", hash = "sha256:0b64f7d0a6f2a739ed052ba959f7b67c677028c9566ce51997f9f90fe573ddaa" },
-    { url = "https://download.pytorch.org/whl/cu128/torch-2.7.1%2Bcu128-cp312-cp312-win_amd64.whl", hash = "sha256:2bb8c05d48ba815b316879a18195d53a6472a03e297d971e916753f8e1053d30" },
+    { url = "https://download-r2.pytorch.org/whl/cu128/torch-2.7.1%2Bcu128-cp312-cp312-manylinux_2_28_aarch64.whl", hash = "sha256:268e54db9f0bc2b7b9eb089852d3e592c2dea2facc3db494100c3d3b796549fa" },
+    { url = "https://download-r2.pytorch.org/whl/cu128/torch-2.7.1%2Bcu128-cp312-cp312-manylinux_2_28_x86_64.whl", hash = "sha256:0b64f7d0a6f2a739ed052ba959f7b67c677028c9566ce51997f9f90fe573ddaa" },
+    { url = "https://download-r2.pytorch.org/whl/cu128/torch-2.7.1%2Bcu128-cp312-cp312-win_amd64.whl", hash = "sha256:2bb8c05d48ba815b316879a18195d53a6472a03e297d971e916753f8e1053d30" },
 ]
 
 [[package]]

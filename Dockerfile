@@ -10,7 +10,7 @@ ENV PATH="/root/.local/bin:$PATH"
 WORKDIR /build
 
 # Copy project files and directories
-COPY pyproject.toml LICENSE ./
+COPY pyproject.toml LICENSE README.md ./
 
 # Install dependencies
 RUN uv sync --extra torch --extra mamba
