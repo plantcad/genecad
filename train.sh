@@ -152,20 +152,20 @@ done
 echo ""
 echo "[1/8] Setting up species data links..."
 
-ln -sf "$DATA_DIR/gff/Athaliana_top_transcript.gff3"   "$DATA_DIR/gff/Athaliana_447_Araport11.gene.gff3"   2>/dev/null || true
-ln -sf "$DATA_DIR/fasta/Athaliana_447_TAIR10.fa.gz"    "$DATA_DIR/fasta/Athaliana_447.fasta"               2>/dev/null || true
+ln -sf "Athaliana_top_transcript.gff3"   "$DATA_DIR/gff/Athaliana_447_Araport11.gene.gff3"   2>/dev/null || true
+ln -sf "Athaliana_447_TAIR10.fa.gz"      "$DATA_DIR/fasta/Athaliana_447.fasta"               2>/dev/null || true
 
-ln -sf "$DATA_DIR/gff/Osativa_top_transcript.gff3"     "$DATA_DIR/gff/Osativa_323_v7.0.gene.gff3"          2>/dev/null || true
-ln -sf "$DATA_DIR/fasta/Osativa_323_v7.0.fa.gz"        "$DATA_DIR/fasta/Osativa_323.fasta"                  2>/dev/null || true
+ln -sf "Osativa_top_transcript.gff3"     "$DATA_DIR/gff/Osativa_323_v7.0.gene.gff3"          2>/dev/null || true
+ln -sf "Osativa_323_v7.0.fa.gz"          "$DATA_DIR/fasta/Osativa_323.fasta"                  2>/dev/null || true
 
-ln -sf "$DATA_DIR/gff/Gmax_top_transcript.gff3"        "$DATA_DIR/gff/Gmax_880_Wm82.a6.v1.gene.gff3"       2>/dev/null || true
-ln -sf "$DATA_DIR/fasta/Gmax_880_v6.0.fa.gz"           "$DATA_DIR/fasta/Gmax_880_v6.0.fa.gz"               2>/dev/null || true
+ln -sf "Gmax_top_transcript.gff3"        "$DATA_DIR/gff/Gmax_880_Wm82.a6.v1.gene.gff3"       2>/dev/null || true
+ln -sf "Gmax_880_v6.0.fa.gz"             "$DATA_DIR/fasta/Gmax_880_v6.0.fa.gz"               2>/dev/null || true
 
-ln -sf "$DATA_DIR/gff/Hvulgare_top_transcript.gff3"    "$DATA_DIR/gff/HvulgareMorex_702_V3.gene.gff3"       2>/dev/null || true
-ln -sf "$DATA_DIR/fasta/Hvulgare_462_r1.fa.gz"         "$DATA_DIR/fasta/HvulgareMorex_702_V3.fa.gz"         2>/dev/null || true
+ln -sf "Hvulgare_top_transcript.gff3"    "$DATA_DIR/gff/HvulgareMorex_702_V3.gene.gff3"       2>/dev/null || true
+ln -sf "Hvulgare_462_r1.fa.gz"           "$DATA_DIR/fasta/HvulgareMorex_702_V3.fa.gz"         2>/dev/null || true
 
-ln -sf "$DATA_DIR/gff/Ptrichocarpa_top_transcript.gff3" "$DATA_DIR/gff/Ptrichocarpa_533_v4.1.gene.gff3"    2>/dev/null || true
-ln -sf "$DATA_DIR/fasta/Ptrichocarpa_533_v4.0.fa.gz"   "$DATA_DIR/fasta/Ptrichocarpa_533_v4.0.fa.gz"       2>/dev/null || true
+ln -sf "Ptrichocarpa_top_transcript.gff3" "$DATA_DIR/gff/Ptrichocarpa_533_v4.1.gene.gff3"    2>/dev/null || true
+ln -sf "Ptrichocarpa_533_v4.0.fa.gz"      "$DATA_DIR/fasta/Ptrichocarpa_533_v4.0.fa.gz"       2>/dev/null || true
 
 echo "  Done."
 
