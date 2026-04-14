@@ -200,9 +200,12 @@ MERGE_SCRIPT="scripts/merge_gff.py"
 TOKENIZER_PATH="$BASE_MODEL"
 DTYPE="bfloat16"
 # Use the pre-built venv python if available (Docker container sets VIRTUAL_ENV=/build/.venv),
-# otherwise fall back to uv run (local dev mode).
+# or activate the local .venv from uv sync, otherwise fall back to uv run (local dev mode).
 if [[ -n "$VIRTUAL_ENV" && -x "$VIRTUAL_ENV/bin/python" ]]; then
     PYTHON="$VIRTUAL_ENV/bin/python"
+elif [[ -x ".venv/bin/python" ]]; then
+    VIRTUAL_ENV="$(pwd)/.venv"
+    PYTHON=".venv/bin/python"
 else
     PYTHON="uv run python"
 fi
@@ -474,7 +477,7 @@ FINAL_GFF="$OUTPUT_DIR/${SPECIES_ID}_GeneCAD_final.gff"
 if [[ -f "$RAW_GFF" ]]; then
     echo "Skipping merge — ${SPECIES_ID}_GeneCAD_raw.gff already exists"
 else
-    python3 "$MERGE_SCRIPT" \
+    $PYTHON "$MERGE_SCRIPT" \
         --output "$RAW_GFF" \
         --inputs "${RECALL_GFFS[@]}"
 fi
