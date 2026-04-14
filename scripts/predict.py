@@ -22,7 +22,14 @@ from src.prediction import merge_prediction_datasets
 from src.modeling import GeneClassifier, GeneClassifierConfig, token_transition_probs
 from src.schema import GffFeatureType
 import pandas as pd
-from src.dist import process_group
+from src.dist import (
+    barrier,
+    destroy_process_group,
+    init_process_group,
+    is_main_process,
+    local_rank,
+    process_group,
+)
 import torch._dynamo
 
 logger = logging.getLogger(__name__)
@@ -368,38 +375,85 @@ def flip(sequence: npt.ArrayLike) -> npt.ArrayLike:
 def create_predictions(args: Args):
     """Run the inference pipeline to generate logits for each genomic strand.
 
+    When launched via ``torchrun`` (multi-GPU), every rank initialises the
+    distributed process group, binds to its own GPU (``LOCAL_RANK``), and
+    processes a disjoint slice of the sequence windows.  All ranks write
+    their own shard zarr file (``predictions.<rank>.zarr``).  After a barrier
+    ensures every shard has been flushed to disk the process group is torn
+    down cleanly.  The downstream ``detect_intervals`` step merges the shards
+    transparently via :func:`~src.prediction.merge_prediction_datasets`.
+
+    When launched normally (single-GPU), the function behaves exactly as
+    before: rank 0, world size 1.
+
     Parameters
     ----------
     args : argparse.Namespace
         Command-line arguments controlling inputs, outputs, and runtime options.
     """
+    # ---- Distributed setup ------------------------------------------------
+    # No-op when not launched by torchrun (RANK env var absent).
+    init_process_group()
+
+    # Bind this process to its LOCAL_RANK GPU so tensor ops land on the
+    # correct device.  torchrun sets LOCAL_RANK; single-process runs keep
+    # the device that was passed via --device.
+    if torch.cuda.is_available():
+        lr = local_rank()
+        torch.cuda.set_device(lr)
+        args.device = f"cuda:{lr}"
+    else:
+        args.device = "cpu"
+
+    rank, world_size = process_group()
+    logger.info(
+        f"create_predictions starting: {rank=}, {world_size=}, device={args.device}"
+    )
+
+    # ---- PyTorch settings -------------------------------------------------
     # Set to avoid:
-    # UserWarning: TensorFloat32 tensor cores for float32 matrix multiplication available but not enabled. Consider setting `torch.set_float32_matmul_precision('high')` for better performance.
+    # UserWarning: TensorFloat32 tensor cores for float32 matrix multiplication
+    # available but not enabled.
     torch.set_float32_matmul_precision("medium")  # same setting as training
 
-    # Supress errors related to models trained with torch.compile, e.g.:
+    # Suppress errors related to models trained with torch.compile, e.g.:
     # AssertionError: increase TRITON_MAX_BLOCK['X'] to 4096
     # https://github.com/pytorch/pytorch/issues/135028#issuecomment-2330421513
-    # Eager mode is fine in this pipeline so far -- compilation barely makes a difference
     if args.suppress_dynamo_errors == "yes":
         torch._dynamo.config.suppress_errors = True
 
-    # Load the models and tokenizer
-    base_model, classifier, tokenizer = load_models(args)
+    # ---- Inference --------------------------------------------------------
+    try:
+        # Load models onto this rank's device
+        base_model, classifier, tokenizer = load_models(args)
 
-    # Load the data
-    dataset = load_data(args)
+        # Load data
+        dataset = load_data(args)
 
-    # Run the windowed inference to generate and save logits per rank
-    logger.info(f"Running predictions for {args.species_id}/{args.chromosome_id}")
-    predictions = _create_predictions(
-        args,
-        dataset,
-        base_model,
-        classifier,
-        tokenizer,
-    )
-    logger.info(f"Complete predictions dataset:\n{predictions}")
+        # Run windowed inference — each rank writes predictions.<rank>.zarr
+        logger.info(f"Running predictions for {args.species_id}/{args.chromosome_id}")
+        predictions = _create_predictions(
+            args,
+            dataset,
+            base_model,
+            classifier,
+            tokenizer,
+        )
+
+        # Synchronise: wait for every rank to finish flushing its shard before
+        # the process group is destroyed.  In single-process mode this is a
+        # no-op.
+        barrier()
+
+        if is_main_process():
+            logger.info(f"Complete predictions dataset:\n{predictions}")
+            logger.info(
+                f"All {world_size} rank(s) finished — shards in {args.output_dir}"
+            )
+    finally:
+        # Always tear down the process group even if an exception occurred so
+        # that NCCL resources are released and port numbers are freed.
+        destroy_process_group()
 
     logger.info("Done")
 

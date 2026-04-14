@@ -240,9 +240,13 @@ echo ""
 # Called as a background job when multi-GPU mode is active.
 process_chromosome() {
     local CHR_ID="$1"
-    local GPU_ID="$2"
+    local GPU_ID="$2"           # Pass "" (empty) to skip CUDA_VISIBLE_DEVICES override
     local BATCH_SIZE="$3"
-    local LOG_PREFIX="[${CHR_ID}|GPU${GPU_ID}]"
+    # Optional 4th argument: command used to launch the predict step.
+    # Defaults to plain $PYTHON (single-GPU, no distributed init).
+    # Pass "$PYTHON -m torch.distributed.run ..." for multi-GPU torchrun mode.
+    local PREDICT_LAUNCHER="${4:-$PYTHON}"
+    local LOG_PREFIX
 
     local CHR_OUTPUT_DIR="${OUTPUT_DIR}/${CHR_ID}"
     local PIPELINE_DIR="${CHR_OUTPUT_DIR}/pipeline"
@@ -250,13 +254,25 @@ process_chromosome() {
 
     # Skip if already complete
     if [[ -f "$CHR_OUTPUT_DIR/predictions_recall.gff" ]]; then
+        if [[ -n "$GPU_ID" ]]; then
+            LOG_PREFIX="[${CHR_ID}|GPU${GPU_ID}]"
+        else
+            LOG_PREFIX="[${CHR_ID}|multiGPU]"
+        fi
         echo "${LOG_PREFIX} Already complete — skipping all steps (delete $CHR_OUTPUT_DIR to rerun)"
         return 0
     fi
 
-    # Each job gets its own GPU via CUDA_VISIBLE_DEVICES.
-    # Inside the process, the GPU appears as device index 0.
-    export CUDA_VISIBLE_DEVICES="$GPU_ID"
+    # In single-GPU mode: restrict this process to the specified GPU so the
+    # device appears as cuda:0 inside Python.
+    # In multi-GPU (torchrun) mode: CUDA_VISIBLE_DEVICES is already set by the
+    # caller to cover all requested GPUs; each rank uses LOCAL_RANK for binding.
+    if [[ -n "$GPU_ID" ]]; then
+        export CUDA_VISIBLE_DEVICES="$GPU_ID"
+        LOG_PREFIX="[${CHR_ID}|GPU${GPU_ID}]"
+    else
+        LOG_PREFIX="[${CHR_ID}|multiGPU]"
+    fi
 
     # --- Step 1: Extract Sequences ---
     if [[ -e "$PIPELINE_DIR/sequences.zarr" ]]; then
@@ -275,8 +291,8 @@ process_chromosome() {
     if [[ -e "$PIPELINE_DIR/predictions.zarr" ]]; then
         echo "${LOG_PREFIX} [2/6] Skipping — predictions.zarr already exists"
     else
-        echo "${LOG_PREFIX} [2/6] Generating token predictions (GPU ${GPU_ID}, batch=${BATCH_SIZE})..."
-        $PYTHON scripts/predict.py create_predictions \
+        echo "${LOG_PREFIX} [2/6] Generating token predictions (batch=${BATCH_SIZE})..."
+        $PREDICT_LAUNCHER scripts/predict.py create_predictions \
             --input "$PIPELINE_DIR/sequences.zarr" \
             --output-dir "$PIPELINE_DIR/predictions.zarr" \
             --model-path "$BASE_MODEL" \
@@ -355,6 +371,7 @@ process_chromosome() {
 # Export function and required variables so subshells can access them
 export -f process_chromosome
 export OUTPUT_DIR SPECIES_ID BASE_MODEL HEAD_MODEL TOKENIZER_PATH DTYPE PYTHON PYTHONPATH
+export GPU_LIST_STR NUM_GPUS
 
 # =================================================================
 # Dispatch: sequential (1 GPU) or parallel (multi-GPU)
@@ -388,77 +405,39 @@ if [[ $NUM_GPUS -eq 1 ]]; then
 
 else
     # -------------------------------------------------------
-    # Multi-GPU: distribute chromosomes round-robin, parallel
+    # Multi-GPU (torchrun): all GPUs cooperate on each
+    # chromosome in turn.  Chromosomes are processed
+    # sequentially; every chromosome uses all N GPUs
+    # simultaneously via torch.distributed.
     # -------------------------------------------------------
-    echo "Running ${CHROM_COUNT} chromosome(s) in parallel across ${NUM_GPUS} GPU(s)"
+    echo "Running ${CHROM_COUNT} chromosome(s) sequentially, each using all ${NUM_GPUS} GPU(s) via torchrun"
+    echo "GPU list: ${GPU_LIST_STR}  |  per-GPU batch size: ${GPU_BATCH_SIZES[${GPU_ARRAY[0]}]}"
     echo ""
 
-    # Create per-job log directory
-    LOG_DIR="${OUTPUT_DIR}/.logs"
-    mkdir -p "$LOG_DIR"
+    # Build the torchrun launcher.
+    # We invoke torchrun via the venv python so that it inherits the correct
+    # site-packages and avoids any system-level python conflicts.
+    TORCHRUN_LAUNCHER="$PYTHON -m torch.distributed.run \
+        --standalone \
+        --nproc_per_node=${NUM_GPUS}"
 
-    # Group chromosomes by target GPU (round-robin)
-    declare -A GPU_QUEUES
-    for i in "${!CHR_ARRAY[@]}"; do
-        CHR_ID="${CHR_ARRAY[$i]}"
-        GPU_IDX=$(( i % NUM_GPUS ))
-        GPU_ID="${GPU_ARRAY[$GPU_IDX]}"
-        if [[ -z "${GPU_QUEUES[$GPU_ID]}" ]]; then
-            GPU_QUEUES[$GPU_ID]="$CHR_ID"
-        else
-            GPU_QUEUES[$GPU_ID]="${GPU_QUEUES[$GPU_ID]} $CHR_ID"
-        fi
-    done
+    # Expose the requested GPUs to every torchrun worker.
+    # LOCAL_RANK 0…N-1 map cleanly to these physical GPU indices.
+    export CUDA_VISIBLE_DEVICES="$GPU_LIST_STR"
 
-    # Launch one worker per GPU
-    for GPU_ID in "${!GPU_QUEUES[@]}"; do
-        BATCH_SIZE="${GPU_BATCH_SIZES[$GPU_ID]}"
-        QUEUE_STR="${GPU_QUEUES[$GPU_ID]}"
-        
-        # Start a subshell background worker for this GPU
-        (
-            for CHR_ID in $QUEUE_STR; do
-                JOB_LOG="${LOG_DIR}/${CHR_ID}.log"
-                echo "  Dispatching ${CHR_ID} -> GPU ${GPU_ID} (batch=${BATCH_SIZE})  [log: ${JOB_LOG}]"
-                
-                if ! process_chromosome "$CHR_ID" "$GPU_ID" "$BATCH_SIZE" >"$JOB_LOG" 2>&1; then
-                    echo "ERROR_IN_WORKER" > "$JOB_LOG.status"
-                    exit 1
-                fi
-            done
-        ) &
-        JOB_PIDS[$!]="$GPU_ID"
-    done
+    # Per-GPU batch size: detect from the first GPU in the list.
+    # Each rank sees the same batch size; the window slice is already smaller
+    # (1/world_size), so total memory per GPU is similar to single-GPU mode.
+    MULTI_BATCH="${GPU_BATCH_SIZES[${GPU_ARRAY[0]}]}"
 
-    echo ""
-    echo "Started ${NUM_GPUS} GPU worker(s). Waiting for completion..."
-    echo "(Tail individual logs in ${LOG_DIR}/ to monitor progress)"
-    echo ""
-
-    # Wait for all workers and collect exit codes
-    FAILED=0
-    for pid in "${!JOB_PIDS[@]}"; do
-        GPU_ID="${JOB_PIDS[$pid]}"
-        if wait "$pid"; then
-            echo "  [OK]   Worker for GPU ${GPU_ID}"
-        else
-            echo "  [FAIL] Worker for GPU ${GPU_ID} — check logs in ${LOG_DIR}/ for details"
-            (( FAILED++ ))
-        fi
-    done
-
-    if [[ $FAILED -gt 0 ]]; then
-        echo ""
-        echo "ERROR: ${FAILED} GPU worker(s) failed. Aborting merge step."
-        echo "Fix the errors above and re-run (completed chromosomes will be skipped)."
-        exit 1
-    fi
-
-    echo ""
-    echo "All chromosome jobs completed successfully."
-
-    # Collect GFF paths in original chromosome order
     for CHR_ID in "${CHR_ARRAY[@]}"; do
+        echo ""
+        echo "================================================================="
+        echo "Processing chromosome: $CHR_ID"
+        echo "================================================================="
+        # Pass empty GPU_ID ("") so process_chromosome skips the per-GPU
+        # CUDA_VISIBLE_DEVICES override; the torchrun launcher handles binding.
+        process_chromosome "$CHR_ID" "" "$MULTI_BATCH" "$TORCHRUN_LAUNCHER"
         RECALL_GFFS=("${RECALL_GFFS[@]}" "${OUTPUT_DIR}/${CHR_ID}/predictions_recall.gff")
     done
 fi
