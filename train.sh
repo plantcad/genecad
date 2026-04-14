@@ -70,7 +70,7 @@ DATA_DIR="$PIPELINE_DIR/data"
 CHECKPOINT_DIR="$OUTPUT_DIR/checkpoints"
 
 PYTHON="uv run python"
-HF_CLI="uv run huggingface-cli"
+HF_CLI="uv run python -m huggingface_hub.commands.huggingface_cli"
 export PYTHONPATH=.
 
 # ── Banner ────────────────────────────────────────────────────────────────────
