@@ -8,7 +8,7 @@
 
 # GeneCAD
 
-GeneCAD is an end-to-end genome annotation pipeline for plants and animals, powered by the DNA foundation model [PlantCAD2](https://doi.org/10.1101/2025.10.31.685877). Unlike traditional annotation tools that rely on hand-crafted features or splice-site grammars, GeneCAD learns gene structure directly from sequence using a pretrained transformer encoder followed by a Viterbi decoder and protein-level refinement via [ReelProtein](https://onlinelibrary.wiley.com/doi/10.1111/tpj.70483). It runs on a single GPU and requires no species-specific training data or external alignments.
+GeneCAD is an end-to-end genome annotation pipeline for plants and animals, powered by the DNA foundation model [PlantCAD2](https://doi.org/10.1101/2025.10.31.685877). Unlike traditional annotation tools that rely on hand-crafted features or splice-site grammars, GeneCAD learns gene structure directly from sequence using a pretrained transformer encoder followed by a Viterbi decoder and protein-level refinement via [ReelProtein](https://onlinelibrary.wiley.com/doi/10.1111/tpj.70483). It requires no species-specific training data or external alignments, and supports single- or multi-GPU inference out of the box.
 
 ## Contents
 
@@ -22,6 +22,7 @@ GeneCAD is an end-to-end genome annotation pipeline for plants and animals, powe
 - [Inference](#inference)
   - [Available models](#available-models)
   - [Running the pipeline](#running-the-pipeline)
+  - [Multi-GPU acceleration](#multi-gpu-acceleration)
   - [Pipeline steps](#pipeline-steps)
   - [Outputs](#outputs)
   - [Throughput](#throughput)
@@ -68,6 +69,12 @@ bash predict.sh \
   -o /path/to/output_dir \
   -s MySpecies \
   -m plant   # or: -m animal  for vertebrate genomes
+```
+
+**Use all available GPUs** to run chromosomes in parallel (significantly faster on large genomes):
+
+```bash
+bash predict.sh --gpus all
 ```
 
 ---
@@ -208,7 +215,7 @@ EOF
 sbatch run_genecad.slurm
 ```
 
-> **Note:** Only one GPU per node is currently supported. For very large genomes, chromosomes are processed sequentially within a single job. To parallelise, split your FASTA by chromosome and submit one job per chromosome.
+> **Multi-GPU on SLURM:** To use all GPUs on a node, request them with `--gres=gpu:4` (or however many are available) and pass `--gpus all` to `predict.sh`. Chromosomes will be distributed across GPUs automatically. For very large genomes across multiple nodes, split your FASTA by chromosome and submit one job per chromosome.
 
 ### Using SkyPilot
 
@@ -283,7 +290,8 @@ Options:
   -o, --output DIR      Output directory  (default: genecad_result/Athaliana_predictions)
   -s, --species NAME    Species label prefixed on output filenames  (default: Athaliana)
   -m, --mode MODE       Model to use: plant | animal  (default: plant)
-  -b, --batch-size N    Inference batch size  (default: auto — scaled to GPU VRAM)
+  -b, --batch-size N    Inference batch size per GPU  (default: auto — scaled to GPU VRAM)
+  -g, --gpus LIST       GPU IDs to use: comma-separated list or 'all'  (default: 0)
   -h, --help            Show this help message
 ```
 
@@ -314,6 +322,29 @@ bash predict.sh \
   -s Hsapiens \
   -m animal
 ```
+
+### Multi-GPU acceleration
+
+By default, `predict.sh` uses GPU `0` and processes chromosomes sequentially. Pass `--gpus` to distribute chromosomes across multiple GPUs and process them **in parallel** — ideal for large, multi-chromosome genomes.
+
+```bash
+# Use all available GPUs (auto-detected)
+bash predict.sh -i genome.fa -s MySpecies --gpus all
+
+# Use specific GPUs (e.g. 0, 1, 2, 3)
+bash predict.sh -i genome.fa -s MySpecies --gpus 0,1,2,3
+
+# Use 2 GPUs with a fixed batch size
+bash predict.sh -i genome.fa -s MySpecies --gpus 0,1 -b 32
+```
+
+Chromosomes are assigned round-robin across the specified GPUs. The batch size is auto-scaled independently per GPU (so mixed fleets — e.g. an A100 and a V100 — work correctly). In multi-GPU mode, each chromosome's log is written to `<OUTPUT_DIR>/.logs/<CHR_ID>.log` for easy monitoring:
+
+```bash
+tail -f genecad_result/MySpecies_predictions/.logs/Chr1.log
+```
+
+The pipeline is fully resumable in both single- and multi-GPU modes: re-running the same command skips any step whose output already exists.
 
 ### Pipeline steps
 
