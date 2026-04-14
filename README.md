@@ -383,6 +383,87 @@ Estimated cost for common reference plant genomes (using Lambda A100 at $0.0202/
 
 ---
 
+## Training
+
+This section is for researchers who want to **fine-tune GeneCAD on new species** or reproduce the published models. If you only want to annotate a genome, skip to [Inference](#inference) — no training is needed.
+
+### Prerequisites
+
+| Requirement | Notes |
+|-------------|-------|
+| ≥ 2 × NVIDIA GPUs | Training uses PyTorch DDP. Single-GPU works but is very slow. |
+| HuggingFace account | Run `huggingface-cli login` to download training data. |
+| WandB (optional) | Metrics are logged to WandB. Disable with `WANDB_MODE=disabled`. |
+
+### Quick start
+
+```bash
+# Login to HuggingFace (one-time)
+huggingface-cli login
+
+# Fine-tune on the 5-species plant dataset (downloads data automatically)
+bash train.sh
+
+# Fine-tune with custom settings
+bash train.sh \
+  -g 4 \              # number of GPUs
+  -b 4 \              # per-GPU batch size
+  -l 1e-4 \           # learning rate
+  -o results/my_run \ # output directory
+  -r my-run-name      # WandB run name
+```
+
+### Options
+
+```
+Options:
+  -o, --output DIR      Output directory for checkpoints and logs
+                        (default: genecad_result/training)
+  -r, --run-name NAME   WandB run name  (default: genecad-plant-multispecies)
+  -p, --project NAME    WandB project   (default: genecad)
+  -g, --gpus N          Number of GPUs  (default: 2)
+  -b, --batch-size N    Per-GPU batch size (default: 4)
+  -l, --lr RATE         Learning rate   (default: 2e-4)
+  -h, --help            Show this message
+```
+
+### Pipeline steps
+
+`train.sh` is fully resumable — each step checks for its output and skips if already done.
+
+| Step | Description |
+|------|-------------|
+| 0. Download | Fetch training GFF3 and FASTA files from HuggingFace |
+| 1. Link | Create symlinks with naming conventions expected by the config |
+| 2. Extract GFF | Parse gene annotations into a flat feature table (Parquet) |
+| 3. Tokenize | Tokenize genome sequences into Zarr format |
+| 4. Filter | Remove incomplete or invalid gene features |
+| 5. Stack | Convert features into genomic interval windows |
+| 6. Labels | Assign per-token class labels from the filtered intervals |
+| 7. Splits | Sample training windows and split into train/validation sets |
+| 8. Train | Fine-tune GeneCAD with PyTorch DDP + PyTorch Lightning |
+
+### Outputs
+
+```
+<OUTPUT_DIR>/
+├── training.log              ← full training log
+└── checkpoints/
+    └── *.ckpt                ← Lightning checkpoints (use with --model-checkpoint in predict.sh)
+```
+
+To use a trained checkpoint for inference, pass it to `predict.sh`:
+
+```bash
+bash predict.sh \
+  -i genome.fa \
+  -s MySpecies \
+  -m plant \
+  --model-checkpoint results/my_run/checkpoints/epoch=0-step=5000.ckpt
+```
+
+---
+
 ## Evaluation
 
 GeneCAD includes a built-in evaluation tool (`scripts/evaluate.py`) that produces a structured five-section report comparing predicted annotations against a reference. It does not require `gffcompare` or any external tool beyond an optional BUSCO install for Section 4.
