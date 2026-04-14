@@ -70,8 +70,26 @@ DATA_DIR="$PIPELINE_DIR/data"
 CHECKPOINT_DIR="$OUTPUT_DIR/checkpoints"
 
 PYTHON="uv run python"
-HF_CLI="uv run python -m huggingface_hub.commands.huggingface_cli"
 export PYTHONPATH=.
+
+# Download a single file from a HuggingFace dataset repo using the Python API
+# Usage: hf_download <repo_id> <remote_path> <local_dir>
+hf_download() {
+    local repo_id="$1"
+    local remote_path="$2"
+    local local_dir="$3"
+    uv run python -c "
+import sys
+from huggingface_hub import hf_hub_download
+hf_hub_download(
+    repo_id='${repo_id}',
+    filename='${remote_path}',
+    repo_type='dataset',
+    local_dir='${local_dir}',
+    local_dir_use_symlinks=False,
+)
+"
+}
 
 # ── Banner ────────────────────────────────────────────────────────────────────
 echo "============================================"
@@ -99,10 +117,10 @@ for species in Athaliana Osativa Gmax Hvulgare Ptrichocarpa; do
   dst="$DATA_DIR/gff/${species}_top_transcript.gff3"
   if [ ! -f "$dst" ]; then
     echo "  Downloading GFF: $species"
-    $HF_CLI download "$HF_REPO" \
+    hf_download "$HF_REPO" \
       "data/gff/training/${species}_top_transcript.gff3" \
-      --repo-type dataset --local-dir "$DATA_DIR/gff" \
-      --local-dir-use-symlinks False
+      "$DATA_DIR/gff"
+    # hf_hub_download preserves the remote path structure; flatten to dst
     mv "$DATA_DIR/gff/data/gff/training/${species}_top_transcript.gff3" "$dst" 2>/dev/null || true
   else
     echo "  Skipped (exists): $species GFF"
@@ -121,9 +139,7 @@ for fname in "${!FASTA_FILES[@]}"; do
   hf_path="${FASTA_FILES[$fname]}"
   if [ ! -f "$dst" ]; then
     echo "  Downloading FASTA: $fname"
-    $HF_CLI download "$HF_REPO" "$hf_path" \
-      --repo-type dataset --local-dir "$DATA_DIR/fasta" \
-      --local-dir-use-symlinks False
+    hf_download "$HF_REPO" "$hf_path" "$DATA_DIR/fasta"
     mv "$DATA_DIR/fasta/$hf_path" "$dst" 2>/dev/null || true
   else
     echo "  Skipped (exists): $fname"
