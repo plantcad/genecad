@@ -32,7 +32,7 @@ usage() {
 OUTPUT_DIR="genecad_result/training"
 RUN_NAME="genecad-plant-multispecies"
 PROJECT_NAME="genecad"
-NUM_GPUS=2
+NUM_GPUS=1
 BATCH_SIZE=4
 LEARNING_RATE=2e-4
 
@@ -50,7 +50,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 # ── Fixed hyperparameters ─────────────────────────────────────────────────────
-BASE_MODEL="plantcad/pcad2-200M-cnet-baseline"   # Downloaded from HuggingFace
+BASE_MODEL="emarro/pcad2-200M-cnet-baseline"   # Downloaded from HuggingFace
 SPECIES_IDS="Athaliana Osativa Gmax Hvulgare Ptrichocarpa"
 ACCUM_GRAD=384        # Effective batch = BATCH_SIZE * ACCUM_GRAD * NUM_GPUS
 EPOCHS=1
@@ -70,6 +70,7 @@ DATA_DIR="$PIPELINE_DIR/data"
 CHECKPOINT_DIR="$OUTPUT_DIR/checkpoints"
 
 PYTHON="uv run python"
+HF_CLI="uv run huggingface-cli"
 export PYTHONPATH=.
 
 # ── Banner ────────────────────────────────────────────────────────────────────
@@ -98,7 +99,7 @@ for species in Athaliana Osativa Gmax Hvulgare Ptrichocarpa; do
   dst="$DATA_DIR/gff/${species}_top_transcript.gff3"
   if [ ! -f "$dst" ]; then
     echo "  Downloading GFF: $species"
-    huggingface-cli download "$HF_REPO" \
+    $HF_CLI download "$HF_REPO" \
       "data/gff/training/${species}_top_transcript.gff3" \
       --repo-type dataset --local-dir "$DATA_DIR/gff" \
       --local-dir-use-symlinks False
@@ -120,7 +121,7 @@ for fname in "${!FASTA_FILES[@]}"; do
   hf_path="${FASTA_FILES[$fname]}"
   if [ ! -f "$dst" ]; then
     echo "  Downloading FASTA: $fname"
-    huggingface-cli download "$HF_REPO" "$hf_path" \
+    $HF_CLI download "$HF_REPO" "$hf_path" \
       --repo-type dataset --local-dir "$DATA_DIR/fasta" \
       --local-dir-use-symlinks False
     mv "$DATA_DIR/fasta/$hf_path" "$dst" 2>/dev/null || true
