@@ -44,10 +44,12 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           # Automatically tag the image with 'latest' on main branch
-          # and track version tags if you create GitHub Releases
+          # track version tags if you create GitHub Releases,
+          # and also attach the branch name if building a non-main branch.
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
             type=semver,pattern={{version}}
+            type=ref,event=branch
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
