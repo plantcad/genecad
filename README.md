@@ -447,10 +447,26 @@ Options:
 
 ```
 <OUTPUT_DIR>/
-├── training.log              ← full training log
-└── checkpoints/
-    └── *.ckpt                ← Lightning checkpoints (use with --model-checkpoint in predict.sh)
+├── training.log                        ← full training log (tee'd to stdout)
+├── checkpoints/
+│   └── *.ckpt                          ← Lightning checkpoints
+└── pipeline/                           ← intermediate files (can be large)
+    ├── extract/
+    │   ├── raw_features.parquet        ← parsed gene annotations
+    │   └── tokens.zarr                 ← tokenized genome sequences
+    ├── transform/
+    │   ├── features.parquet            ← filtered features
+    │   ├── intervals.parquet           ← stacked genomic intervals
+    │   ├── labels.zarr                 ← per-token class labels
+    │   ├── sequences.zarr              ← sequence + label dataset
+    │   └── windows.zarr                ← sampled training windows
+    └── prep/
+        └── splits/
+            ├── train.zarr              ← training split
+            └── valid.zarr              ← validation split
 ```
+
+> **Disk space:** The `pipeline/` directory can be **several hundred GB** depending on genome sizes and number of species. It is safe to delete after training — checkpoints are self-contained. The pipeline is resumable, so intermediate files are preserved by default to avoid recomputation.
 
 To use a trained checkpoint for inference, pass it to `predict.sh`:
 
