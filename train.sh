@@ -159,13 +159,13 @@ ln -sf "Osativa_top_transcript.gff3"     "$DATA_DIR/gff/Osativa_323_v7.0.gene.gf
 ln -sf "Osativa_323_v7.0.fa.gz"          "$DATA_DIR/fasta/Osativa_323.fasta"                  2>/dev/null || true
 
 ln -sf "Gmax_top_transcript.gff3"        "$DATA_DIR/gff/Gmax_880_Wm82.a6.v1.gene.gff3"       2>/dev/null || true
-ln -sf "Gmax_880_v6.0.fa.gz"             "$DATA_DIR/fasta/Gmax_880_v6.0.fa.gz"               2>/dev/null || true
+# Gmax FASTA already has the correct name, no symlink needed
 
 ln -sf "Hvulgare_top_transcript.gff3"    "$DATA_DIR/gff/HvulgareMorex_702_V3.gene.gff3"       2>/dev/null || true
 ln -sf "Hvulgare_462_r1.fa.gz"           "$DATA_DIR/fasta/HvulgareMorex_702_V3.fa.gz"         2>/dev/null || true
 
 ln -sf "Ptrichocarpa_top_transcript.gff3" "$DATA_DIR/gff/Ptrichocarpa_533_v4.1.gene.gff3"    2>/dev/null || true
-ln -sf "Ptrichocarpa_533_v4.0.fa.gz"      "$DATA_DIR/fasta/Ptrichocarpa_533_v4.0.fa.gz"       2>/dev/null || true
+# Ptrichocarpa FASTA already has the correct name, no symlink needed
 
 echo "  Done."
 
