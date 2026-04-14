@@ -278,13 +278,16 @@ The primary entry point is `predict.sh`. It discovers all chromosomes in the inp
 Usage: predict.sh [OPTIONS]
 
 Options:
-  -i, --input PATH    Genome FASTA file to annotate
-                      Default: downloads Arabidopsis thaliana TAIR12 example
-  -o, --output DIR    Output directory  (default: genecad_result/Athaliana_predictions)
-  -s, --species NAME  Species label prefixed on output filenames  (default: Athaliana)
-  -m, --mode MODE     Model to use: plant | animal  (default: plant)
-  -h, --help          Show this help message
+  -i, --input PATH      Genome FASTA file to annotate
+                        Default: downloads Arabidopsis thaliana TAIR12 example
+  -o, --output DIR      Output directory  (default: genecad_result/Athaliana_predictions)
+  -s, --species NAME    Species label prefixed on output filenames  (default: Athaliana)
+  -m, --mode MODE       Model to use: plant | animal  (default: plant)
+  -b, --batch-size N    Inference batch size  (default: auto — scaled to GPU VRAM)
+  -h, --help            Show this help message
 ```
+
+> **Note:** `predict.sh` is the **only script you need to run**. Files under `scripts/` (`scripts/predict.py`, `scripts/gff.py`, etc.) are internal pipeline modules called automatically by `predict.sh` — do not run them directly.
 
 **Default example (Arabidopsis TAIR12, auto-downloaded):**
 
@@ -343,6 +346,20 @@ After running, the output directory contains:
 ```
 
 The two top-level GFF3 files are the primary outputs. Intermediate files are preserved for debugging or downstream analysis.
+
+### Resuming an interrupted run
+
+`predict.sh` is fully **resumable** — if a run is interrupted (e.g. job timeout or OOM), simply re-run the same command. Each step checks whether its output file already exists and skips it if so. Only the remaining work will run.
+
+To **force a step to re-run**, delete its output:
+
+```bash
+# Re-run predictions for one chromosome from scratch
+rm -rf genecad_result/<OUTPUT_DIR>/<CHR_ID>/
+
+# Re-run only the token prediction step (Step 2)
+rm -rf genecad_result/<OUTPUT_DIR>/<CHR_ID>/pipeline/predictions.zarr
+```
 
 ### Throughput
 
