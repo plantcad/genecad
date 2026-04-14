@@ -53,7 +53,7 @@ def load_classifier(args: Args) -> GeneClassifier:
         logger.info(f"Downloaded classifier to {model_checkpoint}")
 
     model = GeneClassifier.load_from_checkpoint(
-        model_checkpoint, map_location=args.device
+        model_checkpoint, map_location=args.device, strict=False
     )
     model = model.eval()
     model = model.to(args.device, dtype=dtype)

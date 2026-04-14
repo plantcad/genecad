@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import gzip
 import os
 import glob
 import gc
@@ -118,7 +119,9 @@ def extract_candidate_proteins(genes, genome_fasta):
         return len(nuc) >= 3 and nuc.startswith("ATG") and nuc[-3:] in STOPS
 
     logger.info(f"[Step 1] Loading Genome: {genome_fasta}")
-    seqs = SeqIO.to_dict(SeqIO.parse(genome_fasta, "fasta"))
+    _open = gzip.open if genome_fasta.endswith(".gz") else open
+    with _open(genome_fasta, "rt") as _fh:
+        seqs = SeqIO.to_dict(SeqIO.parse(_fh, "fasta"))
 
     protein_candidates = {}
 

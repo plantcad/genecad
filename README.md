@@ -41,24 +41,26 @@ Annotate a full plant genome in four commands. No configuration required — the
 # 1. Clone the repository
 git clone https://github.com/plantcad/genecad && cd genecad
 
-# 2. Install uv, then reload your shell PATH
+# 2. Install uv and make it available in the current shell
 curl -LsSf https://astral.sh/uv/install.sh | sh
-source $HOME/.local/bin/env
+export PATH="$HOME/.local/bin:$PATH"
 
-# 3. Install Python dependencies (mamba build takes 3–30 min)
+# 3. Install Python dependencies
+#    mamba and causal-conv1d build from source — this can take 3–30 minutes
 uv sync --extra torch --extra mamba
 
 # 4. Run the full prediction pipeline
 bash predict.sh
 ```
 
-> **Output:** Two GFF3 files are created in `genecad_result/Athaliana_predictions/`:
+> **Output:** Two GFF3 files are written to `genecad_result/Athaliana_predictions/`:
+>
 > | File | Description |
 > |------|-------------|
-> | `Athaliana_GeneCAD_raw.gff` | Raw model predictions |
+> | `Athaliana_GeneCAD_raw.gff` | Raw model predictions (all chromosomes merged) |
 > | `Athaliana_GeneCAD_final.gff` | Protein-refined, publication-ready annotations |
 
-To annotate your own genome, pass your FASTA file, output directory, species name, and model mode:
+To annotate your own genome, pass your FASTA file and a few labels:
 
 ```bash
 bash predict.sh \
@@ -72,15 +74,15 @@ bash predict.sh \
 
 ## Prerequisites
 
-| Requirement | Minimum | Notes |
-|-------------|---------|-------|
-| OS | Linux (x86-64) | macOS is not supported (no CUDA) |
-| GPU | NVIDIA GPU with ≥ 16 GB VRAM | e.g. A100, H100, RTX 3090/4090 |
-| CUDA | 12.4 | 12.8 recommended; matches PyTorch 2.7.1 |
-| Python | 3.11 | 3.12 recommended |
-| Disk | ~20 GB free | Models are cached in `~/.cache/huggingface` |
+| Requirement | Minimum | Recommended | Notes |
+|-------------|---------|-------------|-------|
+| OS | Linux (x86-64) | — | macOS is not supported (no CUDA) |
+| GPU | NVIDIA ≥ 16 GB VRAM | A100 / H100 | e.g. RTX 3090/4090 for development |
+| CUDA | 12.4 | 12.8 | Must match PyTorch 2.7.1 build |
+| Python | 3.11 | 3.12 | Managed automatically by `uv` |
+| Disk | ~20 GB free | — | Model weights cached in `~/.cache/huggingface` |
 
-Model weights (~800 MB per model) are downloaded automatically from Hugging Face on first run. Internet access is required unless weights are pre-cached.
+Model weights are downloaded automatically from Hugging Face on first run. Internet access is required unless weights are pre-cached.
 
 ---
 
@@ -90,23 +92,23 @@ Choose the installation method that best fits your environment:
 
 | Method | Best for |
 |--------|----------|
-| [Docker](#using-docker) | Reproducible runs, no environment management |
-| [uv](#using-uv) | Local development, interactive use |
-| [SLURM](#using-slurm) | HPC/supercomputer clusters |
+| [Docker](#using-docker) | Reproducible runs, no local environment setup |
+| [uv](#using-uv) | Local development and interactive use |
+| [SLURM](#using-slurm) | HPC / supercomputer clusters |
 | [SkyPilot](#using-skypilot) | On-demand cloud GPUs |
 
 ### Using Docker
 
-The Docker image at `ghcr.io/plantcad/genecad` contains the full runtime environment. Source code is **mounted at run time**, so no rebuild is needed when you update the repository.
+The Docker image at `ghcr.io/plantcad/genecad` bundles the complete runtime. Source code is **mounted at run time**, so changes you make to the cloned repository take effect immediately — no rebuild needed.
 
 ```bash
-# Clone the GeneCAD repository
+# Clone the repository
 git clone https://github.com/plantcad/genecad && cd genecad
 
 # Pull the image
 docker pull ghcr.io/plantcad/genecad:latest
 
-# Run the full prediction pipeline on Arabidopsis (auto-downloads example FASTA)
+# Run on the bundled Arabidopsis example (auto-downloads FASTA)
 docker run --rm --gpus all \
   -v $(pwd):/workspace -w /workspace \
   ghcr.io/plantcad/genecad:latest \
@@ -135,13 +137,17 @@ docker run --rm --gpus all \
 
 ### Using uv
 
+[uv](https://docs.astral.sh/uv/) is a fast Python package manager that handles the virtual environment and all dependencies in one command.
+
 ```bash
 # Clone the repository
 git clone https://github.com/plantcad/genecad && cd genecad
 
-# Install uv, then reload your shell PATH
+# Install uv
 curl -LsSf https://astral.sh/uv/install.sh | sh
-source $HOME/.local/bin/env
+
+# Make uv available immediately (or open a new terminal)
+export PATH="$HOME/.local/bin:$PATH"
 
 # Install all dependencies
 # mamba and causal-conv1d build from source — this can take 3–30 minutes
@@ -151,7 +157,7 @@ uv sync --extra torch --extra mamba
 bash predict.sh
 ```
 
-PyTorch is pinned to 2.7.1 (CUDA 12.8) for compatibility with `mamba` (2.2.4) and `causal-conv1d` (1.5.0.post8). Newer combinations may work but are not officially tested.
+PyTorch is pinned to 2.7.1 (CUDA 12.8) to ensure compatibility with `mamba` (2.2.4) and `causal-conv1d` (1.5.0.post8). Newer combinations may work but are not officially tested.
 
 `mamba` and `causal-conv1d` build from source without build isolation for reliability. To cache the built wheels and speed up future installs, add these entries to `pyproject.toml`:
 
@@ -159,15 +165,16 @@ PyTorch is pinned to 2.7.1 (CUDA 12.8) for compatibility with `mamba` (2.2.4) an
 [tool.uv.sources]
 mamba-ssm = { path = "path/to/mamba_ssm-2.2.4-*.whl" }
 causal-conv1d = { path = "path/to/causal_conv1d-1.5.0.post8-*.whl" }
-# OR use a remote URL:
+# Or use a remote URL:
 # mamba-ssm = { url = "https://.../mamba_ssm-2.2.4-*.whl" }
 ```
 
 ### Using SLURM
 
-Follow the [uv](#using-uv) instructions to create a virtual environment on your cluster first. Load the appropriate modules for CUDA 12.8 and Python 3.12 (minimum tested: CUDA 12.4, Python 3.11, PyTorch 2.5.1).
+Follow the [uv](#using-uv) instructions above to create a virtual environment on your cluster. Load the appropriate modules for your cluster (e.g. CUDA 12.8, Python 3.12). The minimum tested combination is CUDA 12.4, Python 3.11, and PyTorch 2.5.1.
 
 **Interactive single-node job:**
+
 ```bash
 salloc --partition=gpu-queue --nodes=1 --ntasks=1 --gres=gpu:1
 
@@ -180,6 +187,7 @@ bash predict.sh \
 ```
 
 **Batch job (`sbatch`):**
+
 ```bash
 cat << 'EOF' > run_genecad.slurm
 #!/bin/bash
@@ -200,14 +208,14 @@ EOF
 sbatch run_genecad.slurm
 ```
 
-> **Note:** Only one GPU per node is currently supported. For very large genomes, each chromosome is processed sequentially. To parallelise across chromosomes, split your FASTA by chromosome and submit one job per chromosome.
+> **Note:** Only one GPU per node is currently supported. For very large genomes, chromosomes are processed sequentially within a single job. To parallelise, split your FASTA by chromosome and submit one job per chromosome.
 
 ### Using SkyPilot
 
-[SkyPilot](https://docs.skypilot.co/en/latest/docs/index.html) allows you to provision on-demand cloud GPUs across many providers (AWS, GCP, Lambda, RunPod, etc.) without managing infrastructure manually. This is useful if you do not have access to a local GPU or HPC cluster.
+[SkyPilot](https://docs.skypilot.co/en/latest/docs/index.html) lets you provision on-demand cloud GPUs across many providers (AWS, GCP, Lambda, RunPod, etc.) without managing infrastructure manually. This is useful if you do not have access to a local GPU or HPC cluster.
 
 ```bash
-# Install SkyPilot (adjust the cloud extra as needed: lambda, aws, gcp, etc.)
+# Install SkyPilot (adjust the cloud extra as needed)
 pip install "skypilot[lambda]>=0.10.3"
 
 # Clear local SkyPilot state, if any
@@ -220,7 +228,8 @@ sky launch --num-nodes 1 --yes --no-setup \
 # SSH into the node, then install and run
 ssh genecad
 git clone https://github.com/plantcad/genecad && cd genecad
-curl -LsSf https://astral.sh/uv/install.sh | sh && source $HOME/.local/bin/env
+curl -LsSf https://astral.sh/uv/install.sh | sh
+export PATH="$HOME/.local/bin:$PATH"
 uv sync --extra torch --extra mamba
 bash predict.sh
 
@@ -233,17 +242,17 @@ See the [Throughput](#throughput) section for GPU cost comparisons across provid
 <details><summary>SkyPilot GPU rates</summary>
 
 ```
-> sky show-gpus L4:1 # low-end development GPU
-GPU  QTY  CLOUD   INSTANCE_TYPE  DEVICE_MEM  vCPUs  HOST_MEM  HOURLY_PRICE  REGION
-L4   1.0  RunPod  1x_L4_SECURE   -           4      24GB      $ 0.440       CA
-L4   1.0  GCP     g2-standard-4  24GB        4      16GB      $ 0.705       us-east4
-L4   1.0  AWS     g6.xlarge      22GB        4      16GB      $ 0.805       us-east-2
+> sky show-gpus L4:1   # low-end development GPU
+GPU  CLOUD   INSTANCE_TYPE  DEVICE_MEM  HOURLY_PRICE  REGION
+L4   RunPod  1x_L4_SECURE   24GB        $ 0.440       CA
+L4   GCP     g2-standard-4  24GB        $ 0.705       us-east4
+L4   AWS     g6.xlarge      22GB        $ 0.805       us-east-2
 
-> sky show-gpus H100:1 # high-end production GPU
-GPU   QTY  CLOUD       INSTANCE_TYPE             DEVICE_MEM  HOURLY_PRICE  REGION
-H100  1.0  Hyperbolic  1x-H100-75-722            80GB        $ 1.290       default
-H100  1.0  Lambda      gpu_1x_h100_pcie          80GB        $ 2.490       europe-central-1
-H100  1.0  GCP         a3-highgpu-1g             80GB        $ 5.383       us-central1
+> sky show-gpus H100:1  # high-end production GPU
+GPU   CLOUD       INSTANCE_TYPE          DEVICE_MEM  HOURLY_PRICE  REGION
+H100  Hyperbolic  1x-H100-75-722         80GB        $ 1.290       default
+H100  Lambda      gpu_1x_h100_pcie       80GB        $ 2.490       europe-central-1
+H100  GCP         a3-highgpu-1g          80GB        $ 5.383       us-central1
 ```
 
 </details>
@@ -263,7 +272,7 @@ GeneCAD provides two pre-trained models for different taxonomic groups. Both are
 
 ### Running the pipeline
 
-The primary entry point is `predict.sh`. It discovers all chromosomes in your FASTA file automatically and runs the complete pipeline on each one.
+The primary entry point is `predict.sh`. It discovers all chromosomes in the input FASTA automatically and runs the complete pipeline on each one.
 
 ```
 Usage: predict.sh [OPTIONS]
@@ -273,16 +282,18 @@ Options:
                       Default: downloads Arabidopsis thaliana TAIR12 example
   -o, --output DIR    Output directory  (default: genecad_result/Athaliana_predictions)
   -s, --species NAME  Species label prefixed on output filenames  (default: Athaliana)
-  -m, --mode MODE     Model: plant | animal  (default: plant)
+  -m, --mode MODE     Model to use: plant | animal  (default: plant)
   -h, --help          Show this help message
 ```
 
-**Plant genome (auto-downloads Arabidopsis TAIR12 example):**
+**Default example (Arabidopsis TAIR12, auto-downloaded):**
+
 ```bash
 bash predict.sh
 ```
 
 **Custom plant genome:**
+
 ```bash
 bash predict.sh \
   -i /path/to/Zmays.fa \
@@ -292,6 +303,7 @@ bash predict.sh \
 ```
 
 **Animal genome:**
+
 ```bash
 bash predict.sh \
   -i /path/to/genome.fa \
@@ -302,16 +314,16 @@ bash predict.sh \
 
 ### Pipeline steps
 
-The script automatically runs the following steps for every chromosome in the input FASTA:
+The script runs the following steps for every chromosome in the input FASTA:
 
-| Step | Tool | Description |
-|------|------|-------------|
+| Step | Script | Description |
+|------|--------|-------------|
 | 1. Extract | `scripts/extract.py` | Parse FASTA and tokenize sequences into Zarr format |
 | 2. Predict | `scripts/predict.py` | Windowed inference with the GeneCAD classifier (GPU) |
 | 3. Decode | `scripts/predict.py` | Viterbi decoding of per-token logits into genomic intervals |
-| 4. Export | `scripts/predict.py` | Convert intervals to GFF3 |
+| 4. Export | `scripts/predict.py` | Convert decoded intervals to raw GFF3 |
 | 5. Filter | `scripts/gff.py` | Remove short or structurally invalid gene models |
-| 6. Merge | `scripts/merge_gff.py` | Concatenate per-chromosome GFFs; prefix gene IDs with chromosome name |
+| 6. Merge | `scripts/merge_gff.py` | Concatenate per-chromosome GFFs into genome-wide files |
 | 7. Refine | `scripts/refine.py` | ReelProtein: protein embedding + XGBoost scoring for final filtering |
 
 ### Outputs
@@ -334,7 +346,7 @@ The two top-level GFF3 files are the primary outputs. Intermediate files are pre
 
 ### Throughput
 
-Observed GeneCAD inference throughput on different GPUs. Datacenter-class GPUs (A100/H100) are 3–6× more cost-efficient per megabase than development GPUs.
+Observed GeneCAD inference throughput on different GPUs. Datacenter-class GPUs (A100/H100) are 3–6× more cost-efficient per megabase than consumer development GPUs.
 
 | Provider | Instance | Throughput (bp/s) | Cost ($/hr) | Cost per Mbp ($) |
 |----------|----------|-------------------|-------------|------------------|
@@ -356,12 +368,12 @@ Estimated cost for common reference plant genomes (using Lambda A100 at $0.0202/
 
 ## Evaluation
 
-GeneCAD includes a built-in evaluation tool (`src/evaluate.py`) that produces a structured five-section report. It does not require `gffcompare` or any other external tool beyond an optional BUSCO install for Section 4.
+GeneCAD includes a built-in evaluation tool (`scripts/evaluate.py`) that produces a structured five-section report comparing predicted annotations against a reference. It does not require `gffcompare` or any external tool beyond an optional BUSCO install for Section 4.
 
 ### Usage
 
 ```bash
-uv run python src/evaluate.py \
+uv run python scripts/evaluate.py \
   --ref   /path/to/reference.gff3 \
   --pred  /path/to/Athaliana_GeneCAD_final.gff \
   --fasta /path/to/genome.fa \
@@ -452,15 +464,15 @@ SECTION 5 – Site-Level Error Breakdown
 | Section | Metric | Description |
 |---------|--------|-------------|
 | 1 | CDS-exon | Exact coding exon boundary match (UTRs ignored) |
-| 1 | Locus | Gene correct if any isoform's CDS chain matches a reference |
+| 1 | Locus | Gene correct if any isoform's CDS chain matches a reference isoform |
 | 1 | Transcript | Exact full-isoform CDS chain match |
 | 2 | Base | Nucleotide-level overlap of predicted vs. reference exons |
 | 2 | Intron | Exact splice junction pair match |
-| 2 | Intron chain | Complete intron chain match (= transcript interior) |
+| 2 | Intron chain | Complete intron chain match (= full transcript interior) |
 | 3 | Splice sites | GT-AG / GC-AG canonical intron dinucleotide frequency |
 | 4 | BUSCO | Benchmarked Universal Single-Copy Orthologs completeness |
-| 5 | TIS / TTS | Translation start / stop site accuracy |
-| 5 | Donor / Acceptor | Individual splice site accuracy |
+| 5 | TIS / TTS | Translation start / stop site precision and recall |
+| 5 | Donor / Acceptor | Individual 5′ and 3′ splice site accuracy |
 
 > **Note:** Sections 3 and 4 require `--fasta`. BUSCO additionally requires `busco` in PATH, or a conda environment named `busco-5.5.0`.
 
@@ -489,15 +501,16 @@ If you use GeneCAD in your research, please cite:
 ### Docker
 
 ```bash
-# Build the image (on a Linux machine with Docker and NVIDIA drivers)
+# Build the image (requires Linux with Docker and NVIDIA drivers)
 sudo usermod -aG docker ubuntu && newgrp docker
 docker build --progress=plain --no-cache -t genecad:v1.0.1 .
 
-# Test the build — run the full pipeline on the Arabidopsis example
+# Test the build — runs the full pipeline on the Arabidopsis example
 docker run --rm --gpus all -v $(pwd):/workspace -w /workspace genecad:v1.0.1 \
   bash predict.sh
 
 # Publish to GitHub Container Registry
+# Requires a personal access token with "write:packages" stored in GHCR_TOKEN
 IMAGE=ghcr.io/plantcad/genecad
 docker tag genecad:v1.0.1 $IMAGE:v1.0.1
 docker tag genecad:v1.0.1 $IMAGE:latest
@@ -531,19 +544,20 @@ docker run --rm --gpus all \
     -s Jregia \
     -m plant
 
-# Evaluate against the reference annotation (CPU-only)
+# Evaluate against the reference annotation
 docker run --rm \
   -v $(pwd):/workspace -w /workspace \
   ghcr.io/plantcad/genecad:latest \
-  uv run python src/evaluate.py \
-    --ref  data/gff/evaluation/Juglans_regia_chr1.gff3 \
-    --pred results/Jregia_GeneCAD_final.gff \
+  uv run python scripts/evaluate.py \
+    --ref   data/gff/evaluation/Juglans_regia_chr1.gff3 \
+    --pred  results/Jregia_GeneCAD_final.gff \
     --fasta data/fasta/evaluation/Juglans_regia_chr1.fa.gz \
     --output results/Jregia_eval_report.txt
 cat results/Jregia_eval_report.txt
 ```
 
 Expected results (Section 1 CDS-based, Locus-level):
+
 ```
 --- Locus-level ---
   Precision : 0.7571
