@@ -374,7 +374,7 @@ if [[ $NUM_GPUS -eq 1 ]]; then
     # -------------------------------------------------------
     SINGLE_GPU="${GPU_ARRAY[0]}"
     SINGLE_BATCH="${GPU_BATCH_SIZES[$SINGLE_GPU]}"
-    echo "Running ${CHROM_COUNT} chromosome(s) sequentially on GPU ${SINGLE_GPU} (batch=${SINGLE_BATCH})"
+    echo "Running ${CHROM_COUNT} chromosomes sequentially on GPU ${SINGLE_GPU} (batch=${SINGLE_BATCH})"
     echo ""
 
     for CHR_ID in "${CHR_ARRAY[@]}"; do
@@ -383,7 +383,7 @@ if [[ $NUM_GPUS -eq 1 ]]; then
         echo "Processing chromosome: $CHR_ID"
         echo "================================================================="
         process_chromosome "$CHR_ID" "$SINGLE_GPU" "$SINGLE_BATCH"
-        RECALL_GFFS+=("${OUTPUT_DIR}/${CHR_ID}/predictions_recall.gff")
+        RECALL_GFFS=("${RECALL_GFFS[@]}" "${OUTPUT_DIR}/${CHR_ID}/predictions_recall.gff")
     done
 
 else
@@ -459,7 +459,7 @@ else
 
     # Collect GFF paths in original chromosome order
     for CHR_ID in "${CHR_ARRAY[@]}"; do
-        RECALL_GFFS+=("${OUTPUT_DIR}/${CHR_ID}/predictions_recall.gff")
+        RECALL_GFFS=("${RECALL_GFFS[@]}" "${OUTPUT_DIR}/${CHR_ID}/predictions_recall.gff")
     done
 fi
 

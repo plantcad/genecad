@@ -3,7 +3,7 @@ name: Build and Publish Docker Image
 on:
   # Triggers the workflow when you push to the main branch
   push:
-    branches: [ "main", "master", "refine-CrossEntropyLoss" ]
+    branches: [ "main", "master" ]
     # Also trigger when you create a version tag (e.g., v1.0.0)
     tags: [ 'v*.*.*' ]
   # Allows you to run this workflow manually from the GitHub website
@@ -11,8 +11,8 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  # This automatically uses your repository name (e.g., plantcad/genecad)
-  IMAGE_NAME: ${{ github.repository }}
+  # We use a new name to bypass permission locks on the legacy 'genecad' package
+  IMAGE_NAME: plantcad/genecad_v1
 
 jobs:
   build-and-push:
@@ -52,7 +52,7 @@ jobs:
             type=ref,event=branch
 
       - name: Build and push Docker image
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v6
         with:
           context: .
           file: ./Dockerfile

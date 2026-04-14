@@ -228,21 +228,24 @@ pip install "skypilot[lambda]>=0.10.3"
 # Clear local SkyPilot state, if any
 sky api stop; [ -d ~/.sky ] && rm -rf ~/.sky
 
-# Deploy a single GPU node
+# Deploy a single GPU node (no setup — we use Docker instead of uv sync)
 sky launch --num-nodes 1 --yes --no-setup \
   --cluster genecad examples/configs/cluster.sky.yaml
 
-# SSH into the node, then install and run
+# SSH into the node, pull the pre-built image, and run
 ssh genecad
-git clone https://github.com/plantcad/genecad && cd genecad
-curl -LsSf https://astral.sh/uv/install.sh | sh
-export PATH="$HOME/.local/bin:$PATH"
-uv sync --extra torch --extra mamba
-bash predict.sh
+docker pull ghcr.io/plantcad/genecad:latest
+docker run --rm --gpus all \
+  -v $(pwd):/workspace -w /workspace \
+  ghcr.io/plantcad/genecad:latest \
+  bash predict.sh
 
 # Terminate the node when done
 sky down genecad
 ```
+
+> **Why Docker instead of `uv sync`?**  
+> `flash-attn`, `mamba-ssm`, and `causal-conv1d` must all compile from source, which can take **30–60 minutes** on a fresh cloud node and may fail if the CUDA/GCC versions mismatch. The pre-built Docker image includes all compiled packages, making cluster setup take seconds instead of hours.
 
 See the [Throughput](#throughput) section for GPU cost comparisons across providers.
 
