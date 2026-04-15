@@ -3,7 +3,7 @@
 [![CI](https://github.com/plantcad/genecad/actions/workflows/ci.yaml/badge.svg)](https://github.com/plantcad/genecad/actions/workflows/ci.yaml)
 [![DOI](https://zenodo.org/badge/DOI/10.1101/2025.10.31.685877.svg)](https://doi.org/10.1101/2025.10.31.685877)
 [![Hugging Face](https://img.shields.io/badge/🤗-Hugging%20Face-yellow.svg?style=flat)](https://huggingface.co/collections/plantcad/genecad-68c686ccf14312bf6de356de)
-[![Container](https://img.shields.io/badge/container-ghcr.io%2Fplantcad%2Fgenecad-blue?logo=github)](https://github.com/orgs/plantcad/packages/container/package/genecad)
+[![Container](https://img.shields.io/badge/container-ghcr.io%2Fplantcad%2Fgenecad__v1-blue?logo=github)](https://github.com/orgs/plantcad/packages/container/package/genecad_v1)
 [![Pytorch](https://img.shields.io/badge/PyTorch-%23EE4C2C.svg?e&logo=PyTorch&logoColor=white)](https://pytorch.org/)
 
 # GeneCAD
@@ -106,25 +106,28 @@ Choose the installation method that best fits your environment:
 
 ### Using Docker
 
-The Docker image at `ghcr.io/plantcad/genecad` bundles the complete runtime. Source code is **mounted at run time**, so changes you make to the cloned repository take effect immediately — no rebuild needed.
+The Docker image at `ghcr.io/plantcad/genecad_v1` bundles the complete runtime. Source code is **mounted at run time**, so changes you make to the cloned repository take effect immediately — no rebuild needed.
+
+> [!NOTE]
+> If your environment requires a specific Docker alias (e.g., `docker1`), replace `docker` with your local command in the examples below.
 
 ```bash
 # Clone the repository
 git clone https://github.com/plantcad/genecad && cd genecad
 
 # Pull the image
-docker pull ghcr.io/plantcad/genecad:latest
+docker pull ghcr.io/plantcad/genecad_v1:refine-CrossEntropyLoss
 
 # Run on the bundled Arabidopsis example (auto-downloads FASTA)
 docker run --rm --gpus all \
   -v $(pwd):/workspace -w /workspace \
-  ghcr.io/plantcad/genecad:latest \
+  ghcr.io/plantcad/genecad_v1:refine-CrossEntropyLoss \
   bash predict.sh
 
 # Annotate a custom plant genome
 docker run --rm --gpus all \
   -v $(pwd):/workspace -w /workspace \
-  ghcr.io/plantcad/genecad:latest \
+  ghcr.io/plantcad/genecad_v1:refine-CrossEntropyLoss \
   bash predict.sh \
     -i /workspace/data/my_plant.fa \
     -o /workspace/output \
@@ -134,7 +137,7 @@ docker run --rm --gpus all \
 # Annotate an animal genome
 docker run --rm --gpus all \
   -v $(pwd):/workspace -w /workspace \
-  ghcr.io/plantcad/genecad:latest \
+  ghcr.io/plantcad/genecad_v1:refine-CrossEntropyLoss \
   bash predict.sh \
     -i /workspace/data/my_animal.fa \
     -o /workspace/output \
@@ -234,10 +237,10 @@ sky launch --num-nodes 1 --yes --no-setup \
 
 # SSH into the node, pull the pre-built image, and run
 ssh genecad
-docker pull ghcr.io/plantcad/genecad:latest
+docker pull ghcr.io/plantcad/genecad_v1:refine-CrossEntropyLoss
 docker run --rm --gpus all \
   -v $(pwd):/workspace -w /workspace \
-  ghcr.io/plantcad/genecad:latest \
+  ghcr.io/plantcad/genecad_v1:refine-CrossEntropyLoss \
   bash predict.sh
 
 # Terminate the node when done
@@ -659,7 +662,7 @@ docker run --rm --gpus all -v $(pwd):/workspace -w /workspace genecad:v1.0.1 \
 
 # Publish to GitHub Container Registry
 # Requires a personal access token with "write:packages" stored in GHCR_TOKEN
-IMAGE=ghcr.io/plantcad/genecad
+IMAGE=ghcr.io/plantcad/genecad_v1
 docker tag genecad:v1.0.1 $IMAGE:v1.0.1
 docker tag genecad:v1.0.1 $IMAGE:latest
 echo $GHCR_TOKEN | docker login ghcr.io -u <github-username> --password-stdin
@@ -685,7 +688,7 @@ hf download plantcad/genecad-dev \
 # Run the full GeneCAD pipeline
 docker run --rm --gpus all \
   -v $(pwd):/workspace -w /workspace \
-  ghcr.io/plantcad/genecad:latest \
+  ghcr.io/plantcad/genecad_v1:refine-CrossEntropyLoss \
   bash predict.sh \
     -i data/fasta/evaluation/Juglans_regia_chr1.fa.gz \
     -o results \
@@ -695,7 +698,7 @@ docker run --rm --gpus all \
 # Evaluate against the reference annotation
 docker run --rm \
   -v $(pwd):/workspace -w /workspace \
-  ghcr.io/plantcad/genecad:latest \
+  ghcr.io/plantcad/genecad_v1:refine-CrossEntropyLoss \
   uv run python scripts/evaluate.py \
     --ref   data/gff/evaluation/Juglans_regia_chr1.gff3 \
     --pred  results/Jregia_GeneCAD_final.gff \
