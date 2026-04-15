@@ -238,17 +238,32 @@ def _create_predictions(
         # pyrefly: ignore  # no-matching-overload
         windows = np.array_split(windows, world_size)[rank]
 
-        # Batch windows together
-        window_batches = np.array_split(windows, len(windows) // args.batch_size)
+        # Skip this strand if no windows were assigned to this rank
+        # (can happen when the sequence is shorter than world_size windows)
+        if len(windows) == 0:
+            logger.warning(
+                f"Rank {rank}: no windows for strand '{strand}' — skipping "
+                f"(sequence may be shorter than window_size × world_size)"
+            )
+            continue
+
+        # Batch windows together using ceiling division so batch_size is an
+        # upper bound, not a lower bound.  e.g. 195 windows / batch 112 → 2
+        # batches of 98 and 97, not 1 batch of 195.
+        n_batches = max(1, (len(windows) + args.batch_size - 1) // args.batch_size)
+        window_batches = np.array_split(windows, n_batches)
         logger.info(
             f"Processing {len(windows)} windows in {len(window_batches)} batches of size {args.batch_size}"
         )
 
-        # Process batches
+        # Process batches — each rank occupies its own tqdm row so bars don't
+        # overwrite each other when world_size > 1.
         for batch_index, window_batch in enumerate(
             tqdm.tqdm(
                 window_batches,
-                desc=f"[{strand}] Processing batches (rank={rank}/{world_size})",
+                desc=f"[GPU {rank} | {strand}]",
+                position=rank,
+                leave=True,
                 dynamic_ncols=True,
             )
         ):
@@ -372,6 +387,69 @@ def flip(sequence: npt.ArrayLike) -> npt.ArrayLike:
     return np.flip(sequence, axis=0)
 
 
+@torch.inference_mode()
+def warmup_triton(args: Args):
+    """Pre-warm the Triton autotune cache by running a dummy forward pass.
+
+    Triton compiles and benchmarks GPU kernels the first time a new tensor
+    shape is seen.  When two torchrun ranks encounter the same new shape
+    simultaneously the concurrent CUDA benchmarks can collide and produce an
+    illegal memory access.
+
+    This function runs a single dummy forward pass **without** initialising the
+    distributed process group, so it must be called once per GPU sequentially
+    (before the multi-GPU torchrun launch).  The Triton cache persists across
+    processes, so the actual torchrun run will find pre-built configs and skip
+    the autotuning step entirely.
+
+    Parameters
+    ----------
+    args : argparse.Namespace
+        Must supply ``model_path``, ``model_checkpoint``, ``dtype``,
+        ``batch_size``, and ``window_size``.
+    """
+    if torch.cuda.is_available():
+        args.device = "cuda:0"
+    else:
+        args.device = "cpu"
+
+    logger.info(
+        f"[warmup] device={args.device}  batch_size={args.batch_size}  window_size={args.window_size}"
+    )
+
+    torch.set_float32_matmul_precision("medium")
+    if args.suppress_dynamo_errors == "yes":
+        torch._dynamo.config.suppress_errors = True
+
+    base_model, classifier, tokenizer = load_models(args)
+
+    pad_value = tokenizer.unk_token_id
+    if pad_value is None:
+        pad_value = 0
+
+    # Warm up with a full-size batch so Triton caches the most common shape.
+    dummy = torch.full(
+        (args.batch_size, args.window_size), pad_value,
+        dtype=torch.long, device=args.device,
+    )
+
+    if base_model is not None:
+        embeds = base_model(input_ids=dummy).last_hidden_state
+    else:
+        embeds = None
+
+    classifier(input_ids=dummy, inputs_embeds=embeds)
+
+    # Also warm up remainder-batch shape (1 sample) so the last batch in each
+    # strand doesn't trigger a new autotuning run.
+    if args.batch_size > 1:
+        dummy1 = dummy[:1]
+        embeds1 = base_model(input_ids=dummy1).last_hidden_state if base_model is not None else None
+        classifier(input_ids=dummy1, inputs_embeds=embeds1)
+
+    logger.info("[warmup] Triton cache warm-up complete.")
+
+
 def create_predictions(args: Args):
     """Run the inference pipeline to generate logits for each genomic strand.
 
@@ -422,34 +500,45 @@ def create_predictions(args: Args):
     if args.suppress_dynamo_errors == "yes":
         torch._dynamo.config.suppress_errors = True
 
+    # ---- Build work list --------------------------------------------------
+    # Manifest mode: process many sequences with one model load.
+    # Single mode: original behaviour (one chromosome per invocation).
+    if args.manifest is not None:
+        import json
+        with open(args.manifest) as fh:
+            entries = json.load(fh)
+        logger.info(f"Manifest mode: {len(entries)} sequence(s) to process")
+    else:
+        entries = [
+            {
+                "chromosome_id": args.chromosome_id,
+                "input": args.input,
+                "output_dir": args.output_dir,
+            }
+        ]
+
     # ---- Inference --------------------------------------------------------
     try:
-        # Load models onto this rank's device
+        # Load models onto this rank's device — happens ONCE regardless of
+        # how many sequences are in the manifest.
         base_model, classifier, tokenizer = load_models(args)
 
-        # Load data
-        dataset = load_data(args)
+        for i, entry in enumerate(entries):
+            args.chromosome_id = entry["chromosome_id"]
+            args.input         = entry["input"]
+            args.output_dir    = entry["output_dir"]
 
-        # Run windowed inference — each rank writes predictions.<rank>.zarr
-        logger.info(f"Running predictions for {args.species_id}/{args.chromosome_id}")
-        predictions = _create_predictions(
-            args,
-            dataset,
-            base_model,
-            classifier,
-            tokenizer,
-        )
+            logger.info(
+                f"[{i + 1}/{len(entries)}] Running predictions for "
+                f"{args.species_id}/{args.chromosome_id}"
+            )
+            _create_predictions(args, dataset := load_data(args), base_model, classifier, tokenizer)
 
-        # Synchronise: wait for every rank to finish flushing its shard before
-        # the process group is destroyed.  In single-process mode this is a
-        # no-op.
-        barrier()
+            # All ranks must finish this sequence before moving to the next.
+            barrier()
 
         if is_main_process():
-            logger.info(f"Complete predictions dataset:\n{predictions}")
-            logger.info(
-                f"All {world_size} rank(s) finished — shards in {args.output_dir}"
-            )
+            logger.info(f"All {len(entries)} sequence(s) done across {world_size} rank(s).")
     finally:
         # Always tear down the process group even if an exception occurred so
         # that NCCL resources are released and port numbers are freed.
@@ -990,12 +1079,22 @@ def main():
         help="Generate token and feature logits with predicted classes",
     )
     inference_parser.add_argument(
-        "--input", required=True, help="Path to input zarr dataset (from transform.py)"
+        "--input", default=None,
+        help="Path to input zarr dataset (from transform.py). "
+             "Not required when --manifest is used.",
     )
     inference_parser.add_argument(
         "--output-dir",
-        required=True,
-        help="Directory to save rank-specific output zarr datasets",
+        default=None,
+        help="Directory to save rank-specific output zarr datasets. "
+             "Not required when --manifest is used.",
+    )
+    inference_parser.add_argument(
+        "--manifest",
+        default=None,
+        help="Path to a JSON file listing sequences to process in one model-load session. "
+             "Format: [{\"chromosome_id\": \"...\", \"input\": \"...\", \"output_dir\": \"...\"}, ...]. "
+             "Enables processing thousands of short sequences without reloading the model each time.",
     )
     inference_parser.add_argument(
         "--model-checkpoint", required=True, help="Path to classifier checkpoint"
@@ -1009,7 +1108,8 @@ def main():
         "--species-id", required=True, help="Species ID to process (e.g., 'Osativa')"
     )
     inference_parser.add_argument(
-        "--chromosome-id", required=True, help="Chromosome ID to process (e.g., 'Chr1')"
+        "--chromosome-id", default=None,
+        help="Chromosome ID to process (e.g., 'Chr1'). Not required when --manifest is used.",
     )
 
     # Processing parameters
@@ -1047,6 +1147,44 @@ def main():
         default="float32",
         choices=["float32", "float16", "bfloat16", "float64", "double", "half"],
         help="Data type for model inference (default: bfloat16)",
+    )
+
+    # Triton warmup command — run once per GPU BEFORE multi-GPU torchrun launch
+    warmup_parser = subparsers.add_parser(
+        "warmup",
+        help="Pre-warm Triton autotune cache with a dummy forward pass (run sequentially per GPU before multi-GPU launch)",
+    )
+    warmup_parser.add_argument(
+        "--model-checkpoint", required=True, help="Path to classifier checkpoint"
+    )
+    warmup_parser.add_argument(
+        "--model-path", required=True, help="Path to base embedding model"
+    )
+    warmup_parser.add_argument(
+        "--window-size",
+        type=int,
+        default=WINDOW_SIZE,
+        help="Window size used during inference (must match actual run)",
+    )
+    warmup_parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=64,
+        help="Batch size used during inference (must match actual run)",
+    )
+    warmup_parser.add_argument(
+        "--dtype",
+        type=str,
+        default="bfloat16",
+        choices=["float32", "float16", "bfloat16", "float64", "double", "half"],
+        help="Data type matching the actual inference run",
+    )
+    warmup_parser.add_argument(
+        "--suppress-dynamo-errors",
+        type=str,
+        choices=["yes", "no"],
+        default="yes",
+        help="Whether to suppress torch dynamo errors (default: yes)",
     )
 
     # Detect intervals command
@@ -1120,6 +1258,8 @@ def main():
 
     if args.command == "create_predictions":
         create_predictions(args)
+    elif args.command == "warmup":
+        warmup_triton(args)
     elif args.command == "detect_intervals":
         detect_intervals(args)
     elif args.command == "export_gff":

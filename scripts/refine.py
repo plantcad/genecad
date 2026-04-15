@@ -32,10 +32,16 @@ def main():
         action="store_true",
         help="If set, strictly filter out any originally unmerged genes that the model did not score positively.",
     )
+    parser.add_argument(
+        "--gpus",
+        default="0",
+        help="Comma-separated GPU IDs for ProtT5 embedding (e.g. '0,1,2'). Default: '0'.",
+    )
 
     args = parser.parse_args()
 
     # --- CONFIGURATION ---
+    gpus = [int(g.strip()) for g in args.gpus.split(",") if g.strip()]
     model_source = args.model_repo
     logger.info(f"[Config] Using Hugging Face model repository: {model_source}")
 
@@ -49,7 +55,7 @@ def main():
         return
 
     # 2. Generate Embeddings
-    embeddings_df = reelprotein.generate_embeddings(protein_candidates)
+    embeddings_df = reelprotein.generate_embeddings(protein_candidates, gpus=gpus)
 
     # 3. Score Proteins
     scored_df = reelprotein.score_proteins(embeddings_df, model_source)

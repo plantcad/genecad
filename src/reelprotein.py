@@ -16,7 +16,7 @@ from huggingface_hub import snapshot_download
 # Initialize module logger
 logger = logging.getLogger(__name__)
 
-# Set device
+# Default device (kept for get_prot_t5_model backward-compat; new code uses gpus= parameter)
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 # =============================================================================
@@ -212,6 +212,95 @@ def extract_candidate_proteins(genes, genome_fasta):
 # =============================================================================
 
 
+def _embed_worker(args: tuple) -> list:
+    """Embed a chunk of protein sequences on a single GPU.
+
+    This is a module-level function so it can be pickled by ProcessPoolExecutor
+    when spawning worker processes for multi-GPU embedding.
+
+    Parameters
+    ----------
+    args : tuple
+        (gpu_id, position, seq_items, max_residues, max_seq_len, max_batch)
+        position: tqdm bar row (0 = top bar, 1 = second bar, …)
+
+    Returns
+    -------
+    list
+        Each element is [protein_id, feat_0, ..., feat_1023].
+    """
+    import logging as _logging
+    from tqdm import tqdm
+
+    gpu_id, position, seq_items, max_residues, max_seq_len, max_batch = args
+    _logging.basicConfig(level=_logging.INFO,
+                         format="%(asctime)s - %(levelname)s - %(message)s")
+    _log = _logging.getLogger(__name__)
+
+    _device = torch.device(f"cuda:{gpu_id}" if torch.cuda.is_available() else "cpu")
+    _log.info(f"[GPU {gpu_id}] Loading ProtT5 on {_device} ({len(seq_items)} sequences)...")
+
+    _model = T5EncoderModel.from_pretrained("Rostlab/prot_t5_xl_half_uniref50-enc")
+    _model = _model.to(_device).eval()
+    _tok = T5Tokenizer.from_pretrained(
+        "Rostlab/prot_t5_xl_half_uniref50-enc", do_lower_case=False
+    )
+    _log.info(f"[GPU {gpu_id}] Model loaded — starting inference...")
+
+    results: list = []
+    batch: list = []
+    n_total = len(seq_items)
+
+    pbar = tqdm(
+        total=n_total,
+        desc=f"GPU {gpu_id}",
+        unit="seq",
+        position=position,
+        leave=True,
+        dynamic_ncols=True,
+    )
+
+    for seq_idx, (pdb_id, seq) in enumerate(seq_items, 1):
+        seq_len = len(seq)
+        batch.append((pdb_id, " ".join(list(seq)), seq_len))
+        n_res_batch = sum(s for _, _, s in batch) + seq_len
+
+        if (
+            len(batch) >= max_batch
+            or n_res_batch >= max_residues
+            or seq_idx == n_total
+            or seq_len > max_seq_len
+        ):
+            pdb_ids, batch_seqs, batch_lens = zip(*batch)
+            batch = []
+
+            enc = _tok(list(batch_seqs), add_special_tokens=True, padding="longest")
+            input_ids = torch.tensor(enc["input_ids"]).to(_device)
+            attention_mask = torch.tensor(enc["attention_mask"]).to(_device)
+
+            try:
+                with torch.no_grad():
+                    out = _model(input_ids, attention_mask=attention_mask)
+            except RuntimeError as exc:
+                _log.error(f"[GPU {gpu_id}] RuntimeError during embedding: {exc}")
+                pbar.update(len(pdb_ids))
+                continue
+
+            for bi, pid in enumerate(pdb_ids):
+                slen = batch_lens[bi]
+                emb = out.last_hidden_state[bi, :slen].mean(dim=0).detach().cpu().numpy().squeeze()
+                results.append([pid] + emb.tolist())
+
+            pbar.update(len(pdb_ids))
+
+    pbar.close()
+    del _model, _tok
+    torch.cuda.empty_cache()
+    gc.collect()
+    _log.info(f"[GPU {gpu_id}] Done — {len(results)} proteins embedded.")
+    return results
+
+
 def get_prot_t5_model():
     logger.info("[Step 2] Loading ProtT5 Model...")
     model = T5EncoderModel.from_pretrained("Rostlab/prot_t5_xl_half_uniref50-enc")
@@ -223,94 +312,78 @@ def get_prot_t5_model():
     return model, tokenizer
 
 
-def generate_embeddings(seqs_dict, max_residues=None, max_seq_len=1300, max_batch=None):
+def generate_embeddings(seqs_dict, gpus=None, max_residues=None, max_seq_len=1300, max_batch=None):
     """
     Returns a pandas DataFrame where index is ProteinID and columns are 0-1023 (features).
-    """
-    model, tokenizer = get_prot_t5_model()
 
-    # Dynamic batch size logic based on available GPU VRAM
+    Parameters
+    ----------
+    seqs_dict : dict
+        {protein_id: sequence_string}
+    gpus : list[int] | None
+        GPU IDs to use (e.g. [0, 1, 2, 3]).  Defaults to [0].
+        When more than one GPU is given, protein sequences are split across
+        GPUs and embedded in parallel, each GPU running its own ProtT5 copy.
+    """
+    if gpus is None:
+        gpus = [0]
+
+    # Dynamic batch size based on free memory on the first GPU in the list.
+    # Linear formulas scale continuously with every available GB (≈ 40% more
+    # than the old fixed tiers) rather than jumping between coarse steps.
+    #   max_residues = free_gb × 800   (e.g. 60 GB → 48 000)
+    #   max_batch    = free_gb × 4     (e.g. 60 GB → 240)
     if max_residues is None or max_batch is None:
         try:
-            total_vram_gb = torch.cuda.get_device_properties(device).total_memory / (1024**3)
-            if total_vram_gb >= 70:       # e.g., A100 80G, H100
-                _res, _batch = 40000, 200
-            elif total_vram_gb >= 35:     # e.g., A100 40G
-                _res, _batch = 20000, 100
-            elif total_vram_gb >= 20:     # e.g., RTX 3090/4090, L40S 24G
-                _res, _batch = 12000, 60
-            elif total_vram_gb >= 14:     # e.g., V100 16G, RTX 3080/4080 16G, T4 16G
-                _res, _batch = 8000, 32
-            else:                         # e.g., 8-12GB (safe defaults)
-                _res, _batch = 3000, 8
-                
-            logger.info(f"[Step 2] Detected {total_vram_gb:.1f}GB VRAM -> dynamically setting max_residues={_res}, max_batch={_batch}")
+            free_mem, _ = torch.cuda.mem_get_info(gpus[0])
+            free_vram_gb = free_mem / (1024 ** 3)
+            _res   = max(1000, int(free_vram_gb * 800))
+            _batch = max(4,    int(free_vram_gb * 4))
+            logger.info(
+                f"[Step 2] GPU {gpus[0]}: {free_vram_gb:.1f} GB free VRAM -> "
+                f"max_residues={_res}, max_batch={_batch}"
+            )
         except Exception as e:
-            logger.warning(f"[Step 2] VRAM detection failed ({e}). Defaulting to safe fallback: max_residues=3000, max_batch=8")
+            logger.warning(f"[Step 2] VRAM detection failed ({e}). Using safe fallback: max_residues=3000, max_batch=8")
             _res, _batch = 3000, 8
-            
         max_residues = max_residues or _res
         max_batch = max_batch or _batch
 
-    # Sort sequences by length (descending)
+    # Sort sequences by length descending for efficient batching
     seq_items = sorted(seqs_dict.items(), key=lambda kv: len(kv[1]), reverse=True)
+    logger.info(
+        f"[Step 2] Generating embeddings for {len(seq_items)} sequences "
+        f"across {len(gpus)} GPU(s): {gpus}"
+    )
 
-    from tqdm import tqdm
+    if len(gpus) == 1:
+        results_list = _embed_worker((gpus[0], 0, seq_items, max_residues, max_seq_len, max_batch))
+    else:
+        import concurrent.futures
+        import multiprocessing as _mp
 
-    results_list = []
-    batch = []
-    logger.info(f"[Step 2] Generating embeddings for {len(seq_items)} sequences...")
+        # Interleave sequences across GPUs so each GPU gets a balanced mix of
+        # long and short proteins (seq_items is sorted longest-first)
+        chunks = [seq_items[i::len(gpus)] for i in range(len(gpus))]
+        worker_args = [
+            (gpu_id, position, chunk, max_residues, max_seq_len, max_batch)
+            for position, (gpu_id, chunk) in enumerate(zip(gpus, chunks))
+        ]
 
-    for seq_idx, (pdb_id, seq) in enumerate(tqdm(seq_items, desc="Embedding Sequences", unit="seq"), 1):
-        seq_len = len(seq)
-        seq_spaced = " ".join(list(seq))
-        batch.append((pdb_id, seq_spaced, seq_len))
+        ctx = _mp.get_context("spawn")
+        with concurrent.futures.ProcessPoolExecutor(
+            max_workers=len(gpus), mp_context=ctx
+        ) as executor:
+            futures = [executor.submit(_embed_worker, a) for a in worker_args]
+            results_parts = [f.result() for f in futures]
 
-        n_res_batch = sum([s_len for _, _, s_len in batch]) + seq_len
+        results_list = [item for part in results_parts for item in part]
 
-        # Process batch
-        if (
-            len(batch) >= max_batch
-            or n_res_batch >= max_residues
-            or seq_idx == len(seq_items)
-            or seq_len > max_seq_len
-        ):
-            pdb_ids, batch_seqs, batch_lens = zip(*batch)
-            batch = []  # reset
-
-            token_encoding = tokenizer(
-                list(batch_seqs), add_special_tokens=True, padding="longest"
-            )
-            input_ids = torch.tensor(token_encoding["input_ids"]).to(device)
-            attention_mask = torch.tensor(token_encoding["attention_mask"]).to(device)
-
-            try:
-                with torch.no_grad():
-                    embedding_repr = model(input_ids, attention_mask=attention_mask)
-            except RuntimeError as e:
-                logger.error(f"RuntimeError during embedding: {e}")
-                continue
-
-            for batch_idx, identifier in enumerate(pdb_ids):
-                s_len = batch_lens[batch_idx]
-                # Slice off padding -> avg pool
-                emb = embedding_repr.last_hidden_state[batch_idx, :s_len]
-                protein_emb = emb.mean(dim=0).detach().cpu().numpy().squeeze()
-
-                # Append to results
-                results_list.append([identifier] + protein_emb.tolist())
-
-    logger.info("[Step 2] Embedding generation complete.")
     cols = ["ProteinID"] + list(range(1024))
     df = pd.DataFrame(results_list, columns=cols)
-
-    # Cleanup GPU memory
-    del model
-    del tokenizer
-    del embedding_repr
     torch.cuda.empty_cache()
     gc.collect()
-
+    logger.info("[Step 2] Embedding generation complete.")
     return df
 
 

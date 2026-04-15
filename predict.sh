@@ -25,20 +25,15 @@ Options:
                         (default: 0 — single GPU, sequential)
   -h, --help            Show this help message
 
-Batch size is chosen automatically based on available GPU VRAM (per GPU):
-  >= 70 GB  ->  80   (A100 80G / H100)
-  >= 35 GB  ->  40   (A100 40G)
-  >= 20 GB  ->  24   (RTX 3090/4090, L40S)
-  >= 14 GB  ->  16   (RTX 3080 Ti, V100 16G, T4)
-  <  14 GB  ->   8   (older / smaller GPUs)
+Batch size is chosen automatically based on free GPU VRAM using a linear formula:
+  batch_size = floor(free_gb × 1.2)  — e.g. 60 GB free → 72, 35 GB → 42, 20 GB → 24
 
 Note: This auto-scaling pushes GPU utility to its limit. If you encounter CUDA Out-Of-Memory
       (OOM) errors, manually lower the batch size with the '-b' flag (e.g., '-b 32').
 
 Multi-GPU usage:
-  Chromosomes are distributed round-robin across the specified GPUs and processed
-  in parallel. Each GPU runs its own chromosome job independently.
-  Example: --gpus 0,1,2,3   (use GPUs 0–3, one chromosome per GPU at a time)
+  All GPUs work together on one chromosome at a time via torchrun window-splitting.
+  Example: --gpus 0,1,2,3   (use GPUs 0–3)
            --gpus all        (auto-detect and use all available GPUs)
 
 Examples:
@@ -110,11 +105,9 @@ esac
 # GPU Resolution
 # =================================================================
 
-# Resolve GPU list: 'all' -> all detected GPU IDs, else split CSV
 if [[ "$GPUS_ARG" == "all" ]]; then
     GPU_IDS_ALL=""
     if command -v nvidia-smi &>/dev/null; then
-        # Only use output if nvidia-smi exits cleanly (exit code 0)
         if nvidia-smi &>/dev/null; then
             GPU_IDS_ALL=$(nvidia-smi --query-gpu=index --format=csv,noheader,nounits 2>/dev/null | tr -d ' ' | tr '\n' ',' | sed 's/,$//')
         fi
@@ -129,7 +122,6 @@ else
     GPU_LIST_STR="$GPUS_ARG"
 fi
 
-# Parse GPU list into a bash array
 IFS=',' read -ra GPU_ARRAY <<< "$GPU_LIST_STR"
 NUM_GPUS=${#GPU_ARRAY[@]}
 
@@ -143,45 +135,36 @@ echo "================================================================="
 # =================================================================
 # Per-GPU batch size detection
 # =================================================================
-# Returns the batch size appropriate for a given GPU index.
 resolve_batch_size_for_gpu() {
     local gpu_id="$1"
     if [[ "$BATCH_SIZE_ARG" != "auto" ]]; then
         echo "$BATCH_SIZE_ARG"
         return
     fi
-    # Check that nvidia-smi is present AND working before querying
     if ! command -v nvidia-smi &>/dev/null || ! nvidia-smi &>/dev/null; then
-        echo "8"  # safe fallback when GPU info is unavailable
+        echo "8"
         return
     fi
     local GPU_MEM_MB
-    GPU_MEM_MB=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits \
+    GPU_MEM_MB=$(nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits \
         --id="$gpu_id" 2>/dev/null | head -1 | tr -d ' ')
     if [[ -z "$GPU_MEM_MB" ]] || ! [[ "$GPU_MEM_MB" =~ ^[0-9]+$ ]]; then
-        echo "8"  # guard against non-numeric output
+        echo "8"
         return
     fi
-    local GPU_MEM_GB=$(( GPU_MEM_MB / 1024 ))
-    if   [[ $GPU_MEM_GB -ge 70 ]]; then echo 80
-    elif [[ $GPU_MEM_GB -ge 35 ]]; then echo 40
-    elif [[ $GPU_MEM_GB -ge 20 ]]; then echo 24
-    elif [[ $GPU_MEM_GB -ge 14 ]]; then echo 16
-    else                                 echo 8
-    fi
+    local BS=$(( GPU_MEM_MB * 6 / 5120 ))   # free_gb × 1.2
+    [[ $BS -lt 1 ]] && BS=1
+    echo $BS
 }
 
-# Pre-compute batch sizes per GPU once
 declare -A GPU_BATCH_SIZES
 for gpu_id in "${GPU_ARRAY[@]}"; do
     bs=$(resolve_batch_size_for_gpu "$gpu_id")
     GPU_BATCH_SIZES[$gpu_id]=$bs
     if [[ "$BATCH_SIZE_ARG" == "auto" ]]; then
-        # Attempt to show detected VRAM for informational output
         if command -v nvidia-smi &>/dev/null && nvidia-smi &>/dev/null; then
-            GPU_MEM_MB_FOR_LOG=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits --id="$gpu_id" 2>/dev/null | head -1 | tr -d ' ')
-            GPU_MEM_GB_FOR_LOG=$(( GPU_MEM_MB_FOR_LOG / 1024 ))
-            echo "  GPU ${gpu_id}: batch size ${bs} (detected ${GPU_MEM_GB_FOR_LOG} GB VRAM)"
+            GPU_MEM_MB_FOR_LOG=$(nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits --id="$gpu_id" 2>/dev/null | head -1 | tr -d ' ')
+            echo "  GPU ${gpu_id}: batch size ${bs} (detected ${GPU_MEM_MB_FOR_LOG} MiB free VRAM)"
         else
             echo "  GPU ${gpu_id}: batch size ${bs} (VRAM auto-detect unavailable, using safe default)"
         fi
@@ -193,14 +176,10 @@ if [[ "$BATCH_SIZE_ARG" == "auto" ]]; then
     echo "  > TIP: If you run into CUDA Out-Of-Memory (OOM) errors, lower this using '-b <size>'"
 fi
 
-# Merge script location (same directory as this script)
 MERGE_SCRIPT="scripts/merge_gff.py"
-
-# Pipeline config
 TOKENIZER_PATH="$BASE_MODEL"
 DTYPE="bfloat16"
-# Use the pre-built venv python if available (Docker container sets VIRTUAL_ENV=/build/.venv),
-# or activate the local .venv from uv sync, otherwise fall back to uv run (local dev mode).
+
 if [[ -n "$VIRTUAL_ENV" && -x "$VIRTUAL_ENV/bin/python" ]]; then
     PYTHON="$VIRTUAL_ENV/bin/python"
 elif [[ -x ".venv/bin/python" ]]; then
@@ -211,7 +190,6 @@ else
 fi
 export PYTHONPATH=.
 
-# Create top-level output directory
 mkdir -p "$OUTPUT_DIR"
 
 # =================================================================
@@ -233,45 +211,21 @@ echo "$CHROM_IDS"
 echo ""
 
 # =================================================================
-# Step 2: Per-chromosome processing (parallel if multi-GPU)
+# Step 2: Per-chromosome pipeline (all 6 steps)
 # =================================================================
 
-# Runs the full 6-step pipeline for one chromosome on a specific GPU.
-# Called as a background job when multi-GPU mode is active.
 process_chromosome() {
     local CHR_ID="$1"
-    local GPU_ID="$2"           # Pass "" (empty) to skip CUDA_VISIBLE_DEVICES override
-    local BATCH_SIZE="$3"
-    # Optional 4th argument: command used to launch the predict step.
-    # Defaults to plain $PYTHON (single-GPU, no distributed init).
-    # Pass "$PYTHON -m torch.distributed.run ..." for multi-GPU torchrun mode.
-    local PREDICT_LAUNCHER="${4:-$PYTHON}"
-    local LOG_PREFIX
+    local BATCH_SIZE="$2"
+    local LOG_PREFIX="[${CHR_ID}]"
 
     local CHR_OUTPUT_DIR="${OUTPUT_DIR}/${CHR_ID}"
     local PIPELINE_DIR="${CHR_OUTPUT_DIR}/pipeline"
     mkdir -p "$PIPELINE_DIR"
 
-    # Skip if already complete
     if [[ -f "$CHR_OUTPUT_DIR/predictions_recall.gff" ]]; then
-        if [[ -n "$GPU_ID" ]]; then
-            LOG_PREFIX="[${CHR_ID}|GPU${GPU_ID}]"
-        else
-            LOG_PREFIX="[${CHR_ID}|multiGPU]"
-        fi
-        echo "${LOG_PREFIX} Already complete — skipping all steps (delete $CHR_OUTPUT_DIR to rerun)"
+        echo "${LOG_PREFIX} Already complete — skipping (delete $CHR_OUTPUT_DIR to rerun)"
         return 0
-    fi
-
-    # In single-GPU mode: restrict this process to the specified GPU so the
-    # device appears as cuda:0 inside Python.
-    # In multi-GPU (torchrun) mode: CUDA_VISIBLE_DEVICES is already set by the
-    # caller to cover all requested GPUs; each rank uses LOCAL_RANK for binding.
-    if [[ -n "$GPU_ID" ]]; then
-        export CUDA_VISIBLE_DEVICES="$GPU_ID"
-        LOG_PREFIX="[${CHR_ID}|GPU${GPU_ID}]"
-    else
-        LOG_PREFIX="[${CHR_ID}|multiGPU]"
     fi
 
     # --- Step 1: Extract Sequences ---
@@ -287,22 +241,41 @@ process_chromosome() {
             --output "$PIPELINE_DIR/sequences.zarr"
     fi
 
-    # --- Step 2: Predict Tokens ---
+    # --- Step 2: Predict ---
     if [[ -e "$PIPELINE_DIR/predictions.zarr" ]]; then
         echo "${LOG_PREFIX} [2/6] Skipping — predictions.zarr already exists"
     else
-        echo "${LOG_PREFIX} [2/6] Generating token predictions (batch=${BATCH_SIZE})..."
-        $PREDICT_LAUNCHER scripts/predict.py create_predictions \
-            --input "$PIPELINE_DIR/sequences.zarr" \
-            --output-dir "$PIPELINE_DIR/predictions.zarr" \
-            --model-path "$BASE_MODEL" \
-            --model-checkpoint "$HEAD_MODEL" \
-            --species-id "$SPECIES_ID" \
-            --chromosome-id "$CHR_ID" \
-            --batch-size "$BATCH_SIZE" \
-            --dtype "$DTYPE" \
-            --window-size 8192 \
-            --stride 4096
+        echo "${LOG_PREFIX} [2/6] Running prediction on ${NUM_GPUS} GPU(s) (batch=${BATCH_SIZE})..."
+        if [[ $NUM_GPUS -gt 1 ]]; then
+            export CUDA_VISIBLE_DEVICES="$GPU_LIST_STR"
+            $PYTHON -m torch.distributed.run \
+                --standalone \
+                --nproc_per_node="${NUM_GPUS}" \
+                scripts/predict.py create_predictions \
+                --chromosome-id "$CHR_ID" \
+                --input "$PIPELINE_DIR/sequences.zarr" \
+                --output-dir "$PIPELINE_DIR/predictions.zarr" \
+                --model-path "$BASE_MODEL" \
+                --model-checkpoint "$HEAD_MODEL" \
+                --species-id "$SPECIES_ID" \
+                --batch-size "$BATCH_SIZE" \
+                --dtype "$DTYPE" \
+                --window-size 8192 \
+                --stride 4096
+        else
+            export CUDA_VISIBLE_DEVICES="${GPU_ARRAY[0]}"
+            $PYTHON scripts/predict.py create_predictions \
+                --chromosome-id "$CHR_ID" \
+                --input "$PIPELINE_DIR/sequences.zarr" \
+                --output-dir "$PIPELINE_DIR/predictions.zarr" \
+                --model-path "$BASE_MODEL" \
+                --model-checkpoint "$HEAD_MODEL" \
+                --species-id "$SPECIES_ID" \
+                --batch-size "$BATCH_SIZE" \
+                --dtype "$DTYPE" \
+                --window-size 8192 \
+                --stride 4096
+        fi
     fi
 
     # --- Step 3: Detect Intervals ---
@@ -361,89 +334,48 @@ process_chromosome() {
             --require-utrs "no"
     fi
 
-    # --- Step 6: Copy final per-chromosome outputs ---
-    echo "${LOG_PREFIX} [6/6] Saving per-chromosome results..."
+    # --- Step 6: Copy final output ---
+    echo "${LOG_PREFIX} [6/6] Saving results..."
     cp "$PIPELINE_DIR/predictions_recall__raw.gff" "$CHR_OUTPUT_DIR/predictions_recall.gff"
-
     echo "${LOG_PREFIX} Done!"
 }
 
-# Export function and required variables so subshells can access them
 export -f process_chromosome
 export OUTPUT_DIR SPECIES_ID BASE_MODEL HEAD_MODEL TOKENIZER_PATH DTYPE PYTHON PYTHONPATH
-export GPU_LIST_STR NUM_GPUS
+export GPU_LIST_STR NUM_GPUS GPU_ARRAY
 
 # =================================================================
-# Dispatch: sequential (1 GPU) or parallel (multi-GPU)
+# Process each chromosome sequentially
 # =================================================================
 
 RECALL_GFFS=()
-declare -A JOB_PIDS   # pid -> chr_id
-declare -A JOB_STATUS # chr_id -> exit code
 CHR_ARRAY=()
 while IFS= read -r chr; do
     CHR_ARRAY+=("$chr")
 done <<< "$CHROM_IDS"
+export GPU_ARRAY
 
-if [[ $NUM_GPUS -eq 1 ]]; then
-    # -------------------------------------------------------
-    # Single-GPU: run sequentially, streaming output directly
-    # -------------------------------------------------------
-    SINGLE_GPU="${GPU_ARRAY[0]}"
-    SINGLE_BATCH="${GPU_BATCH_SIZES[$SINGLE_GPU]}"
-    echo "Running ${CHROM_COUNT} chromosomes sequentially on GPU ${SINGLE_GPU} (batch=${SINGLE_BATCH})"
-    echo ""
-
-    for CHR_ID in "${CHR_ARRAY[@]}"; do
-        echo ""
-        echo "================================================================="
-        echo "Processing chromosome: $CHR_ID"
-        echo "================================================================="
-        process_chromosome "$CHR_ID" "$SINGLE_GPU" "$SINGLE_BATCH"
-        RECALL_GFFS=("${RECALL_GFFS[@]}" "${OUTPUT_DIR}/${CHR_ID}/predictions_recall.gff")
-    done
-
-else
-    # -------------------------------------------------------
-    # Multi-GPU (torchrun): all GPUs cooperate on each
-    # chromosome in turn.  Chromosomes are processed
-    # sequentially; every chromosome uses all N GPUs
-    # simultaneously via torch.distributed.
-    # -------------------------------------------------------
-    echo "Running ${CHROM_COUNT} chromosome(s) sequentially, each using all ${NUM_GPUS} GPU(s) via torchrun"
-    echo "GPU list: ${GPU_LIST_STR}  |  per-GPU batch size: ${GPU_BATCH_SIZES[${GPU_ARRAY[0]}]}"
-    echo ""
-
-    # Build the torchrun launcher.
-    # We invoke torchrun via the venv python so that it inherits the correct
-    # site-packages and avoids any system-level python conflicts.
-    TORCHRUN_LAUNCHER="$PYTHON -m torch.distributed.run \
-        --standalone \
-        --nproc_per_node=${NUM_GPUS}"
-
-    # Expose the requested GPUs to every torchrun worker.
-    # LOCAL_RANK 0…N-1 map cleanly to these physical GPU indices.
-    export CUDA_VISIBLE_DEVICES="$GPU_LIST_STR"
-
-    # Per-GPU batch size: detect from the first GPU in the list.
-    # Each rank sees the same batch size; the window slice is already smaller
-    # (1/world_size), so total memory per GPU is similar to single-GPU mode.
-    MULTI_BATCH="${GPU_BATCH_SIZES[${GPU_ARRAY[0]}]}"
-
-    for CHR_ID in "${CHR_ARRAY[@]}"; do
-        echo ""
-        echo "================================================================="
-        echo "Processing chromosome: $CHR_ID"
-        echo "================================================================="
-        # Pass empty GPU_ID ("") so process_chromosome skips the per-GPU
-        # CUDA_VISIBLE_DEVICES override; the torchrun launcher handles binding.
-        process_chromosome "$CHR_ID" "" "$MULTI_BATCH" "$TORCHRUN_LAUNCHER"
-        RECALL_GFFS=("${RECALL_GFFS[@]}" "${OUTPUT_DIR}/${CHR_ID}/predictions_recall.gff")
-    done
+# Use the minimum batch size across all GPUs so no GPU runs OOM
+BATCH_SIZE="${GPU_BATCH_SIZES[${GPU_ARRAY[0]}]}"
+for gpu_id in "${GPU_ARRAY[@]}"; do
+    if [[ "${GPU_BATCH_SIZES[$gpu_id]}" -lt "$BATCH_SIZE" ]]; then
+        BATCH_SIZE="${GPU_BATCH_SIZES[$gpu_id]}"
+    fi
+done
+if [[ ${#GPU_ARRAY[@]} -gt 1 ]]; then
+    echo "  > Multi-GPU: using batch size ${BATCH_SIZE} (minimum across all GPUs)"
 fi
 
+echo "================================================================="
+echo "Processing ${CHROM_COUNT} chromosome(s)..."
+echo "================================================================="
+for CHR_ID in "${CHR_ARRAY[@]}"; do
+    process_chromosome "$CHR_ID" "$BATCH_SIZE"
+    RECALL_GFFS=("${RECALL_GFFS[@]}" "${OUTPUT_DIR}/${CHR_ID}/predictions_recall.gff")
+done
+
 # =================================================================
-# Step 3: Merge all per-chromosome GFFs into single files
+# Merge all per-chromosome GFFs into single files
 # =================================================================
 echo ""
 echo "================================================================="
@@ -463,7 +395,7 @@ fi
 
 echo ""
 echo "================================================================="
-echo "Step 4: Running protein refinement on merged predictions..."
+echo "Running protein refinement on merged predictions..."
 echo "================================================================="
 
 if [[ -f "$FINAL_GFF" ]]; then
@@ -473,6 +405,7 @@ else
         --gff "$RAW_GFF" \
         --genome "$INPUT_FILE" \
         --out "$FINAL_GFF" \
+        --gpus "$GPU_LIST_STR" \
         --filter-unmerged
 fi
 

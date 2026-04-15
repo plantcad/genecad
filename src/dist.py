@@ -1,6 +1,5 @@
 import os
 
-import torch
 import torch.distributed as dist
 
 
@@ -20,8 +19,11 @@ def init_process_group() -> None:
     # torchrun sets RANK; when absent we are not inside a distributed launch
     if "RANK" not in os.environ:
         return
-    backend = "nccl" if torch.cuda.is_available() else "gloo"
-    dist.init_process_group(backend=backend)
+    # Use gloo for synchronisation: this script only needs barrier() between
+    # ranks and performs no GPU collective ops (all_reduce, broadcast, etc.).
+    # NCCL triggers P2P GPU memory probes during init which cause
+    # "illegal memory access" errors on servers where GPUs lack P2P support.
+    dist.init_process_group(backend="gloo")
 
 
 def process_group() -> tuple[int, int]:
