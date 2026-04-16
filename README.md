@@ -10,6 +10,8 @@
 
 GeneCAD is an end-to-end genome annotation pipeline for plants and animals, powered by the DNA foundation model [PlantCAD2](https://doi.org/10.1101/2025.10.31.685877). Unlike traditional annotation tools that rely on hand-crafted features or splice-site grammars, GeneCAD learns gene structure directly from sequence using a pretrained transformer encoder followed by a Viterbi decoder and protein-level refinement via [ReelProtein](https://onlinelibrary.wiley.com/doi/10.1111/tpj.70483). It requires no species-specific training data or external alignments, and supports single- or multi-GPU inference out of the box.
 
+GeneCAD supports both plant and animal genome annotation; use `-m plant` (default) or `-m animal` to select the model family.
+
 ## Contents
 
 - [Quick Start](#quick-start)
