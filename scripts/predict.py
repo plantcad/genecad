@@ -1,4 +1,5 @@
 import argparse
+import dataclasses
 import logging
 import os
 import tqdm
@@ -42,6 +43,45 @@ def batched(input_list: list[Any], batch_size: int) -> list[list[Any]]:
     ]
 
 
+def _infer_config_from_checkpoint(ckpt: dict, window_size: int) -> GeneClassifierConfig:
+    """Reconstruct a GeneClassifierConfig from a checkpoint that lacks saved hyperparameters.
+
+    Reads weight tensor shapes from the state dict to recover the key architectural
+    dimensions (hidden size, number of labels, head-encoder depth) that must match
+    the saved weights.  Falls back to GeneClassifierConfig defaults for anything
+    that cannot be inferred.
+    """
+    sd = ckpt.get("state_dict", {})
+    config = GeneClassifierConfig()
+    config.max_sequence_length = window_size
+
+    # hidden_size == fc1 input dim  (fc1 shape: [4*H, H])
+    if "classifier.fc1.weight" in sd:
+        config.token_embedding_dim = sd["classifier.fc1.weight"].shape[1]
+
+    # num_labels == fc2 output dim  (fc2 shape: [num_labels, 4*H])
+    if "classifier.fc2.weight" in sd:
+        config.num_labels = sd["classifier.fc2.weight"].shape[0]
+
+    # head_encoder depth from highest layer index present
+    layer_indices = {
+        int(k.split(".")[2])
+        for k in sd
+        if k.startswith("head_encoder.layers.") and k.split(".")[2].isdigit()
+    }
+    if layer_indices:
+        config.head_encoder_layers = max(layer_indices) + 1
+
+    logger.info(
+        f"Inferred config from checkpoint state dict: "
+        f"token_embedding_dim={config.token_embedding_dim}, "
+        f"num_labels={config.num_labels}, "
+        f"head_encoder_layers={config.head_encoder_layers}, "
+        f"max_sequence_length={config.max_sequence_length}"
+    )
+    return config
+
+
 def load_classifier(args: Args) -> GeneClassifier:
     logger.info(f"Loading model from {args.model_checkpoint}")
     if not hasattr(torch, args.dtype):
@@ -59,9 +99,34 @@ def load_classifier(args: Args) -> GeneClassifier:
         model_checkpoint = hf_hub_download(args.model_checkpoint, filename="model.ckpt")
         logger.info(f"Downloaded classifier to {model_checkpoint}")
 
-    model = GeneClassifier.load_from_checkpoint(
-        model_checkpoint, map_location=args.device, strict=False
-    )
+    # Peek at the checkpoint to check whether hyperparameters were saved.
+    # Old checkpoints (and raw Lightning trainer checkpoints) lack this key,
+    # causing load_from_checkpoint to fail with a missing-argument TypeError.
+    ckpt = torch.load(model_checkpoint, map_location="cpu", weights_only=False)
+    hparams = ckpt.get("hyper_parameters") or {}
+
+    if hparams:
+        # Hyperparameters were saved flat (each GeneClassifierConfig field stored
+        # individually because `config` was in the ignore list).  Reconstruct the
+        # config object so Lightning can satisfy the required `config` argument.
+        config_field_names = {f.name for f in dataclasses.fields(GeneClassifierConfig)}
+        config_kwargs = {k: v for k, v in hparams.items() if k in config_field_names}
+        config = GeneClassifierConfig(**config_kwargs)
+        model = GeneClassifier.load_from_checkpoint(
+            model_checkpoint, map_location=args.device, strict=False,
+            config=config,
+        )
+    else:
+        logger.warning(
+            "Checkpoint has no saved hyperparameters (was saved before save_hyperparameters() "
+            "was added). Inferring GeneClassifierConfig from state dict shapes."
+        )
+        config = _infer_config_from_checkpoint(ckpt, window_size=args.window_size)
+        model = GeneClassifier.load_from_checkpoint(
+            model_checkpoint, map_location=args.device, strict=False,
+            config=config,
+        )
+
     model = model.eval()
     model = model.to(args.device, dtype=dtype)
     return model
@@ -182,6 +247,17 @@ def _create_predictions(
     """
     # Get distributed processing info
     rank, world_size = process_group()
+    tqdm_position = args.tqdm_position if args.tqdm_position is not None else rank
+    gpu_label = str(rank)
+    visible_gpus = os.environ.get("CUDA_VISIBLE_DEVICES", "").strip()
+    if visible_gpus:
+        visible_gpu_ids = [g.strip() for g in visible_gpus.split(",") if g.strip()]
+        # In torchrun, LOCAL_RANK indexes into CUDA_VISIBLE_DEVICES.
+        # In single-process runs launched with one visible GPU, index 0 maps
+        # to the physical GPU that was selected in predict.sh.
+        gpu_index = local_rank() if world_size > 1 else 0
+        if 0 <= gpu_index < len(visible_gpu_ids):
+            gpu_label = visible_gpu_ids[gpu_index]
 
     # Construct rank-specific output path
     dataset_path = os.path.join(args.output_dir, f"predictions.{rank}.zarr")
@@ -261,8 +337,8 @@ def _create_predictions(
         for batch_index, window_batch in enumerate(
             tqdm.tqdm(
                 window_batches,
-                desc=f"[GPU {rank} | {strand}]",
-                position=rank,
+                desc=f"[GPU {gpu_label} | {strand}]",
+                position=tqdm_position,
                 leave=True,
                 dynamic_ncols=True,
             )
@@ -427,9 +503,16 @@ def warmup_triton(args: Args):
     if pad_value is None:
         pad_value = 0
 
-    # Warm up with a full-size batch so Triton caches the most common shape.
+    # Warm up with a conservative probe batch so we exercise the kernels
+    # without risking an OOM on large auto-detected inference batch sizes.
+    warmup_batch_size = max(1, min(args.batch_size, 4))
+    if warmup_batch_size != args.batch_size:
+        logger.info(
+            f"[warmup] Capping probe batch from {args.batch_size} to {warmup_batch_size} for safety"
+        )
+
     dummy = torch.full(
-        (args.batch_size, args.window_size), pad_value,
+        (warmup_batch_size, args.window_size), pad_value,
         dtype=torch.long, device=args.device,
     )
 
@@ -442,7 +525,7 @@ def warmup_triton(args: Args):
 
     # Also warm up remainder-batch shape (1 sample) so the last batch in each
     # strand doesn't trigger a new autotuning run.
-    if args.batch_size > 1:
+    if warmup_batch_size > 1:
         dummy1 = dummy[:1]
         embeds1 = base_model(input_ids=dummy1).last_hidden_state if base_model is not None else None
         classifier(input_ids=dummy1, inputs_embeds=embeds1)
@@ -1067,6 +1150,9 @@ def main():
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
     )
+    # Suppress noisy HTTP traffic logs from HuggingFace Hub's internal HTTP client
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("huggingface_hub").setLevel(logging.WARNING)
 
     parser = argparse.ArgumentParser(description="Gene prediction and export tools")
     subparsers = parser.add_subparsers(
@@ -1127,6 +1213,12 @@ def main():
     )
     inference_parser.add_argument(
         "--batch-size", type=int, default=64, help="Batch size for inference"
+    )
+    inference_parser.add_argument(
+        "--tqdm-position",
+        type=int,
+        default=None,
+        help="Optional tqdm row to use for this process when multiple GPU jobs run in one terminal",
     )
     inference_parser.add_argument(
         "--device",

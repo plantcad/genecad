@@ -15,17 +15,21 @@ GeneCAD is an end-to-end genome annotation pipeline for plants and animals, powe
 - [Quick Start](#quick-start)
 - [Prerequisites](#prerequisites)
 - [Setup](#setup)
-  - [Using Docker](#using-docker)
   - [Using uv](#using-uv)
+  - [Using Docker](#using-docker)
   - [Using SLURM](#using-slurm)
   - [Using SkyPilot](#using-skypilot)
 - [Inference](#inference)
   - [Available models](#available-models)
   - [Running the pipeline](#running-the-pipeline)
+  - [Common run recipes](#common-run-recipes)
   - [Multi-GPU acceleration](#multi-gpu-acceleration)
   - [Pipeline steps](#pipeline-steps)
   - [Outputs](#outputs)
+  - [GFF3 format notes](#gff3-format-notes)
+  - [Resuming an interrupted run](#resuming-an-interrupted-run)
   - [Throughput](#throughput)
+  - [Troubleshooting](#troubleshooting)
 - [Evaluation](#evaluation)
 - [Citation](#citation)
 - [Development](#development)
@@ -99,10 +103,46 @@ Choose the installation method that best fits your environment:
 
 | Method | Best for |
 |--------|----------|
-| [Docker](#using-docker) | Reproducible runs, no local environment setup |
 | [uv](#using-uv) | Local development and interactive use |
+| [Docker](#using-docker) | Reproducible runs, no local environment setup |
 | [SLURM](#using-slurm) | HPC / supercomputer clusters |
 | [SkyPilot](#using-skypilot) | On-demand cloud GPUs |
+
+The recommended default for most users is `uv` (local run and development). Use Docker when you need a fully packaged, reproducible runtime.
+
+### Using uv
+
+[uv](https://docs.astral.sh/uv/) is a fast Python package manager that handles the virtual environment and all dependencies in one command.
+
+```bash
+# Clone the repository
+git clone https://github.com/plantcad/genecad && cd genecad
+
+# Install uv
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Make uv available immediately (or open a new terminal)
+export PATH="$HOME/.local/bin:$PATH"
+
+# Install all dependencies
+# mamba and causal-conv1d build from source — this can take 3–30 minutes
+uv sync --extra torch --extra mamba
+
+# Run the pipeline
+bash predict.sh
+```
+
+PyTorch is pinned to 2.7.1 (CUDA 12.8) to ensure compatibility with `mamba` (2.2.4) and `causal-conv1d` (1.5.0.post8). Newer combinations may work but are not officially tested.
+
+`mamba` and `causal-conv1d` build from source without build isolation for reliability. To cache the built wheels and speed up future installs, add these entries to `pyproject.toml`:
+
+```toml
+[tool.uv.sources]
+mamba-ssm = { path = "path/to/mamba_ssm-2.2.4-*.whl" }
+causal-conv1d = { path = "path/to/causal_conv1d-1.5.0.post8-*.whl" }
+# Or use a remote URL:
+# mamba-ssm = { url = "https://.../mamba_ssm-2.2.4-*.whl" }
+```
 
 ### Using Docker
 
@@ -143,40 +183,6 @@ docker run --rm --gpus all \
     -o /workspace/output \
     -s Hsapiens \
     -m animal
-```
-
-### Using uv
-
-[uv](https://docs.astral.sh/uv/) is a fast Python package manager that handles the virtual environment and all dependencies in one command.
-
-```bash
-# Clone the repository
-git clone https://github.com/plantcad/genecad && cd genecad
-
-# Install uv
-curl -LsSf https://astral.sh/uv/install.sh | sh
-
-# Make uv available immediately (or open a new terminal)
-export PATH="$HOME/.local/bin:$PATH"
-
-# Install all dependencies
-# mamba and causal-conv1d build from source — this can take 3–30 minutes
-uv sync --extra torch --extra mamba
-
-# Run the pipeline
-bash predict.sh
-```
-
-PyTorch is pinned to 2.7.1 (CUDA 12.8) to ensure compatibility with `mamba` (2.2.4) and `causal-conv1d` (1.5.0.post8). Newer combinations may work but are not officially tested.
-
-`mamba` and `causal-conv1d` build from source without build isolation for reliability. To cache the built wheels and speed up future installs, add these entries to `pyproject.toml`:
-
-```toml
-[tool.uv.sources]
-mamba-ssm = { path = "path/to/mamba_ssm-2.2.4-*.whl" }
-causal-conv1d = { path = "path/to/causal_conv1d-1.5.0.post8-*.whl" }
-# Or use a remote URL:
-# mamba-ssm = { url = "https://.../mamba_ssm-2.2.4-*.whl" }
 ```
 
 ### Using SLURM
@@ -296,6 +302,8 @@ Options:
   -o, --output DIR      Output directory  (default: genecad_result/Athaliana_predictions)
   -s, --species NAME    Species label prefixed on output filenames  (default: Athaliana)
   -m, --mode MODE       Model to use: plant | animal  (default: plant)
+  -n, --top-n-contigs N Predict only the N longest FASTA sequences
+                        (default: all sequences)
   -b, --batch-size N    Inference batch size per GPU  (default: auto — scaled to GPU VRAM)
   -g, --gpus LIST       GPU IDs to use: comma-separated list or 'all'  (default: 0)
   -h, --help            Show this help message
@@ -309,6 +317,10 @@ Options:
 bash predict.sh
 ```
 
+For common real-world commands (custom genome, top-N contigs, multi-GPU), see [Common run recipes](#common-run-recipes).
+
+### Common run recipes
+
 **Custom plant genome:**
 
 ```bash
@@ -319,7 +331,7 @@ bash predict.sh \
   -m plant
 ```
 
-**Animal genome:**
+**Custom animal genome:**
 
 ```bash
 bash predict.sh \
@@ -327,6 +339,31 @@ bash predict.sh \
   -o /path/to/output \
   -s Hsapiens \
   -m animal
+```
+
+**Run only top N longest contigs/scaffolds** (useful for very fragmented assemblies):
+
+```bash
+bash predict.sh \
+  -i /path/to/genome.fa \
+  -o /path/to/output \
+  -s MySpecies \
+  -m plant \
+  --top-n-contigs 100
+```
+
+When `--top-n-contigs` is used, GeneCAD selects the N longest sequences by length, then processes them in the same order they appear in the input FASTA headers. This keeps output ordering stable and easier to compare with the source assembly.
+
+**Use all GPUs with automatic per-GPU batch sizing:**
+
+```bash
+bash predict.sh -i /path/to/genome.fa -s MySpecies --gpus all
+```
+
+**Pin a known-safe batch size for reproducibility:**
+
+```bash
+bash predict.sh -i /path/to/genome.fa -s MySpecies --gpus all --batch-size 4
 ```
 
 ### Multi-GPU acceleration
@@ -344,13 +381,9 @@ bash predict.sh -i genome.fa -s MySpecies --gpus 0,1,2,3
 bash predict.sh -i genome.fa -s MySpecies --gpus 0,1 -b 32
 ```
 
-Chromosomes are assigned round-robin across the specified GPUs. The batch size is auto-scaled independently per GPU (so mixed fleets — e.g. an A100 and a V100 — work correctly). In multi-GPU mode, each chromosome's log is written to `<OUTPUT_DIR>/.logs/<CHR_ID>.log` for easy monitoring:
+Chromosomes are assigned round-robin across the specified GPUs. The batch size is auto-scaled independently per GPU (so mixed fleets — e.g. an A100 and a V100 — work correctly).
 
-```bash
-tail -f genecad_result/MySpecies_predictions/.logs/Chr1.log
-```
-
-The pipeline is fully resumable in both single- and multi-GPU modes: re-running the same command skips any step whose output already exists.
+Progress bars are shown per running worker in the terminal, and labels reflect the physical GPU selected for each worker. The pipeline is fully resumable in both single- and multi-GPU modes.
 
 ### Pipeline steps
 
@@ -383,6 +416,18 @@ After running, the output directory contains:
 ```
 
 The two top-level GFF3 files are the primary outputs. Intermediate files are preserved for debugging or downstream analysis.
+
+### GFF3 format notes
+
+GeneCAD outputs standard 9-column GFF3 records and includes a `##gff-version 3` header. The final files contain hierarchical feature relationships via `ID` and `Parent` attributes, including:
+
+- `gene`
+- `mRNA`
+- `five_prime_UTR`
+- `CDS`
+- `three_prime_UTR`
+
+Coordinates are 1-based and inclusive, consistent with GFF3 conventions.
 
 ### Resuming an interrupted run
 
@@ -417,6 +462,14 @@ Estimated cost for common reference plant genomes (using Lambda A100 at $0.0202/
 | *Zea mays* (corn) | 2,182 | 34.27 | 44.04 |
 | *Hordeum vulgare* (barley) | 4,224 | 66.34 | 85.32 |
 | *Triticum aestivum* (wheat) | 14,577 | 227.00 | 294.46 |
+
+### Troubleshooting
+
+| Symptom | Likely cause | What to do |
+|--------|--------------|------------|
+| GPU utilization is low | Batch size is conservative for stability | Re-run with a higher fixed `--batch-size` (for example 8, 16, 32) and keep the highest stable value |
+| Auto batch size starts too high | Free VRAM sampled before model load | Keep auto mode and allow retry shrink, or pin a stable manual `--batch-size` |
+| Interrupted run | Job timeout / manual stop | Re-run the same command; completed steps are skipped automatically |
 
 ---
 

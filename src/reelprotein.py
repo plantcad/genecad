@@ -172,33 +172,59 @@ def extract_candidate_proteins(genes, genome_fasta):
 
                     if not cds_strings[j]:
                         break
+
+                    running_before = running
                     running += cds_strings[j]
 
-                    if (
-                        len(running) >= 3
-                        and running.startswith("ATG")
-                        and running[-3:] in STOPS
-                    ):
-                        # If merged and trailing gene is already valid, skip
-                        if j > i and any(
-                            is_complete_orf(cds_strings[k]) for k in range(i + 1, j + 1)
+                    # For the chain anchor (j == i) only offset 0 is valid —
+                    # we never trim the first fragment.  For every subsequent
+                    # fragment try offsets 0, 1, 2: a slight CDS boundary
+                    # mis-prediction shifts the reading frame at the junction
+                    # by 1–2 bases, and the correct offset produces a clean
+                    # in-frame ORF.  `running` (offset 0) is always kept as
+                    # the accumulator so chain extension to j+1 stays consistent.
+                    if j == i:
+                        candidates = [running]
+                    else:
+                        candidates = [
+                            running_before + cds_strings[j][offset:]
+                            for offset in range(3)
+                            if len(cds_strings[j]) > offset
+                        ]
+
+                    found_candidate = False
+                    stop_chain = False
+                    for candidate in candidates:
+                        if (
+                            len(candidate) >= 3
+                            and candidate.startswith("ATG")
+                            and candidate[-3:] in STOPS
                         ):
+                            # If merged and trailing gene is already valid, skip
+                            if j > i and any(
+                                is_complete_orf(cds_strings[k]) for k in range(i + 1, j + 1)
+                            ):
+                                stop_chain = True
+                                break
+
+                            # Generate ID and Protein
+                            prot = str(Seq(candidate).translate(to_stop=False))
+                            # Replace special characters in ID for file safety logic
+                            header_ids = "|".join(g["id"] for g in chain)
+                            merged_id = f"{chrom}~{header_ids}~{strand}"
+
+                            # Sanitize sequence for embedding
+                            prot_clean = (
+                                prot.replace("U", "X")
+                                .replace("Z", "X")
+                                .replace("O", "X")
+                                .replace("-", "")
+                            )
+                            protein_candidates[merged_id] = prot_clean
+                            found_candidate = True
                             break
 
-                        # Generate ID and Protein
-                        prot = str(Seq(running).translate(to_stop=False))
-                        # Replace special characters in ID for file safety logic
-                        header_ids = "|".join(g["id"] for g in chain)
-                        merged_id = f"{chrom}~{header_ids}~{strand}"
-
-                        # Sanitize sequence for embedding
-                        prot_clean = (
-                            prot.replace("U", "X")
-                            .replace("Z", "X")
-                            .replace("O", "X")
-                            .replace("-", "")
-                        )
-                        protein_candidates[merged_id] = prot_clean
+                    if found_candidate or stop_chain:
                         break
 
     logger.info(

@@ -19,22 +19,27 @@ Options:
   -o, --output DIR      Output directory (default: genecad_result/Athaliana_predictions)
   -s, --species NAME    Species label prefixed on output filenames (default: Athaliana)
   -m, --mode MODE       Model to use: plant | animal  (default: plant)
+  -n, --top-n-contigs N Predict only the N longest FASTA sequences (default: all)
   -b, --batch-size N    Inference batch size per GPU (default: auto — scaled to GPU VRAM)
   -g, --gpus LIST       Comma-separated GPU IDs to use, or 'all' for all available GPUs.
                         Chromosomes are distributed across GPUs in parallel.
                         (default: 0 — single GPU, sequential)
   -h, --help            Show this help message
 
-Batch size is chosen automatically based on free GPU VRAM using a linear formula:
-  batch_size = floor(free_gb × 1.2)  — e.g. 60 GB free → 72, 35 GB → 42, 20 GB → 24
+Batch size auto-detection:
+  Starting guess = max(8, floor(free_gb × 0.80))
+  nvidia-smi reports free memory *before* Python/model load, so the guess may overshoot.
+  On failure the batch size is reduced by 20% and retried (up to 20 times). This finds
+  a near-optimal size rather than jumping to half. The final working value is printed
+  so you can pin it with '-b N' on future runs and skip probing entirely.
 
-Note: This auto-scaling pushes GPU utility to its limit. If you encounter CUDA Out-Of-Memory
-      (OOM) errors, manually lower the batch size with the '-b' flag (e.g., '-b 32').
-
-Multi-GPU usage:
-  All GPUs work together on one chromosome at a time via torchrun window-splitting.
-  Example: --gpus 0,1,2,3   (use GPUs 0–3)
-           --gpus all        (auto-detect and use all available GPUs)
+Multi-GPU dispatch (chosen automatically):
+  chromosomes < GPUs  →  DDP (torchrun): all GPUs collaborate on each chromosome.
+                         Ensures all GPUs are used even for small genomes.
+  chromosomes ≥ GPUs  →  Per-GPU parallel: each GPU handles its own chromosomes
+                         independently; up to N chromosomes run simultaneously.
+                         Avoids repeated torchrun process spawns for large genomes.
+  Example: --gpus 0,1,2,3   or   --gpus all
 
 Examples:
   # Annotate a plant genome (default, batch size auto-detected, single GPU)
@@ -45,6 +50,9 @@ Examples:
 
   # Use specific GPUs with custom batch size
   bash predict.sh -i data/my_plant.fa -o output/ -s Zmays --gpus 0,1 -b 32
+
+    # Run only the 50 longest contigs/scaffolds
+    bash predict.sh -i data/my_plant.fa -o output/ -s Zmays --top-n-contigs 50
 USAGE
     exit 0
 }
@@ -55,6 +63,7 @@ SPECIES_ID="Athaliana"
 MODE="plant"
 BATCH_SIZE_ARG="auto"
 GPUS_ARG="0"
+TOP_N_CONTIGS="all"
 
 while [[ $# -gt 0 ]]; do
   case $1 in
@@ -62,12 +71,20 @@ while [[ $# -gt 0 ]]; do
     -o|--output)     OUTPUT_DIR="$2";      shift 2 ;;
     -s|--species)    SPECIES_ID="$2";      shift 2 ;;
     -m|--mode)       MODE="$2";            shift 2 ;;
+    -n|--top-n-contigs) TOP_N_CONTIGS="$2"; shift 2 ;;
     -b|--batch-size) BATCH_SIZE_ARG="$2"; shift 2 ;;
     -g|--gpus)       GPUS_ARG="$2";       shift 2 ;;
     -h|--help) usage ;;
     *) echo "Unknown option: $1"; usage ;;
   esac
 done
+
+if [[ "$TOP_N_CONTIGS" != "all" ]]; then
+    if ! [[ "$TOP_N_CONTIGS" =~ ^[0-9]+$ ]] || [[ "$TOP_N_CONTIGS" -lt 1 ]]; then
+        echo "Error: --top-n-contigs must be a positive integer or 'all'."
+        exit 1
+    fi
+fi
 
 echo "================================================================="
 echo "GeneCAD Prediction Pipeline"
@@ -89,7 +106,7 @@ fi
 case "$MODE" in
   plant)
     BASE_MODEL="emarro/pcad2-200M-cnet-baseline"
-    HEAD_MODEL="zongyanliu/genecad_5-species"
+    HEAD_MODEL="zongyanliu/genecad_plant"
     ;;
   animal)
     BASE_MODEL="emarro/pcad2_vert_small"
@@ -130,6 +147,7 @@ echo "Input FASTA: $INPUT_FILE"
 echo "Output Dir:  $OUTPUT_DIR"
 echo "Species ID:  $SPECIES_ID"
 echo "Mode:        $MODE  ($BASE_MODEL + $HEAD_MODEL)"
+echo "Top contigs: $TOP_N_CONTIGS"
 echo "================================================================="
 
 # =================================================================
@@ -152,8 +170,12 @@ resolve_batch_size_for_gpu() {
         echo "8"
         return
     fi
-    local BS=$(( GPU_MEM_MB * 6 / 5120 ))   # free_gb × 1.2
-    [[ $BS -lt 1 ]] && BS=1
+    # Start from a GPU-memory-based estimate. nvidia-smi memory.free is sampled
+    # before Python, PyTorch, and the model load, so this is a starting point;
+    # the retry loop below still shrinks it if the real run needs less.
+    local FREE_GB=$(( GPU_MEM_MB / 1024 ))
+    local BS=$(( FREE_GB * 7 / 10 ))   # × 0.70
+    [[ $BS -lt 8 ]] && BS=8
     echo $BS
 }
 
@@ -199,14 +221,96 @@ echo "================================================================="
 echo "Discovering chromosomes from FASTA file..."
 echo "================================================================="
 
-if [[ "$INPUT_FILE" == *.gz ]]; then
-    CHROM_IDS=$(zcat "$INPUT_FILE" | grep "^>" | sed 's/^>//' | awk '{print $1}')
+if [[ "$TOP_N_CONTIGS" == "all" ]]; then
+    if [[ "$INPUT_FILE" == *.gz ]]; then
+        CHROM_IDS=$(zcat "$INPUT_FILE" | grep "^>" | sed 's/^>//' | awk '{print $1}')
+    else
+        CHROM_IDS=$(grep "^>" "$INPUT_FILE" | sed 's/^>//' | awk '{print $1}')
+    fi
 else
-    CHROM_IDS=$(grep "^>" "$INPUT_FILE" | sed 's/^>//' | awk '{print $1}')
+    TOP_IDS=""
+    if [[ "$INPUT_FILE" == *.gz ]]; then
+        TOP_IDS=$(
+            zcat "$INPUT_FILE" | awk '
+                /^>/ {
+                    if (id != "") print len "\t" id;
+                    id = $0;
+                    sub(/^>/, "", id);
+                    split(id, parts, /[ \t]/);
+                    id = parts[1];
+                    len = 0;
+                    next;
+                }
+                {
+                    gsub(/[ \t\r\n]/, "", $0);
+                    len += length($0);
+                }
+                END {
+                    if (id != "") print len "\t" id;
+                }
+            ' | sort -nr -k1,1 | head -n "$TOP_N_CONTIGS" | awk '{print $2}'
+        )
+        CHROM_IDS=$(awk '
+            NR==FNR {
+                keep[$1] = 1;
+                next;
+            }
+            /^>/ {
+                id = $0;
+                sub(/^>/, "", id);
+                split(id, parts, /[ \t]/);
+                id = parts[1];
+                if (id in keep) print id;
+            }
+        ' <(printf '%s\n' "$TOP_IDS") <(zcat "$INPUT_FILE"))
+    else
+        TOP_IDS=$(
+            awk '
+                /^>/ {
+                    if (id != "") print len "\t" id;
+                    id = $0;
+                    sub(/^>/, "", id);
+                    split(id, parts, /[ \t]/);
+                    id = parts[1];
+                    len = 0;
+                    next;
+                }
+                {
+                    gsub(/[ \t\r\n]/, "", $0);
+                    len += length($0);
+                }
+                END {
+                    if (id != "") print len "\t" id;
+                }
+            ' "$INPUT_FILE" | sort -nr -k1,1 | head -n "$TOP_N_CONTIGS" | awk '{print $2}'
+        )
+        CHROM_IDS=$(awk '
+            NR==FNR {
+                keep[$1] = 1;
+                next;
+            }
+            /^>/ {
+                id = $0;
+                sub(/^>/, "", id);
+                split(id, parts, /[ \t]/);
+                id = parts[1];
+                if (id in keep) print id;
+            }
+        ' <(printf '%s\n' "$TOP_IDS") "$INPUT_FILE")
+    fi
 fi
-CHROM_COUNT=$(echo "$CHROM_IDS" | wc -l)
 
-echo "Found $CHROM_COUNT chromosomes/sequences:"
+CHROM_COUNT=$(echo "$CHROM_IDS" | sed '/^$/d' | wc -l)
+if [[ "$CHROM_COUNT" -eq 0 ]]; then
+    echo "Error: No sequences found in FASTA after applying filters."
+    exit 1
+fi
+
+if [[ "$TOP_N_CONTIGS" == "all" ]]; then
+    echo "Found $CHROM_COUNT chromosomes/sequences:"
+else
+    echo "Selected top $CHROM_COUNT longest chromosomes/sequences:"
+fi
 echo "$CHROM_IDS"
 echo ""
 
@@ -217,7 +321,8 @@ echo ""
 process_chromosome() {
     local CHR_ID="$1"
     local BATCH_SIZE="$2"
-    local LOG_PREFIX="[${CHR_ID}]"
+    local GPU_ID="$3"   # which GPU this chromosome runs on
+    local LOG_PREFIX="[${CHR_ID}@GPU${GPU_ID}]"
 
     local CHR_OUTPUT_DIR="${OUTPUT_DIR}/${CHR_ID}"
     local PIPELINE_DIR="${CHR_OUTPUT_DIR}/pipeline"
@@ -245,36 +350,66 @@ process_chromosome() {
     if [[ -e "$PIPELINE_DIR/predictions.zarr" ]]; then
         echo "${LOG_PREFIX} [2/6] Skipping — predictions.zarr already exists"
     else
-        echo "${LOG_PREFIX} [2/6] Running prediction on ${NUM_GPUS} GPU(s) (batch=${BATCH_SIZE})..."
-        if [[ $NUM_GPUS -gt 1 ]]; then
-            export CUDA_VISIBLE_DEVICES="$GPU_LIST_STR"
-            $PYTHON -m torch.distributed.run \
-                --standalone \
-                --nproc_per_node="${NUM_GPUS}" \
-                scripts/predict.py create_predictions \
-                --chromosome-id "$CHR_ID" \
-                --input "$PIPELINE_DIR/sequences.zarr" \
-                --output-dir "$PIPELINE_DIR/predictions.zarr" \
-                --model-path "$BASE_MODEL" \
-                --model-checkpoint "$HEAD_MODEL" \
-                --species-id "$SPECIES_ID" \
-                --batch-size "$BATCH_SIZE" \
-                --dtype "$DTYPE" \
-                --window-size 8192 \
-                --stride 4096
-        else
-            export CUDA_VISIBLE_DEVICES="${GPU_ARRAY[0]}"
-            $PYTHON scripts/predict.py create_predictions \
-                --chromosome-id "$CHR_ID" \
-                --input "$PIPELINE_DIR/sequences.zarr" \
-                --output-dir "$PIPELINE_DIR/predictions.zarr" \
-                --model-path "$BASE_MODEL" \
-                --model-checkpoint "$HEAD_MODEL" \
-                --species-id "$SPECIES_ID" \
-                --batch-size "$BATCH_SIZE" \
-                --dtype "$DTYPE" \
-                --window-size 8192 \
-                --stride 4096
+        local gpu_id="$GPU_ID"
+        local bs="$BATCH_SIZE"
+        local attempt=0
+        local max_attempts=20  # 20% reduction per step: ~20 steps to go from 256→1
+        local success=0
+        while [[ $attempt -lt $max_attempts ]]; do
+            if [[ "$PREDICT_MODE" == "ddp" ]]; then
+                echo "${LOG_PREFIX} [2/6] Prediction via DDP on ${NUM_GPUS} GPUs (batch=${bs}/GPU, attempt $((attempt+1))/${max_attempts})..."
+                CUDA_VISIBLE_DEVICES="$GPU_LIST_STR" \
+                $PYTHON -m torch.distributed.run \
+                    --standalone \
+                    --nproc_per_node="${NUM_GPUS}" \
+                    scripts/predict.py create_predictions \
+                    --chromosome-id "$CHR_ID" \
+                    --input "$PIPELINE_DIR/sequences.zarr" \
+                    --output-dir "$PIPELINE_DIR/predictions.zarr" \
+                    --model-path "$BASE_MODEL" \
+                    --model-checkpoint "$HEAD_MODEL" \
+                    --species-id "$SPECIES_ID" \
+                    --batch-size "$bs" \
+                    --dtype "$DTYPE" \
+                    --window-size 8192 \
+                    --stride 4096
+            else
+                echo "${LOG_PREFIX} [2/6] Prediction on GPU ${gpu_id} (batch=${bs}, attempt $((attempt+1))/${max_attempts})..."
+                CUDA_VISIBLE_DEVICES="$gpu_id" \
+                $PYTHON scripts/predict.py create_predictions \
+                    --chromosome-id "$CHR_ID" \
+                    --input "$PIPELINE_DIR/sequences.zarr" \
+                    --output-dir "$PIPELINE_DIR/predictions.zarr" \
+                    --model-path "$BASE_MODEL" \
+                    --model-checkpoint "$HEAD_MODEL" \
+                    --species-id "$SPECIES_ID" \
+                    --batch-size "$bs" \
+                    --dtype "$DTYPE" \
+                    --tqdm-position "$gpu_id" \
+                    --window-size 8192 \
+                    --stride 4096
+            fi
+            local exit_code=$?
+            if [[ $exit_code -eq 0 ]]; then
+                success=1
+                if [[ $attempt -gt 0 ]]; then
+                    echo "${LOG_PREFIX} [2/6] Succeeded with batch size ${bs} after ${attempt} retry(s)."
+                    echo "${LOG_PREFIX}   TIP: Add '-b ${bs}' to future runs to skip probing."
+                fi
+                break
+            fi
+            local next_bs=$(( bs * 4 / 5 ))   # reduce by 20%
+            [[ $next_bs -ge $bs ]] && next_bs=$(( bs - 1 ))  # guard against bs<5 rounding to same value
+            [[ $next_bs -lt 1 ]] && next_bs=1
+            echo "${LOG_PREFIX} [2/6] Failed (exit ${exit_code}). Reducing batch size by 20%%: ${bs} → ${next_bs}..."
+            bs=$next_bs
+            rm -rf "$PIPELINE_DIR/predictions.zarr"
+            attempt=$(( attempt + 1 ))
+        done
+        if [[ $success -ne 1 ]]; then
+            echo "${LOG_PREFIX} ERROR: Prediction failed after ${max_attempts} attempts (last batch size: ${bs})."
+            echo "${LOG_PREFIX}   This is likely not an OOM issue. Check stderr above."
+            return 1
         fi
     fi
 
@@ -342,35 +477,83 @@ process_chromosome() {
 
 export -f process_chromosome
 export OUTPUT_DIR SPECIES_ID BASE_MODEL HEAD_MODEL TOKENIZER_PATH DTYPE PYTHON PYTHONPATH
-export GPU_LIST_STR NUM_GPUS GPU_ARRAY
+export GPU_LIST_STR NUM_GPUS
 
-# =================================================================
-# Process each chromosome sequentially
-# =================================================================
-
-RECALL_GFFS=()
 CHR_ARRAY=()
 while IFS= read -r chr; do
     CHR_ARRAY+=("$chr")
 done <<< "$CHROM_IDS"
-export GPU_ARRAY
 
-# Use the minimum batch size across all GPUs so no GPU runs OOM
-BATCH_SIZE="${GPU_BATCH_SIZES[${GPU_ARRAY[0]}]}"
-for gpu_id in "${GPU_ARRAY[@]}"; do
-    if [[ "${GPU_BATCH_SIZES[$gpu_id]}" -lt "$BATCH_SIZE" ]]; then
-        BATCH_SIZE="${GPU_BATCH_SIZES[$gpu_id]}"
-    fi
-done
-if [[ ${#GPU_ARRAY[@]} -gt 1 ]]; then
-    echo "  > Multi-GPU: using batch size ${BATCH_SIZE} (minimum across all GPUs)"
+# =================================================================
+# Choose dispatch strategy
+#
+#   DDP  (torchrun)  — when chromosomes < GPUs:
+#     All GPUs collaborate on each chromosome; processed sequentially.
+#     Ensures every GPU is busy even for tiny genomes.
+#
+#   Per-GPU parallel — when chromosomes >= GPUs:
+#     Each GPU owns its chromosomes independently; up to NUM_GPUS
+#     chromosomes run at the same time. Avoids 1000× torchrun spawns.
+# =================================================================
+
+echo "================================================================="
+if [[ $NUM_GPUS -gt 1 && $CHROM_COUNT -lt $NUM_GPUS ]]; then
+    PREDICT_MODE="ddp"
+    # Use the minimum batch size across GPUs so no single GPU OOMs.
+    DDP_BATCH="${GPU_BATCH_SIZES[${GPU_ARRAY[0]}]}"
+    for gid in "${GPU_ARRAY[@]}"; do
+        [[ "${GPU_BATCH_SIZES[$gid]}" -lt "$DDP_BATCH" ]] && DDP_BATCH="${GPU_BATCH_SIZES[$gid]}"
+    done
+    echo "Processing ${CHROM_COUNT} chromosome(s) with DDP across all ${NUM_GPUS} GPUs."
+    echo "  (${CHROM_COUNT} chromosomes < ${NUM_GPUS} GPUs → DDP uses all GPUs per chromosome)"
+    echo "  Batch size per GPU: ${DDP_BATCH}"
+else
+    PREDICT_MODE="single"
+    echo "Processing ${CHROM_COUNT} chromosome(s) in parallel — one GPU per chromosome."
+    [[ $NUM_GPUS -gt 1 ]] && echo "  Up to ${NUM_GPUS} chromosomes run simultaneously."
+fi
+export PREDICT_MODE
+echo "================================================================="
+
+FAILED=0
+
+if [[ "$PREDICT_MODE" == "ddp" ]]; then
+    # Sequential DDP — all GPUs on each chromosome one at a time
+    for CHR_ID in "${CHR_ARRAY[@]}"; do
+        process_chromosome "$CHR_ID" "$DDP_BATCH" "" || FAILED=$(( FAILED + 1 ))
+    done
+else
+    # Per-GPU parallel — round-robin, NUM_GPUS concurrent jobs
+    declare -a PIDS=()
+    chr_idx=0
+    for CHR_ID in "${CHR_ARRAY[@]}"; do
+        gpu_id="${GPU_ARRAY[$(( chr_idx % NUM_GPUS ))]}"
+        bs="${GPU_BATCH_SIZES[$gpu_id]}"
+
+        # Wait for the oldest slot before launching, keeping exactly NUM_GPUS live jobs
+        if [[ ${#PIDS[@]} -ge $NUM_GPUS ]]; then
+            wait "${PIDS[0]}"
+            [[ $? -ne 0 ]] && FAILED=$(( FAILED + 1 ))
+            PIDS=("${PIDS[@]:1}")
+        fi
+
+        process_chromosome "$CHR_ID" "$bs" "$gpu_id" &
+        PIDS+=($!)
+        chr_idx=$(( chr_idx + 1 ))
+    done
+    for pid in "${PIDS[@]}"; do
+        wait "$pid"
+        [[ $? -ne 0 ]] && FAILED=$(( FAILED + 1 ))
+    done
 fi
 
-echo "================================================================="
-echo "Processing ${CHROM_COUNT} chromosome(s)..."
-echo "================================================================="
+if [[ $FAILED -gt 0 ]]; then
+    echo "ERROR: $FAILED chromosome(s) failed. See output above for details."
+    exit 1
+fi
+
+RECALL_GFFS=()
 for CHR_ID in "${CHR_ARRAY[@]}"; do
-    process_chromosome "$CHR_ID" "$BATCH_SIZE"
     RECALL_GFFS=("${RECALL_GFFS[@]}" "${OUTPUT_DIR}/${CHR_ID}/predictions_recall.gff")
 done
 
@@ -405,8 +588,7 @@ else
         --gff "$RAW_GFF" \
         --genome "$INPUT_FILE" \
         --out "$FINAL_GFF" \
-        --gpus "$GPU_LIST_STR" \
-        --filter-unmerged
+        --gpus "$GPU_LIST_STR"
 fi
 
 echo ""
