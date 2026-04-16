@@ -1,4 +1,4 @@
-![](https://img.shields.io/badge/version-1.0.0-blue)
+![](https://img.shields.io/badge/version-1.1.0-blue)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![CI](https://github.com/plantcad/genecad/actions/workflows/ci.yaml/badge.svg)](https://github.com/plantcad/genecad/actions/workflows/ci.yaml)
 [![DOI](https://zenodo.org/badge/DOI/10.1101/2025.10.31.685877.svg)](https://doi.org/10.1101/2025.10.31.685877)
@@ -60,7 +60,8 @@ uv sync --extra torch --extra mamba
 bash predict.sh
 ```
 
-> **Output:** Two GFF3 files are written to `genecad_result/Athaliana_predictions/`:
+> [!TIP]
+> Two GFF3 files are written to `genecad_result/Athaliana_predictions/`:
 >
 > | File | Description |
 > |------|-------------|
@@ -112,6 +113,16 @@ Choose the installation method that best fits your environment:
 
 The recommended default for most users is `uv` (local run and development). Use Docker when you need a fully packaged, reproducible runtime.
 
+<details>
+<summary>Need help choosing a setup path?</summary>
+
+- Choose **uv** if you want local development and easiest iteration.
+- Choose **Docker** if you want reproducibility and fewer environment issues.
+- Choose **SLURM** for HPC clusters with schedulers.
+- Choose **SkyPilot** for on-demand cloud GPUs without manual infra setup.
+
+</details>
+
 ### Using uv
 
 [uv](https://docs.astral.sh/uv/) is a fast Python package manager that handles the virtual environment and all dependencies in one command.
@@ -150,7 +161,7 @@ causal-conv1d = { path = "path/to/causal_conv1d-1.5.0.post8-*.whl" }
 
 The Docker image at `ghcr.io/plantcad/genecad_v1` bundles the complete runtime. Source code is **mounted at run time**, so changes you make to the cloned repository take effect immediately — no rebuild needed.
 
-> [!NOTE]
+> [!IMPORTANT]
 > If your environment requires a specific Docker alias (e.g., `docker1`), replace `docker` with your local command in the examples below.
 
 ```bash
@@ -226,6 +237,7 @@ EOF
 sbatch run_genecad.slurm
 ```
 
+> [!TIP]
 > **Multi-GPU on SLURM:** To use all GPUs on a node, request them with `--gres=gpu:4` (or however many are available) and pass `--gpus all` to `predict.sh`. Chromosomes will be distributed across GPUs automatically. For very large genomes across multiple nodes, split your FASTA by chromosome and submit one job per chromosome.
 
 ### Using SkyPilot
@@ -255,7 +267,8 @@ docker run --rm --gpus all \
 sky down genecad
 ```
 
-> **Why Docker instead of `uv sync`?**  
+> [!IMPORTANT]
+> **Why Docker instead of `uv sync`?**
 > `flash-attn`, `mamba-ssm`, and `causal-conv1d` must all compile from source, which can take **30–60 minutes** on a fresh cloud node and may fail if the CUDA/GCC versions mismatch. The pre-built Docker image includes all compiled packages, making cluster setup take seconds instead of hours.
 
 See the [Throughput](#throughput) section for GPU cost comparisons across providers.
@@ -311,7 +324,8 @@ Options:
   -h, --help            Show this help message
 ```
 
-> **Note:** `predict.sh` is the **only script you need to run**. Files under `scripts/` (`scripts/predict.py`, `scripts/gff.py`, etc.) are internal pipeline modules called automatically by `predict.sh` — do not run them directly.
+> [!IMPORTANT]
+> `predict.sh` is the **only script you need to run**. Files under `scripts/` (`scripts/predict.py`, `scripts/gff.py`, etc.) are internal pipeline modules called automatically by `predict.sh` — do not run them directly.
 
 **Default example (Arabidopsis TAIR12, auto-downloaded):**
 
@@ -558,7 +572,8 @@ Options:
             └── valid.zarr              ← validation split
 ```
 
-> **Disk space:** The `pipeline/` directory can be **several hundred GB** depending on genome sizes and number of species. It is safe to delete after training — checkpoints are self-contained. The pipeline is resumable, so intermediate files are preserved by default to avoid recomputation.
+> [!WARNING]
+> The `pipeline/` directory can be **several hundred GB** depending on genome sizes and number of species. It is safe to delete after training — checkpoints are self-contained. The pipeline is resumable, so intermediate files are preserved by default to avoid recomputation.
 
 To use a trained checkpoint for inference, pass it to `predict.sh`:
 
@@ -680,7 +695,8 @@ SECTION 5 – Site-Level Error Breakdown
 | 5 | TIS / TTS | Translation start / stop site precision and recall |
 | 5 | Donor / Acceptor | Individual 5′ and 3′ splice site accuracy |
 
-> **Note:** Sections 3 and 4 require `--fasta`. BUSCO additionally requires `busco` in PATH, or a conda environment named `busco-5.5.0`.
+> [!NOTE]
+> Sections 3 and 4 require `--fasta`. BUSCO additionally requires `busco` in PATH, or a conda environment named `busco-5.5.0`.
 
 ---
 
