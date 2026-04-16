@@ -339,7 +339,7 @@ def _create_predictions(
                 window_batches,
                 desc=f"[GPU {gpu_label} | {strand}]",
                 position=tqdm_position,
-                leave=True,
+                leave=False,
                 dynamic_ncols=True,
             )
         ):
@@ -898,7 +898,10 @@ def process_single_transcript(
 
 
 def group_intervals_by_transcript(
-    intervals: pd.DataFrame, min_transcript_length: int = 0
+    intervals: pd.DataFrame,
+    min_transcript_length: int = 0,
+    tqdm_position: int | None = None,
+    tqdm_desc: str | None = None,
 ) -> list[pd.DataFrame]:
     """Group feature intervals by transcript with optional length filtering.
 
@@ -909,6 +912,11 @@ def group_intervals_by_transcript(
         ``strand``, and ``entity_name`` columns.
     min_transcript_length : int, default 0
         Minimum transcript length in base pairs required to keep a transcript.
+    tqdm_position : int or None, default None
+        Optional terminal row index for tqdm when multiple processes are
+        writing progress bars concurrently.
+    tqdm_desc : str or None, default None
+        Optional tqdm description label.
 
     Returns
     -------
@@ -943,7 +951,13 @@ def group_intervals_by_transcript(
         process_single_transcript(row, feature_intervals)
         # pyrefly: ignore  # not-iterable
         for _, row in tqdm.tqdm(
-            transcript_intervals.iterrows(), total=len(transcript_intervals)
+            transcript_intervals.iterrows(),
+            total=len(transcript_intervals),
+            desc=tqdm_desc,
+            position=tqdm_position,
+            dynamic_ncols=True,
+            leave=False,
+            mininterval=0.1,
         )
     ]
     genes = [group for group in results if group is not None]
@@ -958,6 +972,8 @@ def generate_gff(
     output_path: str,
     strip_introns: bool = True,
     source: str = "GeneCAD",
+    tqdm_position: int | None = None,
+    tqdm_desc: str | None = None,
 ) -> None:
     """Write a GFF3 file from grouped gene intervals.
 
@@ -974,6 +990,11 @@ def generate_gff(
         Whether to remove intron records when constructing gene boundaries.
     source : str, default "GeneCAD"
         Value written in the GFF ``source`` column.
+    tqdm_position : int or None, default None
+        Optional terminal row index for tqdm when multiple processes are
+        writing progress bars concurrently.
+    tqdm_desc : str or None, default None
+        Optional tqdm description label.
     """
     logger.info(f"Generating GFF3 output for {len(genes)} genes on {chrom_id}")
     gff_records = []
@@ -995,7 +1016,14 @@ def generate_gff(
         "transcript",
     }
 
-    for gene_group in genes:
+    for gene_group in tqdm.tqdm(
+        genes,
+        desc=tqdm_desc,
+        position=tqdm_position,
+        dynamic_ncols=True,
+        leave=False,
+        mininterval=0.1,
+    ):
         # Validate entity names
         invalid_entities = set(gene_group["entity_name"].unique()) - valid_entity_names
         if invalid_entities:
@@ -1133,13 +1161,26 @@ def export_gff(args: Args):
     )
 
     # Group intervals by transcript
-    genes = group_intervals_by_transcript(intervals_table, args.min_transcript_length)
+    tqdm_position = args.tqdm_position if hasattr(args, "tqdm_position") else None
+    genes = group_intervals_by_transcript(
+        intervals_table,
+        args.min_transcript_length,
+        tqdm_position=tqdm_position,
+        tqdm_desc=f"[GFF {chrom_id}]",
+    )
 
     # Convert strip_introns argument to boolean
     strip_introns = args.strip_introns.lower() == "yes"
 
     # Generate and save GFF
-    generate_gff(genes, chrom_id, args.output, strip_introns=strip_introns)
+    generate_gff(
+        genes,
+        chrom_id,
+        args.output,
+        strip_introns=strip_introns,
+        tqdm_position=tqdm_position,
+        tqdm_desc=f"[GFF write {chrom_id}]",
+    )
 
     logger.info("GFF export complete")
 
@@ -1344,6 +1385,12 @@ def main():
         choices=["yes", "no"],
         default="no",
         help="Whether to strip terminal introns from genes (default: no)",
+    )
+    gff_parser.add_argument(
+        "--tqdm-position",
+        type=int,
+        default=None,
+        help="Optional tqdm row to use for export when multiple jobs run in one terminal",
     )
 
     args = parser.parse_args()

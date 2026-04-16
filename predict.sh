@@ -430,12 +430,17 @@ process_chromosome() {
         echo "${LOG_PREFIX} [4/6] Skipping — predictions__raw.gff already exists"
     else
         echo "${LOG_PREFIX} [4/6] Exporting raw GFF..."
+        local export_tqdm_args=()
+        if [[ -n "$gpu_id" ]]; then
+            export_tqdm_args=(--tqdm-position "$gpu_id")
+        fi
         $PYTHON scripts/predict.py export_gff \
             --input "$PIPELINE_DIR/intervals.zarr" \
             --output "$PIPELINE_DIR/predictions__raw.gff" \
             --decoding-method direct \
             --min-transcript-length 3 \
-            --strip-introns yes
+            --strip-introns yes \
+            "${export_tqdm_args[@]}"
     fi
 
     # --- Step 5: Post-processing Filters ---
