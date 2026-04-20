@@ -2,6 +2,7 @@
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![CI](https://github.com/plantcad/genecad/actions/workflows/ci.yaml/badge.svg)](https://github.com/plantcad/genecad/actions/workflows/ci.yaml)
 [![DOI](https://zenodo.org/badge/DOI/10.1101/2025.10.31.685877.svg)](https://doi.org/10.1101/2025.10.31.685877)
+[![GeneCAD Downloads](https://img.shields.io/github/downloads/plantcad/genecad/total?label=GitHub%20downloads)](https://github.com/plantcad/genecad/releases)
 [![Hugging Face](https://img.shields.io/badge/🤗-Hugging%20Face-yellow.svg?style=flat)](https://huggingface.co/collections/plantcad/genecad-68c686ccf14312bf6de356de)
 [![Container](https://img.shields.io/badge/container-ghcr.io%2Fplantcad%2Fgenecad__v1-blue?logo=github)](https://github.com/orgs/plantcad/packages/container/package/genecad_v1)
 [![Pytorch](https://img.shields.io/badge/PyTorch-%23EE4C2C.svg?e&logo=PyTorch&logoColor=white)](https://pytorch.org/)
@@ -302,7 +303,7 @@ GeneCAD provides two pre-trained models for different taxonomic groups. Both are
 | Mode (`-m`) | Organism type | Base model | GeneCAD head |
 |-------------|--------------|------------|--------------|
 | `plant` *(default)* | Plants | [`plantcad/pcad2-200M-cnet-baseline`](https://huggingface.co/plantcad/pcad2-200M-cnet-baseline) | [`Zong-Yan/genecad_plant`](https://huggingface.co/Zong-Yan/genecad_plant) |
-| `animal` | Animals / vertebrates | [`emarro/pcad2_vert_small`](https://huggingface.co/emarro/pcad2_vert_small) | [`Zong-Yan/genecad_vert`](https://huggingface.co/Zong-Yan/genecad_vert) |
+| `animal` | Animals / vertebrates | [`emarro/vcad2_small_experimental`](https://huggingface.co/emarro/vcad2_small_experimental) | [`Zong-Yan/genecad_vert`](https://huggingface.co/Zong-Yan/genecad_vert) |
 
 ### Running the pipeline
 
@@ -508,12 +509,23 @@ This section is for researchers who want to **fine-tune GeneCAD on new species**
 huggingface-cli login
 
 # Fine-tune on the 5-species plant dataset (downloads data automatically)
-bash train.sh
+bash train.sh --domain plant
+
+# Fine-tune on the vertebrate animal dataset (downloads data automatically)
+bash train.sh --domain animal
+
+# Use all detected GPUs
+bash train.sh --domain animal -g all
+
+# Use a specific subset of GPUs
+bash train.sh --domain animal -g 0,2,3
 
 # Fine-tune with custom settings
 bash train.sh \
+  --domain plant \
   -g 4 \              # number of GPUs
   -b 4 \              # per-GPU batch size
+  --epochs 3 \        # training epochs
   -l 1e-4 \           # learning rate
   -o results/my_run \ # output directory
   -r my-run-name      # WandB run name
@@ -523,15 +535,26 @@ bash train.sh \
 
 ```
 Options:
+  -m, --domain MODE     Training domain: plant | animal (default: plant)
   -o, --output DIR      Output directory for checkpoints and logs
                         (default: genecad_result/training)
   -r, --run-name NAME   WandB run name  (default: genecad-plant-multispecies)
   -p, --project NAME    WandB project   (default: genecad)
-  -g, --gpus N          Number of GPUs  (default: 2)
+  -g, --gpus SPEC       GPU selection: count, comma list, or 'all' (default: 1)
+                         examples: 2, 0,1,3, all
   -b, --batch-size N    Per-GPU batch size (default: 4)
+  --epochs N            Number of training epochs (default: 1)
+  -e, --effective N     Effective batch size (default: 384)
   -l, --lr RATE         Learning rate   (default: 2e-4)
+  --base-model ID       Override base encoder model ID
+  --animal-input-dir DIR  Override animal FASTA source directory
+  --animal-gff-dir DIR    Override animal GFF source directory
   -h, --help            Show this message
 ```
+
+Notes:
+- `-g all` requires `nvidia-smi` to auto-detect GPU IDs.
+- When using a list (for example `-g 0,2,3`), training is restricted to that subset via `CUDA_VISIBLE_DEVICES`.
 
 ### Pipeline steps
 
@@ -539,7 +562,7 @@ Options:
 
 | Step | Description |
 |------|-------------|
-| 0. Download | Fetch training GFF3 and FASTA files from HuggingFace |
+| 0. Download | Fetch training GFF3 and FASTA files from HuggingFace (plant and animal) |
 | 1. Link | Create symlinks with naming conventions expected by the config |
 | 2. Extract GFF | Parse gene annotations into a flat feature table (Parquet) |
 | 3. Tokenize | Tokenize genome sequences into Zarr format |
@@ -589,7 +612,7 @@ bash predict.sh \
 
 ## Evaluation
 
-GeneCAD includes a built-in evaluation tool (`scripts/evaluate.py`) that produces a structured five-section report comparing predicted annotations against a reference. It does not require `gffcompare` or any external tool beyond an optional BUSCO install for Section 4.
+GeneCAD includes a built-in evaluation tool, `scripts/evaluate.py`, that produces a structured five-section report comparing predicted annotations against a reference. It is self-contained for Sections 1, 2, 3, and 5. Section 4 uses BUSCO if you enable it, but BUSCO is optional.
 
 ### Usage
 
@@ -601,15 +624,78 @@ uv run python scripts/evaluate.py \
   --output report.txt
 ```
 
+Most users only need these arguments:
+
+| Option | Description |
+|--------|-------------|
+| `--ref` | Reference GFF3 annotation (required) |
+| `--pred` | Predicted GFF3 annotation (required) |
+| `--fasta` | Genome FASTA; enables Sections 3 and 4 |
+| `--output` | Write the report to a file instead of stdout |
+| `--skip-busco` | Skip Section 4 for a faster, fully portable run |
+
+### BUSCO setup
+
+If BUSCO is available on your system, GeneCAD can pick it up automatically. If not, choose the option that matches your environment:
+
+| Environment | Recommended setting |
+|-------------|---------------------|
+| Local Conda / Mamba | `export BUSCO_CMD='conda run -n busco-5.5.0 busco'` |
+| HPC with a site activate script | `export BUSCO_ACTIVATE_SCRIPT=/programs/miniconda3/bin/activate` |
+| Already activated BUSCO env | Run `busco --version` first, then invoke evaluation normally |
+| No BUSCO required | Add `--skip-busco` |
+
+```bash
+# Portable full evaluation with an explicit BUSCO command
+export BUSCO_CMD='conda run -n busco-5.5.0 busco'
+uv run python scripts/evaluate.py \
+  --ref /path/to/reference.gff3 \
+  --pred /path/to/prediction.gff3 \
+  --fasta /path/to/genome.fa \
+  --output report.txt
 ```
-Options:
-  --ref        Reference GFF3 annotation               (required)
-  --pred       Predicted GFF3 annotation               (required)
-  --fasta      Genome FASTA — enables sections 3 and 4
-  --lineage    BUSCO lineage dataset  (default: embryophyta_odb10)
-  --cpu        CPU threads for BUSCO (default: 32)
-  --output     Write report to file instead of stdout
+
+If your cluster uses a pre-installed BUSCO module or activate script, set the script path once and keep using the same evaluation command:
+
+```bash
+export BUSCO_ACTIVATE_SCRIPT=/programs/miniconda3/bin/activate
+uv run python scripts/evaluate.py \
+  --ref /path/to/reference.gff3 \
+  --pred /path/to/prediction.gff3 \
+  --fasta /path/to/genome.fa \
+  --output report.txt
 ```
+
+For a quick debug run, skip BUSCO entirely:
+
+```bash
+uv run python scripts/evaluate.py \
+  --ref /path/to/reference.gff3 \
+  --pred /path/to/prediction.gff \
+  --fasta /path/to/genome.fa \
+  --skip-busco \
+  --output report.txt
+```
+
+If you want GeneCAD to try to install BUSCO automatically, add `--auto-install-busco` and optionally change the environment name with `--busco-env`.
+
+> [!TIP]
+> If BUSCO is already on your `PATH`, GeneCAD will use it automatically after a quick self-check. Otherwise, it falls back to the command or activate script you provide.
+
+If you run BUSCO with `--augustus`, point `AUGUSTUS_CONFIG_PATH` to a writable directory:
+
+```bash
+mkdir -p /workdir/$USER
+cp -r /programs/miniconda3/envs/busco-5.5.0/config /workdir/$USER
+export AUGUSTUS_CONFIG_PATH=/workdir/$USER/config
+```
+
+Other evaluation options:
+- `--lineage` (default: `embryophyta_odb10`)
+- `--cpu` (default: `32`)
+- `--busco-env` (default: `busco-5.5.0`)
+- `--busco-cmd` for an explicit BUSCO launcher
+- `--busco-activate-script` for cluster-specific activation scripts
 
 ### Example output (*Arabidopsis thaliana*)
 
@@ -696,7 +782,7 @@ SECTION 5 – Site-Level Error Breakdown
 | 5 | Donor / Acceptor | Individual 5′ and 3′ splice site accuracy |
 
 > [!NOTE]
-> Sections 3 and 4 require `--fasta`. BUSCO additionally requires `busco` in PATH, or a conda environment named `busco-5.5.0`.
+> Sections 3 and 4 require `--fasta`. For BUSCO, prefer `--busco-cmd` for reproducibility, or use `--auto-install-busco` for first-run setup.
 
 ---
 
@@ -750,10 +836,10 @@ mkdir -p data results
 
 # Download FASTA and reference GFF from Hugging Face
 hf download plantcad/genecad-dev \
-  data/fasta/evaluation/Juglans_regia_chr1.fa.gz \
+  data/plant/fasta/evaluation/Juglans_regia_chr1.fa.gz \
   --repo-type dataset --local-dir .
 hf download plantcad/genecad-dev \
-  data/gff/evaluation/Juglans_regia_chr1.gff3 \
+  data/plant/gff/evaluation/Juglans_regia_chr1.gff3 \
   --repo-type dataset --local-dir .
 
 # Run the full GeneCAD pipeline
@@ -761,7 +847,7 @@ docker run --rm --gpus all \
   -v $(pwd):/workspace -w /workspace \
   ghcr.io/plantcad/genecad_v1:refine-CrossEntropyLoss \
   bash predict.sh \
-    -i data/fasta/evaluation/Juglans_regia_chr1.fa.gz \
+    -i data/plant/fasta/evaluation/Juglans_regia_chr1.fa.gz \
     -o results \
     -s Jregia \
     -m plant
@@ -771,9 +857,9 @@ docker run --rm \
   -v $(pwd):/workspace -w /workspace \
   ghcr.io/plantcad/genecad_v1:refine-CrossEntropyLoss \
   uv run python scripts/evaluate.py \
-    --ref   data/gff/evaluation/Juglans_regia_chr1.gff3 \
+    --ref   data/plant/gff/evaluation/Juglans_regia_chr1.gff3 \
     --pred  results/Jregia_GeneCAD_final.gff \
-    --fasta data/fasta/evaluation/Juglans_regia_chr1.fa.gz \
+    --fasta data/plant/fasta/evaluation/Juglans_regia_chr1.fa.gz \
     --output results/Jregia_eval_report.txt
 cat results/Jregia_eval_report.txt
 ```

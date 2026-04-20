@@ -66,25 +66,46 @@ class ThroughputMonitor(Callback):
     def __init__(self):
         super().__init__()
         self.start_time: float | None = None
+        self.last_batch_end_time: float | None = None
         self.total_batches = 0
+        self.total_tokens = 0
 
     def on_train_start(self, trainer, pl_module):
-        self.start_time = time.time()
+        now = time.time()
+        self.start_time = now
+        self.last_batch_end_time = now
         self.total_batches = 0
+        self.total_tokens = 0
 
     def on_train_batch_end(self, trainer, pl_module, outputs, batch, batch_idx):
+        now = time.time()
         self.total_batches += 1
         if self.start_time is None:
             raise ValueError("start_time is not set (must call `on_train_start` first)")
-        elapsed_time = time.time() - self.start_time
+        if self.last_batch_end_time is None:
+            self.last_batch_end_time = self.start_time
+
+        batch_size = int(batch["input_ids"].shape[0])
+        seq_len = int(batch["input_ids"].shape[1])
+        batch_tokens = batch_size * seq_len
+        self.total_tokens += batch_tokens
+
+        elapsed_time = now - self.start_time
+        batch_time = max(now - self.last_batch_end_time, 1e-9)
         batch_per_sec = self.total_batches / elapsed_time
-        sample_per_sec = batch_per_sec * batch["input_ids"].shape[0]
-        token_per_sec = (
-            batch_per_sec * batch["input_ids"].shape[0] * batch["input_ids"].shape[1]
-        )
+        sample_per_sec = batch_per_sec * batch_size
+        token_per_sec = batch_per_sec * batch_tokens
+
+        # Explicit time metrics requested for monitoring in WandB.
+        pl_module.log("time/train", elapsed_time)
+        pl_module.log("time/batch", batch_time)
+        pl_module.log("time/token", elapsed_time / max(self.total_tokens, 1))
+
         pl_module.log("throughput/train_batches_per_sec", batch_per_sec)
         pl_module.log("throughput/train_samples_per_sec", sample_per_sec)
         pl_module.log("throughput/train_tokens_per_sec", token_per_sec)
+
+        self.last_batch_end_time = now
 
 
 # ------------------------------------------------------------------------------------------------
@@ -400,9 +421,14 @@ class GeneClassifier(L.LightningModule):
             self.head_encoder = torch.compile(self.head_encoder, fullgraph=False)
             self.classifier = torch.compile(self.classifier, fullgraph=False)
 
-        # Unpack kwargs and config into distinct keys to prevent WandB stacking
-        self.save_hyperparameters(ignore=["config"])
-        hparams = vars(config).copy()
+        # Flatten hparams so WandB displays separate keys rather than nested blobs.
+        hparams = {
+            "learning_rate": self.learning_rate,
+            "learning_rate_decay": self.learning_rate_decay,
+            "learning_rate_warmup_ratio": self.learning_rate_warmup_ratio,
+            "torch_compile": self.torch_compile,
+            **vars(config).copy(),
+        }
         if "token_class_frequencies" in hparams:
             del hparams["token_class_frequencies"]  # exclude large dictionary
         self.save_hyperparameters(hparams)

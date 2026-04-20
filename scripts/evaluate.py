@@ -33,6 +33,7 @@ Usage:
 
 import argparse
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -472,7 +473,9 @@ def extract_transcripts(pred_exon_genes, genome, output_path):
 
 
 def run_busco(pred_exon_genes, genome, lineage, cpu, busco_out_name,
-              output_dir=None, conda_env="busco-5.5.0"):
+              output_dir=None, conda_env="busco-5.5.0", busco_cmd=None,
+              busco_activate_script=None,
+              auto_install_busco=False):
     """
     1. Extract transcript FASTA via Python (no gffread needed).
     2. Run BUSCO in transcriptome mode.
@@ -480,42 +483,159 @@ def run_busco(pred_exon_genes, genome, lineage, cpu, busco_out_name,
     """
     import shutil as _shutil
 
-    # Find busco — must activate the full conda env to get hmmer/metaeuk in PATH.
+    def _check_busco_ready(cmd):
+        r = subprocess.run(
+            cmd,
+            shell=True,
+            executable="/bin/bash",
+            capture_output=True,
+            text=True,
+        )
+        combined = (r.stdout or "") + "\n" + (r.stderr or "")
+        if r.returncode != 0:
+            return False, combined.strip()
+        if "No module named 'busco'" in combined or 'No module named "busco"' in combined:
+            return False, combined.strip()
+        return True, combined.strip()
+
+    def _maybe_install_busco_env():
+        for runner in ("conda", "mamba"):
+            if not _shutil.which(runner):
+                continue
+            install_cmd = (
+                f"{runner} create -n {shlex.quote(conda_env)} "
+                f"-c bioconda -c conda-forge busco=5.5.0 -y"
+            )
+            print(
+                f"[INFO] Attempting BUSCO install via: {runner} (env={conda_env})",
+                file=sys.stderr,
+            )
+            r = subprocess.run(
+                install_cmd,
+                shell=True,
+                executable="/bin/bash",
+                capture_output=True,
+                text=True,
+            )
+            if r.returncode == 0:
+                print("[INFO] BUSCO installation completed.", file=sys.stderr)
+                return True
+            print(
+                f"[WARN] {runner} install failed (showing tail):\n{(r.stderr or r.stdout or '')[-2000:]}",
+                file=sys.stderr,
+            )
+        return False
+
+    base_busco_cmd = None
+
+    # Priority 0: explicit command from user (most portable/reproducible)
+    if busco_cmd:
+        base_busco_cmd = busco_cmd.strip()
+        print(f"[INFO] Using BUSCO from --busco-cmd: {base_busco_cmd}", file=sys.stderr)
+
     # Priority 1: busco already in PATH (user activated env themselves)
-    busco_exec = _shutil.which("busco")
-    conda_prefix = ""
-    if not busco_exec:
-        # Priority 2: conda run (portable, works on any machine with conda)
-        if _shutil.which("conda"):
-            test = subprocess.run(
-                f"conda run -n {conda_env} which busco",
-                shell=True, capture_output=True, text=True
+    if not base_busco_cmd and _shutil.which("busco"):
+        ok, check_log = _check_busco_ready("busco --version")
+        if ok:
+            base_busco_cmd = "busco"
+        else:
+            # Under uv/venv, 'busco' can resolve but run with the wrong python.
+            # Fall through to safer launchers instead of hard-failing early.
+            print(
+                "[INFO] PATH busco self-check failed; trying fallback launchers.",
+                file=sys.stderr,
             )
-            if test.returncode == 0:
-                busco_exec = "busco"
-                conda_prefix = f"conda run -n {conda_env} "
-                print(f"[INFO] Using BUSCO via conda env '{conda_env}'", file=sys.stderr)
 
-    if not busco_exec:
-        # Priority 3: server-specific — source /programs/miniconda3/bin/activate busco-5.5.0
-        activate_script = "/programs/miniconda3/bin/activate"
-        if os.path.isfile(activate_script):
-            test = subprocess.run(
-                f"source {activate_script} {conda_env} && which busco",
-                shell=True, executable="/bin/bash", capture_output=True, text=True
+    # Priority 2: conda/mamba/micromamba run (portable for local clones)
+    if not base_busco_cmd:
+        for runner in ("conda", "mamba", "micromamba"):
+            if not _shutil.which(runner):
+                continue
+            candidate = f"{runner} run -n {shlex.quote(conda_env)} busco"
+            ok, _ = _check_busco_ready(f"{candidate} --version")
+            if ok:
+                base_busco_cmd = candidate
+                print(
+                    f"[INFO] Using BUSCO via {runner} env '{conda_env}'",
+                    file=sys.stderr,
+                )
+                break
+
+    # Priority 3: source-activate fallback (HPC / site-specific setups)
+    if not base_busco_cmd:
+        activate_candidates = []
+        if busco_activate_script:
+            activate_candidates.append(busco_activate_script)
+        env_activate = os.environ.get("BUSCO_ACTIVATE_SCRIPT")
+        if env_activate:
+            activate_candidates.append(env_activate)
+        # Try common site path as a best-effort fallback.
+        activate_candidates.append("/programs/miniconda3/bin/activate")
+
+        seen = set()
+        for act_script in activate_candidates:
+            if not act_script:
+                continue
+            act_script = os.path.realpath(act_script)
+            if act_script in seen or not os.path.isfile(act_script):
+                continue
+            seen.add(act_script)
+            candidate = (
+                f"source {shlex.quote(act_script)} {shlex.quote(conda_env)} "
+                f"&& \"$CONDA_PREFIX/bin/python\" \"$CONDA_PREFIX/bin/busco\""
             )
-            if test.returncode == 0:
-                busco_exec = "busco"
-                conda_prefix = f"source {activate_script} {conda_env} && "
-                print(f"[INFO] Using BUSCO via source activate ({conda_env})", file=sys.stderr)
+            ok, _ = _check_busco_ready(f"{candidate} --version")
+            if ok:
+                base_busco_cmd = candidate
+                print(
+                    f"[INFO] Using BUSCO via activate script: {act_script}",
+                    file=sys.stderr,
+                )
+                break
 
-    if not busco_exec:
+    if not base_busco_cmd and auto_install_busco:
+        if _maybe_install_busco_env():
+            for runner in ("conda", "mamba", "micromamba"):
+                if not _shutil.which(runner):
+                    continue
+                candidate = f"{runner} run -n {shlex.quote(conda_env)} busco"
+                ok, _ = _check_busco_ready(f"{candidate} --version")
+                if ok:
+                    base_busco_cmd = candidate
+                    print(
+                        f"[INFO] Using newly installed BUSCO via {runner} env '{conda_env}'",
+                        file=sys.stderr,
+                    )
+                    break
+
+    if not base_busco_cmd:
         print("[WARN] BUSCO not found. To install:", file=sys.stderr)
         print(f"   conda create -n {conda_env} -c bioconda -c conda-forge busco=5.5.0 -y",
               file=sys.stderr)
         print(f"   # Then either activate the env before running:", file=sys.stderr)
         print(f"   conda activate {conda_env} && python evaluate.py ...", file=sys.stderr)
-        print(f"   # Or the script will auto-detect it on the next run.", file=sys.stderr)
+        print(f"   # Or pass an explicit command:", file=sys.stderr)
+        print(f"   python evaluate.py ... --busco-cmd 'conda run -n {conda_env} busco'",
+              file=sys.stderr)
+        print(f"   # Or skip BUSCO for cross-platform runs:", file=sys.stderr)
+        print("   python evaluate.py ... --skip-busco", file=sys.stderr)
+        return None, None
+
+    ready, busco_check_log = _check_busco_ready(f"{base_busco_cmd} --version")
+    if not ready:
+        print("[WARN] BUSCO executable is present but not runnable.", file=sys.stderr)
+        if busco_check_log:
+            print(f"[WARN] BUSCO self-check output:\n{busco_check_log[-2000:]}", file=sys.stderr)
+        print("[WARN] This is usually a broken BUSCO environment (missing Python package/module).",
+              file=sys.stderr)
+        print("[WARN] Recreate/fix the env, e.g.:", file=sys.stderr)
+        print(
+            f"   conda create -n {conda_env} -c bioconda -c conda-forge busco=5.5.0 -y",
+            file=sys.stderr,
+        )
+        print(f"   conda activate {conda_env}", file=sys.stderr)
+        print("   busco --version", file=sys.stderr)
+        print("[WARN] You can also bypass auto-detection with --busco-cmd.", file=sys.stderr)
         return None, None
 
 
@@ -539,10 +659,10 @@ def run_busco(pred_exon_genes, genome, lineage, cpu, busco_out_name,
 
     # --- Step 2: run BUSCO ---
     busco_cmd = (
-        f"{conda_prefix}{busco_exec} "
-        f"--in {trans_fa} "
-        f"--lineage_dataset {lineage} "
-        f"--out {actual_busco_out_name} "
+        f"{base_busco_cmd} "
+        f"--in {shlex.quote(trans_fa)} "
+        f"--lineage_dataset {shlex.quote(lineage)} "
+        f"--out {shlex.quote(actual_busco_out_name)} "
         f"--mode transcriptome "
         f"--cpu {cpu} "
         f"--force"
@@ -831,8 +951,49 @@ def main():
                         help="Number of CPUs for BUSCO (default: 32)")
     parser.add_argument("--busco-out", default="busco_eval",
                         help="BUSCO output directory name (default: busco_eval)")
+    parser.add_argument(
+        "--busco-env",
+        default="busco-5.5.0",
+        help="Conda/mamba env name used for BUSCO auto-detection (default: busco-5.5.0)",
+    )
+    parser.add_argument(
+        "--busco-cmd",
+        default=os.environ.get("BUSCO_CMD"),
+        help=(
+            "Explicit BUSCO command prefix, e.g. 'busco' or "
+            "'conda run -n busco-5.5.0 busco'. If set, overrides auto-detection. "
+            "Can also be set via BUSCO_CMD environment variable."
+        ),
+    )
+    parser.add_argument(
+        "--busco-activate-script",
+        default=os.environ.get("BUSCO_ACTIVATE_SCRIPT"),
+        help=(
+            "Optional shell activate script for HPC/site-specific BUSCO fallback, "
+            "e.g. /programs/miniconda3/bin/activate. Can also be set via "
+            "BUSCO_ACTIVATE_SCRIPT."
+        ),
+    )
+    parser.add_argument(
+        "--skip-busco",
+        action="store_true",
+        help="Skip BUSCO section even when --fasta is provided.",
+    )
+    parser.add_argument(
+        "--auto-install-busco",
+        action="store_true",
+        help=(
+            "If BUSCO is missing, attempt to create env --busco-env with "
+            "conda/mamba and continue automatically."
+        ),
+    )
     parser.add_argument("--output",   default=None,
                         help="Output report file (default: stdout)")
+    parser.add_argument(
+        "--fix-busco-env",
+        action="store_true",
+        help="If BUSCO is broken, auto-repair the conda env and retry once.",
+    )
     args = parser.parse_args()
 
     REF_FTYPES  = {"gene", "mRNA", "CDS", "exon", "five_prime_UTR", "three_prime_UTR"}
@@ -870,14 +1031,27 @@ def main():
 
     # ── Section 4: BUSCO ──
     busco_res = None
-    if genome:
+    if genome and not args.skip_busco:
         print("[INFO] Section 4: Running BUSCO ...", file=sys.stderr)
         out_dir = (os.path.dirname(os.path.abspath(args.output))
                    if args.output else None)
         summary_path, busco_dir = run_busco(
             pred_exon_genes, genome, args.lineage, args.cpu,
-            args.busco_out, output_dir=out_dir)
+            args.busco_out, output_dir=out_dir,
+            conda_env=args.busco_env, busco_cmd=args.busco_cmd,
+            busco_activate_script=args.busco_activate_script,
+            auto_install_busco=args.auto_install_busco)
+        if summary_path is None and args.fix_busco_env:
+            print("[INFO] Attempting to auto-repair BUSCO environment and retry...", file=sys.stderr)
+            summary_path, busco_dir = run_busco(
+                pred_exon_genes, genome, args.lineage, args.cpu,
+                args.busco_out, output_dir=out_dir,
+                conda_env=args.busco_env, busco_cmd=args.busco_cmd,
+                busco_activate_script=args.busco_activate_script,
+                auto_install_busco=True)
         busco_res = parse_busco_summary(summary_path, busco_dir)
+    elif args.skip_busco:
+        print("[INFO] Section 4: Skipped (--skip-busco).", file=sys.stderr)
     else:
         print("[INFO] Section 4: Skipped (no --fasta provided).", file=sys.stderr)
 

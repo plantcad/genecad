@@ -94,7 +94,7 @@ echo "================================================================="
 if [[ "$INPUT_FILE" == "data/example/GCA_978657495.1_TAIR12_genomic_5.fa.gz" && ! -f "$INPUT_FILE" ]]; then
     echo "Downloading default Arabidopsis thaliana sequence..."
     mkdir -p "$(dirname "$INPUT_FILE")"
-    wget -qO "$INPUT_FILE" "https://huggingface.co/datasets/plantcad/genecad-dev/resolve/main/data/fasta/example/GCA_978657495.1_TAIR12_genomic_5.fa.gz"
+    wget -qO "$INPUT_FILE" "https://huggingface.co/datasets/plantcad/genecad-dev/resolve/main/data/plant/fasta/example/GCA_978657495.1_TAIR12_genomic_5.fa.gz"
 fi
 
 if [[ ! -f "$INPUT_FILE" ]]; then
@@ -109,7 +109,7 @@ case "$MODE" in
     HEAD_MODEL="zongyanliu/genecad_plant"
     ;;
   animal)
-    BASE_MODEL="emarro/pcad2_vert_small"
+        BASE_MODEL="emarro/vcad2_small_experimental"
     HEAD_MODEL="zongyanliu/genecad_vert"
     ;;
   *)

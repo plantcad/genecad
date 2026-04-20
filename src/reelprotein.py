@@ -116,7 +116,106 @@ def extract_candidate_proteins(genes, genome_fasta):
     STOPS = ("TAA", "TAG", "TGA")
 
     def is_complete_orf(nuc: str) -> bool:
-        return len(nuc) >= 3 and nuc.startswith("ATG") and nuc[-3:] in STOPS
+        if len(nuc) < 6:
+            return False
+        if len(nuc) % 3 != 0:
+            return False
+        if not nuc.startswith("ATG") or nuc[-3:] not in STOPS:
+            return False
+        for idx in range(3, len(nuc) - 3, 3):
+            if nuc[idx : idx + 3] in STOPS:
+                return False
+        return True
+    
+    def is_high_confidence_merge(merged_orf: str, individual_orfs: list, chain_len: int) -> bool:
+        """
+        Apply additional validation for multi-gene merges.
+        We want to avoid low-confidence merges that combine many small fragments.
+        
+        Returns True only if:
+        1. The merged ORF is reasonably longer than any individual gene
+        2. The protein sequence is plausible (not too many rare codons or anomalies)
+        3. For boundaries (0, 1, 2 offsets), prefer offset=0 unless there's strong evidence
+        """
+        if chain_len == 1:
+            return True  # Single genes always pass
+        
+        merged_len = len(merged_orf)
+        max_individual = max((len(o) for o in individual_orfs if o), default=0)
+        
+        # Merged ORF should be notably longer than the longest individual
+        if merged_len <= max_individual:
+            logger.debug(f"Merge rejected: merged_len ({merged_len}) <= max_individual ({max_individual})")
+            return False
+        
+        # Heuristic: merged should be at least 1.3x the longest individual for multi-fragment merges
+        if chain_len > 2 and merged_len < max_individual * 1.3:
+            logger.debug(f"Merge rejected: chain_len={chain_len} but merged_len ({merged_len}) < 1.3 * max_individual ({max_individual})")
+            return False
+        
+        return True
+
+    def is_near_boundary(prev_gene: dict, curr_gene: dict, strand: str) -> bool:
+        if strand == "+":
+            gap = curr_gene["start"] - prev_gene["end"] - 1
+        else:
+            gap = prev_gene["start"] - curr_gene["end"] - 1
+        return -2 <= gap <= 2
+
+    def is_canonical_junction(chrom_seq, prev_gene: dict, curr_gene: dict, strand: str) -> tuple:
+        """
+        Validate that genes can be merged at a canonical splice boundary.
+        Returns (is_valid, offset_used, reason)
+        
+        Canonical splice dinucleotides: GT-AG (major), GC-AG, AT-AC
+        For proper merging, we check:
+        1. The junction region contains canonical splice sites
+        2. The reading frame remains consistent
+        3. Stop codons are not introduced at the boundary
+        """
+        canonical_donors = ("GT", "GC", "AT")  # 5' splice site (donor)
+        canonical_acceptors = ("AG",)           # 3' splice site (acceptor)
+        
+        if strand == "+":
+            # For forward strand: check donor site at end of prev_gene, acceptor at start of curr_gene
+            prev_end = prev_gene["end"]
+            curr_start = curr_gene["start"]
+            gap = curr_start - prev_end - 1
+            
+            # Extract junction regions (±2 bp around boundary)
+            try:
+                # Donor site (end of prev gene): should have GT/GC/AT
+                donor_region = str(chrom_seq[prev_end - 1 : prev_end + 1]).upper()
+                # Acceptor site (start of curr gene): should have AG
+                acceptor_region = str(chrom_seq[curr_start - 3 : curr_start - 1]).upper()
+                
+                is_canonical = (donor_region in canonical_donors and 
+                               acceptor_region in canonical_acceptors)
+            except (IndexError, TypeError):
+                is_canonical = False
+        else:
+            # For reverse strand: coordinates are flipped
+            prev_start = prev_gene["start"]
+            curr_end = curr_gene["end"]
+            gap = prev_start - curr_end - 1
+            
+            try:
+                # Reverse complement the regions to check canonical sites
+                donor_region = str(chrom_seq[curr_end - 2 : curr_end]).upper()
+                donor_rc = str(Seq(donor_region).reverse_complement())
+                acceptor_region = str(chrom_seq[prev_start : prev_start + 2]).upper()
+                acceptor_rc = str(Seq(acceptor_region).reverse_complement())
+                
+                is_canonical = (donor_rc in canonical_donors and 
+                               acceptor_rc in canonical_acceptors)
+            except (IndexError, TypeError):
+                is_canonical = False
+        
+        # Log boundary analysis for debugging
+        if -2 <= gap <= 2:
+            logger.debug(f"Junction gap={gap}, canonical={is_canonical}, donor={donor_region if strand == '+' else donor_rc}, acceptor={acceptor_region if strand == '+' else acceptor_rc}")
+        
+        return is_canonical, gap
 
     logger.info(f"[Step 1] Loading Genome: {genome_fasta}")
     _open = gzip.open if genome_fasta.endswith(".gz") else open
@@ -186,32 +285,59 @@ def extract_candidate_proteins(genes, genome_fasta):
                     if j == i:
                         candidates = [running]
                     else:
+                        prev = st_genes[j - 1]
+                        curr = st_genes[j]
+                        
+                        # Strict boundary testing with canonical splice junction validation
+                        offsets = [0]
+                        use_offsets_1_2 = False
+                        
+                        if is_near_boundary(prev, curr, strand):
+                            # Only try offsets 1, 2 if the junction is canonical
+                            is_canonical, gap = is_canonical_junction(chrom_seq, prev, curr, strand)
+                            if is_canonical and -2 <= gap <= 2:
+                                use_offsets_1_2 = True
+                                logger.debug(f"Canonical junction found between {prev['id']} and {curr['id']} (gap={gap})")
+                            else:
+                                logger.debug(f"Non-canonical junction between {prev['id']} and {curr['id']} (gap={gap}, canonical={is_canonical}) — merging conservatively")
+                        
+                        if use_offsets_1_2:
+                            offsets = [0, 1, 2]
+                        
                         candidates = [
                             running_before + cds_strings[j][offset:]
-                            for offset in range(3)
+                            for offset in offsets
                             if len(cds_strings[j]) > offset
                         ]
 
                     found_candidate = False
                     stop_chain = False
-                    for candidate in candidates:
-                        if (
-                            len(candidate) >= 3
-                            and candidate.startswith("ATG")
-                            and candidate[-3:] in STOPS
-                        ):
+                    for offset_idx, candidate in enumerate(candidates):
+                        if is_complete_orf(candidate):
                             # If merged and trailing gene is already valid, skip
                             if j > i and any(
                                 is_complete_orf(cds_strings[k]) for k in range(i + 1, j + 1)
                             ):
+                                logger.debug(f"Merge skipped: found valid individual ORF in chain at position {j}")
                                 stop_chain = True
                                 break
+
+                            # High-confidence merge validation
+                            cds_subset = [cds_strings[k] for k in range(i, j + 1)]
+                            if not is_high_confidence_merge(candidate, cds_subset, len(chain)):
+                                logger.debug(f"Merge rejected by high-confidence filter (chain_len={len(chain)})")
+                                continue
 
                             # Generate ID and Protein
                             prot = str(Seq(candidate).translate(to_stop=False))
                             # Replace special characters in ID for file safety logic
                             header_ids = "|".join(g["id"] for g in chain)
                             merged_id = f"{chrom}~{header_ids}~{strand}"
+
+                            # Log merge decision
+                            offset_used = [0, 1, 2][offset_idx] if offset_idx < len([0, 1, 2]) else 0
+                            if len(chain) > 1:
+                                logger.info(f"[MERGE] {len(chain)} genes: {header_ids} (offset={offset_used})")
 
                             # Sanitize sequence for embedding
                             prot_clean = (
@@ -670,7 +796,14 @@ def generate_final_gff(predictions_df, input_gff_path, output_gff_path, keep_unm
             }
         )
 
-    items.sort(key=lambda x: x["start"])
+    def _item_sort_key(item):
+        if "chrom" in item:
+            chrom = item["chrom"]
+        else:
+            chrom = item["key"][0]
+        return (chrom, item["start"])
+
+    items.sort(key=_item_sort_key)
 
     # Write Output
     with open(output_gff_path, "w") as out:

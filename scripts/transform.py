@@ -860,9 +860,18 @@ def create_labels(
         domain = (0, int(chrom_length))
         filename = chrom["filename"].iloc[0]
 
-        # Process each strand separately
+        # Pre-compute all unique filter reasons for this chromosome across both strands
+        # to ensure consistent label_masks dimensions (avoids NaN alignment issues in xarray.concat)
+        chrom_filters = filters[
+            (filters["species_id"] == species_id)
+            & (filters["chromosome_id"] == chrom_id)
+        ]
+        all_reasons_in_chrom = sorted(chrom_filters["reason"].unique().tolist())
+
+        # Process each strand separately (always process both, even if one has no genes)
         data = []
-        for strand, group in chrom.groupby("strand"):
+        for strand in ["positive", "negative"]:
+            group = chrom[chrom["strand"] == strand]
             logger.info(
                 f"Processing {species_id!r}, chromosome {chrom_id!r}, strand {strand!r} ({chrom_idx}/{total_chroms})"
             )
@@ -893,6 +902,19 @@ def create_labels(
                 remove_incomplete_features=remove_incomplete_features,
                 boundary_mask_size=boundary_mask_size,
             )
+
+            # Align label_masks to include all reasons from the chromosome
+            # This prevents xarray.concat from filling with NaN values when strands have different reasons
+            if set(reasons) != set(all_reasons_in_chrom):
+                reason_to_idx = {r: i for i, r in enumerate(reasons)}
+                expanded_masks = np.ones(
+                    (label_masks.shape[0], len(all_reasons_in_chrom)), dtype=label_masks.dtype
+                )
+                for i, reason in enumerate(all_reasons_in_chrom):
+                    if reason in reason_to_idx:
+                        expanded_masks[:, i] = label_masks[:, reason_to_idx[reason]]
+                label_masks = expanded_masks
+                reasons = all_reasons_in_chrom
 
             # Create Xarray dataset
             ds = xr.Dataset(
