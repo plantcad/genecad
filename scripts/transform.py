@@ -596,15 +596,13 @@ def _create_region_labels(
             [GffFeatureType.THREE_PRIME_UTR], RegionType.THREE_PRIME_UTR.get_index()
         ),
         # This is not the definition of introns, but rather a region confining where they should exist;
-        # they will be fully defined later by subtracting regions from this initial window
-        create_aggregated_region_df(
-            [
-                GffFeatureType.CDS,
-                GffFeatureType.FIVE_PRIME_UTR,
-                GffFeatureType.THREE_PRIME_UTR,
-            ],
-            RegionType.INTRON.get_index(),
-        ),
+        # they will be fully defined later by subtracting regions from this initial window.
+        # Use the full mRNA span (not the aggregated CDS/UTR span) so that positions between
+        # the mRNA boundary and the first/last annotated feature are labeled intron rather than
+        # intergenic. This is especially important for animals where partial UTR annotations are
+        # common in Ensembl GFFs — using the CDS+UTR span would cause those unannoted UTR-adjacent
+        # positions to be mislabeled as intergenic, confusing the model.
+        create_region_df([GffFeatureType.MRNA], RegionType.INTRON.get_index()),
     ]
 
     # Combine all region dataframes

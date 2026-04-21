@@ -24,6 +24,11 @@
 #   --base-frozen yes|no    Freeze base encoder during training (default: domain preset)
 #   --auto-class-weights yes|no
 #                           Compute class weights from train set before training (default: yes)
+#   --label-qc yes|no       Run split/label QC before training (default: yes)
+#   --min-non-intergenic-ratio P
+#                           Fail if train non-intergenic token ratio < P (default: 0.01)
+#   --min-core-class-tokens N
+#                           Fail if core classes have too few tokens (default: 100)
 #   --base-model ID         Override base encoder model ID
 #   --animal-input-dir DIR  Animal FASTA source dir (default: <output>/pipeline/data/animal/fasta/training)
 #   --animal-gff-dir DIR    Animal GFF source dir (default: <output>/pipeline/data/animal/gff/training)
@@ -67,6 +72,9 @@ INTERGENIC_PROPORTION=0.15
 BASE_FROZEN_OVERRIDE=""
 AUTO_CLASS_WEIGHTS="yes"
 BASE_MODEL=""
+LABEL_QC="yes"
+MIN_NON_INTERGENIC_RATIO="0.01"
+MIN_CORE_CLASS_TOKENS=100
 
 ANIMAL_INPUT_DIR=""
 ANIMAL_GFF_DIR=""
@@ -92,6 +100,9 @@ while [[ $# -gt 0 ]]; do
     --base-frozen)   BASE_FROZEN_OVERRIDE="$2"; shift 2 ;;
     --auto-class-weights) AUTO_CLASS_WEIGHTS="$2"; shift 2 ;;
     --base-model)    BASE_MODEL="$2"; shift 2 ;;
+    --label-qc)      LABEL_QC="$2"; shift 2 ;;
+    --min-non-intergenic-ratio) MIN_NON_INTERGENIC_RATIO="$2"; shift 2 ;;
+    --min-core-class-tokens) MIN_CORE_CLASS_TOKENS="$2"; shift 2 ;;
     --animal-input-dir) ANIMAL_INPUT_DIR="$2"; shift 2 ;;
     --animal-gff-dir) ANIMAL_GFF_DIR="$2"; shift 2 ;;
     --hf-upload-repo) HF_UPLOAD_REPO="$2"; shift 2 ;;
@@ -169,6 +180,21 @@ fi
 
 if [[ "$AUTO_CLASS_WEIGHTS" != "yes" && "$AUTO_CLASS_WEIGHTS" != "no" ]]; then
   echo "ERROR: --auto-class-weights must be 'yes' or 'no'"
+  exit 1
+fi
+
+if [[ "$LABEL_QC" != "yes" && "$LABEL_QC" != "no" ]]; then
+  echo "ERROR: --label-qc must be 'yes' or 'no'"
+  exit 1
+fi
+
+if ! [[ "$MIN_NON_INTERGENIC_RATIO" =~ ^(0(\.[0-9]+)?|1(\.0+)?)$ ]]; then
+  echo "ERROR: --min-non-intergenic-ratio must be in [0,1]"
+  exit 1
+fi
+
+if ! [[ "$MIN_CORE_CLASS_TOKENS" =~ ^[0-9]+$ ]]; then
+  echo "ERROR: --min-core-class-tokens must be a non-negative integer"
   exit 1
 fi
 
@@ -270,6 +296,7 @@ EXTRACT_DIR="$PIPELINE_DIR/extract"
 TRANSFORM_DIR="$PIPELINE_DIR/transform"
 PREP_DIR="$PIPELINE_DIR/prep"
 CHECKPOINT_DIR="$OUTPUT_DIR/checkpoints"
+QC_DIR="$OUTPUT_DIR/qc"
 DATA_DIR="$PIPELINE_DIR/data/$DOMAIN"
 GFF_DIR="$DATA_DIR/gff/training"
 FASTA_DIR="$DATA_DIR/fasta/training"
@@ -537,7 +564,7 @@ print_batch_recommendations
 echo "============================================"
 
 mkdir -p "$EXTRACT_DIR" "$TRANSFORM_DIR" "$PREP_DIR/splits" \
-         "$GFF_DIR" "$FASTA_DIR" "$CHECKPOINT_DIR"
+         "$GFF_DIR" "$FASTA_DIR" "$CHECKPOINT_DIR" "$QC_DIR"
 
 # =============================================================================
 # Step 0: Prepare training data
@@ -811,6 +838,12 @@ else
   echo "  Skipped (already exists)"
 fi
 
+echo "  Running feature-table QC..."
+run_python scripts/qc.py feature_qc \
+  --features-parquet "$TRANSFORM_DIR/features.parquet" \
+  --summary-json "$QC_DIR/feature_qc_summary.json"
+echo "  Feature QC passed"
+
 # =============================================================================
 # Step 6: Create labels
 # =============================================================================
@@ -861,6 +894,21 @@ else
   echo "  Skipped (already exists)"
 fi
 
+if [[ "$LABEL_QC" == "yes" ]]; then
+  echo "  Running label/split QC..."
+  run_python scripts/qc.py label_qc \
+    --train-dataset "$PREP_DIR/splits/train.zarr" \
+    --valid-dataset "$PREP_DIR/splits/valid.zarr" \
+    --summary-json "$QC_DIR/label_qc_summary.json" \
+    --min-non-intergenic-ratio "$MIN_NON_INTERGENIC_RATIO" \
+    --min-core-class-tokens "$MIN_CORE_CLASS_TOKENS" \
+    --min-species-in-train 2 \
+    --allow-missing-species-in-valid yes
+  echo "  Label QC passed"
+else
+  echo "  Label QC disabled (--label-qc no)"
+fi
+
 # =============================================================================
 # Step 8: Train
 # =============================================================================
@@ -875,7 +923,7 @@ echo ""
 run_python scripts/train.py \
   --train-dataset "$PREP_DIR/splits/train.zarr" \
   --val-dataset   "$PREP_DIR/splits/valid.zarr" \
-  --output-dir    "$CHECKPOINT_DIR" \
+  --output-dir    "$OUTPUT_DIR" \
   --base-encoder-path    "$BASE_MODEL" \
   --base-encoder-frozen  "$BASE_FROZEN" \
   --architecture         "$ARCHITECTURE" \
@@ -890,7 +938,7 @@ run_python scripts/train.py \
   --prefetch-factor      2 \
   --gpu                  $NUM_GPUS \
   --strategy             ddp \
-  --checkpoint-frequency 10000 \
+  --checkpoint-frequency 2000 \
   --val-check-interval   10000 \
   --train-eval-frequency 10000 \
   --limit-val-batches    1.0 \
@@ -907,6 +955,14 @@ echo "============================================"
 echo " Training complete!"
 echo " Checkpoints: $CHECKPOINT_DIR"
 echo " Log:         $OUTPUT_DIR/training.log"
+
+echo " Selecting best checkpoint by validation metric..."
+run_python scripts/qc.py select_best_checkpoint \
+  --output-dir "$OUTPUT_DIR" \
+  --metric "valid__entity__overall/f1" \
+  --mode max \
+  --summary-json "$QC_DIR/best_checkpoint_summary.json"
+echo " Best checkpoint link: $CHECKPOINT_DIR/best.ckpt"
 
 if [[ -n "$HF_UPLOAD_REPO" ]]; then
   echo ""

@@ -398,6 +398,105 @@ ptrichocarpa_config = SpeciesConfig(
     split=DataSplitConfig(use_in_training=True, use_in_validation=False, use_in_evaluation=False)
 )
 
+# Danio rerio (Zebrafish) configuration
+drerio_config = SpeciesConfig(
+    id="Drerio",
+    name="Danio rerio",
+    chromosome_map={
+        **{str(i): f"chr{i}" for i in range(1, 26)},
+        **{f"chr{i}": f"chr{i}" for i in range(1, 26)},
+        "X": "chr26",
+        "chrX": "chr26",
+        "Y": "chr27",
+        "chrY": "chr27",
+        "MT": "chr28",
+        "chrM": "chr28",
+        "chrMT": "chr28",
+    },
+    gff=SpeciesGffConfig(filename="Drerio_GRCz11.gene.gff3.gz"),
+    fasta=SpeciesFastaConfig(filename="Drerio_GRCz11.fa.gz"),
+    split=DataSplitConfig(use_in_training=True, use_in_validation=True, use_in_evaluation=False),
+)
+
+# Gallus gallus (Chicken) configuration
+ggallus_config = SpeciesConfig(
+    id="Ggallus",
+    name="Gallus gallus",
+    chromosome_map={
+        **{str(i): f"chr{i}" for i in range(1, 39)},
+        **{f"chr{i}": f"chr{i}" for i in range(1, 39)},
+        "Z": "chr39",
+        "chrZ": "chr39",
+        "W": "chr40",
+        "chrW": "chr40",
+        "MT": "chr41",
+        "chrM": "chr41",
+        "chrMT": "chr41",
+    },
+    gff=SpeciesGffConfig(filename="Ggallus_GRCg7b.gene.gff3.gz"),
+    fasta=SpeciesFastaConfig(filename="Ggallus_GRCg7b.fa.gz"),
+    split=DataSplitConfig(use_in_training=True, use_in_validation=True, use_in_evaluation=False),
+)
+
+# Homo sapiens (Human) configuration
+hsapiens_config = SpeciesConfig(
+    id="Hsapiens",
+    name="Homo sapiens",
+    chromosome_map={
+        **{str(i): f"chr{i}" for i in range(1, 23)},
+        **{f"chr{i}": f"chr{i}" for i in range(1, 23)},
+        "X": "chr23",
+        "chrX": "chr23",
+        "Y": "chr24",
+        "chrY": "chr24",
+        "MT": "chr25",
+        "M": "chr25",
+        "chrM": "chr25",
+        "chrMT": "chr25",
+    },
+    gff=SpeciesGffConfig(filename="Hsapiens_GRCh38.gene.gff3.gz"),
+    fasta=SpeciesFastaConfig(filename="Hsapiens_GRCh38.fa.gz"),
+    split=DataSplitConfig(use_in_training=True, use_in_validation=True, use_in_evaluation=False),
+)
+
+# Xenopus tropicalis (Western clawed frog) configuration
+xtropicalis_config = SpeciesConfig(
+    id="Xtropicalis",
+    name="Xenopus tropicalis",
+    chromosome_map={
+        **{str(i): f"chr{i}" for i in range(1, 11)},
+        **{f"chr{i}": f"chr{i}" for i in range(1, 11)},
+        "MT": "chr11",
+        "M": "chr11",
+        "chrM": "chr11",
+        "chrMT": "chr11",
+    },
+    gff=SpeciesGffConfig(filename="Xtropicalis_UCBXtro10.gene.gff3.gz"),
+    fasta=SpeciesFastaConfig(filename="Xtropicalis_UCBXtro10.fa.gz"),
+    split=DataSplitConfig(use_in_training=True, use_in_validation=True, use_in_evaluation=False),
+)
+
+# Mus musculus (Mouse) configuration
+mmusculus_config = SpeciesConfig(
+    id="Mmusculus",
+    name="Mus musculus",
+    chromosome_map={
+        **{str(i): f"chr{i}" for i in range(1, 20)},
+        **{f"chr{i}": f"chr{i}" for i in range(1, 20)},
+        "X": "chr20",
+        "chrX": "chr20",
+        "Y": "chr21",
+        "chrY": "chr21",
+        "MT": "chr22",
+        "M": "chr22",
+        "chrM": "chr22",
+        "chrMT": "chr22",
+    },
+    gff=SpeciesGffConfig(filename="Mmusculus_GRCm39.gene.gff3.gz"),
+    fasta=SpeciesFastaConfig(filename="Mmusculus_GRCm39.fa.gz"),
+    split=DataSplitConfig(use_in_training=True, use_in_validation=True, use_in_evaluation=False),
+)
+
 # fmt: on
 
 # Species configuration registry
@@ -420,4 +519,9 @@ SPECIES_CONFIGS = {
     "Gmax": gmax_config,
     "Hvulgare": hvulgare_config,
     "Ptrichocarpa": ptrichocarpa_config,
+    "Drerio": drerio_config,
+    "Ggallus": ggallus_config,
+    "Hsapiens": hsapiens_config,
+    "Xtropicalis": xtropicalis_config,
+    "Mmusculus": mmusculus_config,
 }
