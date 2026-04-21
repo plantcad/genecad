@@ -119,9 +119,7 @@ def test_generate_final_gff_prefers_merged_group_output(tmp_path):
     )
 
     output_text = output_path.read_text()
-    gene_lines = [
-        line for line in output_text.splitlines() if "\tgene\t" in line
-    ]
+    gene_lines = [line for line in output_text.splitlines() if "\tgene\t" in line]
 
     # The unconcatenated gene1 should NOT appear — only the merged gene
     assert len(gene_lines) == 1
@@ -164,9 +162,7 @@ def test_generate_final_gff_keeps_unmerged_genes(tmp_path):
     )
 
     output_text = output_path.read_text()
-    gene_lines = [
-        line for line in output_text.splitlines() if "\tgene\t" in line
-    ]
+    gene_lines = [line for line in output_text.splitlines() if "\tgene\t" in line]
 
     # gene3 should be kept (it's unmerged), gene1/gene2 should appear as merged
     gene_ids = [line.split("\t")[-1] for line in gene_lines]

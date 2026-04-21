@@ -15,7 +15,13 @@ from typing import Optional
 from transformers import AutoConfig
 from src.dataset import XarrayDataset
 from src.config import WINDOW_SIZE
-from src.modeling import GeneClassifier, GeneClassifierConfig, ThroughputMonitor, TOKEN_CLASS_NAMES, TOKEN_NUM_CLASSES
+from src.modeling import (
+    GeneClassifier,
+    GeneClassifierConfig,
+    ThroughputMonitor,
+    TOKEN_CLASS_NAMES,
+    TOKEN_NUM_CLASSES,
+)
 from src.logging import rank_zero_logger
 from src.visualization import set_visualization_save_dir
 import numpy as np
@@ -274,7 +280,9 @@ def train(args: Args) -> None:
     # Compute dynamic class frequencies if requested
     token_class_frequencies = None
     if args.auto_class_weights == "yes":
-        logger.info("Computing auto class weights from training dataset... (this may take a minute)")
+        logger.info(
+            "Computing auto class weights from training dataset... (this may take a minute)"
+        )
         counts = np.zeros(TOKEN_NUM_CLASSES, dtype=np.int64)
         for ds in train_dataset.datasets:
             chunk_size = 2000
@@ -286,16 +294,22 @@ def train(args: Args) -> None:
                 label_mask = ds["label_mask"].isel(sample=slice(start, end)).values
                 valid_labels = tag_labels[label_mask]
                 counts += np.bincount(valid_labels, minlength=TOKEN_NUM_CLASSES)
-        
+
         total_valid = counts.sum()
         if total_valid > 0:
             freqs = counts / total_valid
-            token_class_frequencies = {c: float(freqs[i]) for i, c in enumerate(TOKEN_CLASS_NAMES)}
-            logger.info(f"Computed dynamic token class frequencies:")
+            token_class_frequencies = {
+                c: float(freqs[i]) for i, c in enumerate(TOKEN_CLASS_NAMES)
+            }
+            logger.info("Computed dynamic token class frequencies:")
             for i, c in enumerate(TOKEN_CLASS_NAMES):
-                logger.info(f"  {c}: {token_class_frequencies[c]:.6e} (count: {counts[i]})")
+                logger.info(
+                    f"  {c}: {token_class_frequencies[c]:.6e} (count: {counts[i]})"
+                )
         else:
-            logger.warning("No valid labels found in training dataset. Falling back to default class frequencies.")
+            logger.warning(
+                "No valid labels found in training dataset. Falling back to default class frequencies."
+            )
 
     # Create data loaders
     logger.info(f"Creating data loaders with batch_size={args.batch_size}")
@@ -350,13 +364,15 @@ def train(args: Args) -> None:
         logger.info(
             f"Creating new model (architecture={args.architecture}, base_encoder_path={args.base_encoder_path})"
         )
-        _base_config = AutoConfig.from_pretrained(args.base_encoder_path, trust_remote_code=True)
+        _base_config = AutoConfig.from_pretrained(
+            args.base_encoder_path, trust_remote_code=True
+        )
         _d_model = _base_config.d_model
         # HNet models store d_model as a list (e.g. [1024])
         if isinstance(_d_model, (list, tuple)):
             _d_model = _d_model[0]
         # Only double for Caduceus models that use RCPS (forward + reverse-complement sequences)
-        _is_rcps = getattr(_base_config, 'rcps', False)
+        _is_rcps = getattr(_base_config, "rcps", False)
         base_encoder_dim = _d_model * (2 if _is_rcps else 1)
         config = GeneClassifierConfig(
             architecture=args.architecture,
@@ -372,7 +388,7 @@ def train(args: Args) -> None:
         )
         if token_class_frequencies is not None:
             config.token_class_frequencies = token_class_frequencies
-            
+
         model = GeneClassifier(
             config,
             learning_rate=args.learning_rate,

@@ -3,9 +3,13 @@ import transformers
 import transformers.generation
 
 try:
-    from transformers.generation import GreedySearchDecoderOnlyOutput, SampleDecoderOnlyOutput
+    from transformers.generation import (  # pyrefly: ignore[missing-module-attribute]
+        GreedySearchDecoderOnlyOutput,  # noqa: F401
+        SampleDecoderOnlyOutput,  # noqa: F401
+    )
 except ImportError:
     from transformers.generation import GenerateDecoderOnlyOutput
+
     transformers.generation.GreedySearchDecoderOnlyOutput = GenerateDecoderOnlyOutput
     transformers.generation.SampleDecoderOnlyOutput = GenerateDecoderOnlyOutput
 
@@ -14,6 +18,7 @@ except ImportError:
 # and changed it from a list to a dict.  Old remote models (HNetForCausalLM)
 # still use the old attribute, so we bridge the two.
 if not hasattr(transformers.PreTrainedModel, "all_tied_weights_keys"):
+
     def _get_all_tied(self):
         if hasattr(self, "_all_tied_storage"):
             return self._all_tied_storage
@@ -23,10 +28,15 @@ if not hasattr(transformers.PreTrainedModel, "all_tied_weights_keys"):
         if isinstance(val, list):
             return {k: None for k in val}
         return val
+
     def _set_all_tied(self, value):
         self._all_tied_storage = value
-    setattr(transformers.PreTrainedModel, "all_tied_weights_keys",
-            property(fget=_get_all_tied, fset=_set_all_tied))
+
+    setattr(
+        transformers.PreTrainedModel,
+        "all_tied_weights_keys",
+        property(fget=_get_all_tied, fset=_set_all_tied),
+    )
 
 # ── Patch 2 ──────────────────────────────────────────────────────────────────
 # transformers >= 4.51 calls tie_weights(missing_keys=..., recompute_mapping=False)
@@ -48,19 +58,26 @@ if hasattr(transformers.PreTrainedModel, "_finalize_model_loading"):
         orig_tw = model.tie_weights  # bound method (from HNetForCausalLM or wherever)
         sig = inspect.signature(type(model).tie_weights)
         has_var_kw = any(
-            p.kind == inspect.Parameter.VAR_KEYWORD
-            for p in sig.parameters.values()
+            p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
         )
         if not has_var_kw:
             # Old model: shadow via instance attribute with a kwargs-filtering wrapper
             accepted = {k for k in sig.parameters if k != "self"}
+
             def _safe_tw(**kwargs):
                 return orig_tw(**{k: v for k, v in kwargs.items() if k in accepted})
+
             model.tie_weights = _safe_tw  # instance attribute shadows the class method
 
         try:
-            return _orig_finalize(cls, model, load_config, loading_info)
+            return _orig_finalize(
+                cls, model, load_config, loading_info
+            )  # pyrefly: ignore[bad-argument-count]
         except TypeError:
             return _orig_finalize(model, load_config, loading_info)
 
-    transformers.PreTrainedModel._finalize_model_loading = classmethod(_safe_finalize_model_loading)
+    transformers.PreTrainedModel._finalize_model_loading = (
+        classmethod(  # pyrefly: ignore[bad-assignment]
+            _safe_finalize_model_loading
+        )
+    )

@@ -88,7 +88,7 @@ FASTA_EXPECTED[Ptrichocarpa]="Ptrichocarpa_533_v4.0.fa"
 for species in $SPECIES_IDS; do
     SRC_GFF="$DATA_ROOT/$species/${species}_top_transcript.gff3"
     SRC_FASTA="$DATA_ROOT/$species/${species}.fa"
-    
+
     if [ ! -f "$SRC_FASTA" ]; then
         SRC_FASTA="$DATA_ROOT/$species/${species}.fasta"
     fi

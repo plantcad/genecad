@@ -112,15 +112,21 @@ def load_classifier(args: Args) -> GeneClassifier:
         if isinstance(config, dict):
             config = GeneClassifierConfig(**config)
         elif not isinstance(config, GeneClassifierConfig):
-            config_field_names = {f.name for f in dataclasses.fields(GeneClassifierConfig)}
-            config_kwargs = {k: v for k, v in hparams.items() if k in config_field_names}
+            config_field_names = {
+                f.name for f in dataclasses.fields(GeneClassifierConfig)
+            }
+            config_kwargs = {
+                k: v for k, v in hparams.items() if k in config_field_names
+            }
             if config_kwargs.get("max_sequence_length") is None:
                 config_kwargs["max_sequence_length"] = args.window_size
             config = GeneClassifierConfig(**config_kwargs)
         if config.max_sequence_length is None:
             config.max_sequence_length = args.window_size
         model = GeneClassifier.load_from_checkpoint(
-            model_checkpoint, map_location=args.device, strict=False,
+            model_checkpoint,
+            map_location=args.device,
+            strict=False,
             config=config,
         )
     else:
@@ -130,7 +136,9 @@ def load_classifier(args: Args) -> GeneClassifier:
         )
         config = _infer_config_from_checkpoint(ckpt, window_size=args.window_size)
         model = GeneClassifier.load_from_checkpoint(
-            model_checkpoint, map_location=args.device, strict=False,
+            model_checkpoint,
+            map_location=args.device,
+            strict=False,
             config=config,
         )
 
@@ -341,7 +349,10 @@ def _create_predictions(
 
         # Process batches — each rank occupies its own tqdm row so bars don't
         # overwrite each other when world_size > 1.
-        for batch_index, window_batch in enumerate(
+        for (
+            batch_index,
+            window_batch,
+        ) in enumerate(  # pyrefly: ignore[bad-argument-type]
             tqdm.tqdm(
                 window_batches,
                 desc=f"[GPU {gpu_label} | {strand}]",
@@ -519,8 +530,10 @@ def warmup_triton(args: Args):
         )
 
     dummy = torch.full(
-        (warmup_batch_size, args.window_size), pad_value,
-        dtype=torch.long, device=args.device,
+        (warmup_batch_size, args.window_size),
+        pad_value,
+        dtype=torch.long,
+        device=args.device,
     )
 
     if base_model is not None:
@@ -528,14 +541,20 @@ def warmup_triton(args: Args):
     else:
         embeds = None
 
-    classifier(input_ids=dummy, inputs_embeds=embeds)
+    classifier(input_ids=dummy, inputs_embeds=embeds)  # pyrefly: ignore[not-callable]
 
     # Also warm up remainder-batch shape (1 sample) so the last batch in each
     # strand doesn't trigger a new autotuning run.
     if warmup_batch_size > 1:
         dummy1 = dummy[:1]
-        embeds1 = base_model(input_ids=dummy1).last_hidden_state if base_model is not None else None
-        classifier(input_ids=dummy1, inputs_embeds=embeds1)
+        embeds1 = (
+            base_model(input_ids=dummy1).last_hidden_state
+            if base_model is not None
+            else None
+        )
+        classifier(
+            input_ids=dummy1, inputs_embeds=embeds1
+        )  # pyrefly: ignore[not-callable]
 
     logger.info("[warmup] Triton cache warm-up complete.")
 
@@ -595,6 +614,7 @@ def create_predictions(args: Args):
     # Single mode: original behaviour (one chromosome per invocation).
     if args.manifest is not None:
         import json
+
         with open(args.manifest) as fh:
             entries = json.load(fh)
         logger.info(f"Manifest mode: {len(entries)} sequence(s) to process")
@@ -615,20 +635,24 @@ def create_predictions(args: Args):
 
         for i, entry in enumerate(entries):
             args.chromosome_id = entry["chromosome_id"]
-            args.input         = entry["input"]
-            args.output_dir    = entry["output_dir"]
+            args.input = entry["input"]
+            args.output_dir = entry["output_dir"]
 
             logger.info(
                 f"[{i + 1}/{len(entries)}] Running predictions for "
                 f"{args.species_id}/{args.chromosome_id}"
             )
-            _create_predictions(args, dataset := load_data(args), base_model, classifier, tokenizer)
+            _create_predictions(
+                args, load_data(args), base_model, classifier, tokenizer
+            )
 
             # All ranks must finish this sequence before moving to the next.
             barrier()
 
         if is_main_process():
-            logger.info(f"All {len(entries)} sequence(s) done across {world_size} rank(s).")
+            logger.info(
+                f"All {len(entries)} sequence(s) done across {world_size} rank(s)."
+            )
     finally:
         # Always tear down the process group even if an exception occurred so
         # that NCCL resources are released and port numbers are freed.
@@ -1023,7 +1047,7 @@ def generate_gff(
         "transcript",
     }
 
-    for gene_group in tqdm.tqdm(
+    for gene_group in tqdm.tqdm(  # pyrefly: ignore[not-iterable]
         genes,
         desc=tqdm_desc,
         position=tqdm_position,
@@ -1213,22 +1237,23 @@ def main():
         help="Generate token and feature logits with predicted classes",
     )
     inference_parser.add_argument(
-        "--input", default=None,
+        "--input",
+        default=None,
         help="Path to input zarr dataset (from transform.py). "
-             "Not required when --manifest is used.",
+        "Not required when --manifest is used.",
     )
     inference_parser.add_argument(
         "--output-dir",
         default=None,
         help="Directory to save rank-specific output zarr datasets. "
-             "Not required when --manifest is used.",
+        "Not required when --manifest is used.",
     )
     inference_parser.add_argument(
         "--manifest",
         default=None,
         help="Path to a JSON file listing sequences to process in one model-load session. "
-             "Format: [{\"chromosome_id\": \"...\", \"input\": \"...\", \"output_dir\": \"...\"}, ...]. "
-             "Enables processing thousands of short sequences without reloading the model each time.",
+        'Format: [{"chromosome_id": "...", "input": "...", "output_dir": "..."}, ...]. '
+        "Enables processing thousands of short sequences without reloading the model each time.",
     )
     inference_parser.add_argument(
         "--model-checkpoint", required=True, help="Path to classifier checkpoint"
@@ -1242,7 +1267,8 @@ def main():
         "--species-id", required=True, help="Species ID to process (e.g., 'Osativa')"
     )
     inference_parser.add_argument(
-        "--chromosome-id", default=None,
+        "--chromosome-id",
+        default=None,
         help="Chromosome ID to process (e.g., 'Chr1'). Not required when --manifest is used.",
     )
 

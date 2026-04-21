@@ -403,7 +403,7 @@ class GeneClassifier(L.LightningModule):
                 a_max=1,
             )
             self.bias = nn.Parameter(torch.tensor(np.log10(freqs), dtype=self.dtype))
-            
+
             # Compute smoothed inverse square-root class weights to amplify gradients for rare classes
             inv_sqrt_freqs = 1.0 / np.sqrt(freqs)
             # Clip to a maximum of 100x the minimum weight to avoid exploding gradients
@@ -411,7 +411,9 @@ class GeneClassifier(L.LightningModule):
             weights = np.clip(inv_sqrt_freqs, a_min=0, a_max=max_weight)
             # Normalize the weights
             weights = weights / weights.sum() * self.num_labels
-            self.criterion = torch.nn.CrossEntropyLoss(weight=torch.tensor(weights, dtype=torch.float32))
+            self.criterion = torch.nn.CrossEntropyLoss(
+                weight=torch.tensor(weights, dtype=torch.float32)
+            )
         else:
             self.bias = nn.Parameter(torch.zeros(self.num_labels))
             self.criterion = torch.nn.CrossEntropyLoss()

@@ -74,6 +74,7 @@ def fix_and_register_ties(model, fwd_pattern="fwd", rev_pattern="rev"):
 @dataclass
 class HiddenStateOutput:
     """Wrapper output that provides `last_hidden_state` for models that don't natively expose it."""
+
     last_hidden_state: torch.Tensor
 
 
@@ -115,7 +116,11 @@ class BaseEncoderWrapper(nn.Module):
 
 def _needs_wrapper(model: nn.Module) -> bool:
     """Check if the model needs wrapping (i.e., it's a CausalLM without last_hidden_state)."""
-    return hasattr(model, 'lm_head') and hasattr(model, 'backbone') and hasattr(model, 'embeddings')
+    return (
+        hasattr(model, "lm_head")
+        and hasattr(model, "backbone")
+        and hasattr(model, "embeddings")
+    )
 
 
 def load_base_model(
@@ -148,8 +153,8 @@ def load_base_model(
         be wrapped to expose `last_hidden_state` from the backbone.
     """
     config = AutoConfig.from_pretrained(path, revision=revision, trust_remote_code=True)
-    
-    # HF repository emarro/pcad2-200M-cnet-baseline has a bug in its config.json where it refers to 
+
+    # HF repository emarro/pcad2-200M-cnet-baseline has a bug in its config.json where it refers to
     # models_mixer_seq instead of mixer_seq. We patch this dynamically here to allow downloading from HF.
     if hasattr(config, "auto_map"):
         patched = False
@@ -159,7 +164,9 @@ def load_base_model(
                 config.auto_map[k] = val.replace("models_mixer_seq.", "mixer_seq.")
                 patched = True
         if patched:
-            logger.info("Patched config.auto_map to fix HuggingFace repo typo (models_mixer_seq -> mixer_seq)")
+            logger.info(
+                "Patched config.auto_map to fix HuggingFace repo typo (models_mixer_seq -> mixer_seq)"
+            )
 
     if randomize:
         base_model = AutoModel.from_config(config, dtype=dtype, trust_remote_code=True)

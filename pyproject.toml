@@ -91,9 +91,15 @@ replace-imports-with-any = [
 
 # a table mapping error codes to an `is-enabled` boolean
 [tool.pyrefly.errors]
-# bad-assignment = false
 bad-return = false
 missing-attribute = false
+# False positives from numpy/pytorch stubs and transformers monkey-patching
+bad-argument-type = false
+not-callable = false
+not-iterable = false
+missing-module-attribute = false
+bad-argument-count = false
+bad-assignment = false
 
 [tool.pytest.ini_options]
 testpaths = ["src"]

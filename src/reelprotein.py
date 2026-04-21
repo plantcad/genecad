@@ -26,6 +26,7 @@ device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 def parse_gff3(gff_file):
     genes = defaultdict(list)
+    transcript_to_gene = {}
     with open(gff_file) as fh:
         for raw in fh:
             line = raw.strip()
@@ -51,10 +52,19 @@ def parse_gff3(gff_file):
                         "feature_types": set(),
                     }
                 )
+            elif feature == "mRNA":
+                tx_id = attrs.get("ID")
+                parent_gene = attrs.get("Parent")
+                if tx_id and parent_gene:
+                    transcript_to_gene[(chrom, tx_id)] = parent_gene
             elif feature in ("CDS", "five_prime_UTR", "three_prime_UTR"):
                 parent = attrs.get("Parent", "")
+                parent_gene = transcript_to_gene.get((chrom, parent))
+                if parent_gene is None:
+                    # Fallback for IDs like gene1.t1 where gene ID can be inferred.
+                    parent_gene = parent.rsplit(".", 1)[0] if "." in parent else parent
                 for g in genes[chrom]:
-                    if g["id"] and parent.startswith(g["id"] + "."):
+                    if g["id"] and g["id"] == parent_gene:
                         g["feature_types"].add(feature)
                         if feature == "CDS":
                             try:
@@ -126,12 +136,14 @@ def extract_candidate_proteins(genes, genome_fasta):
             if nuc[idx : idx + 3] in STOPS:
                 return False
         return True
-    
-    def is_high_confidence_merge(merged_orf: str, individual_orfs: list, chain_len: int) -> bool:
+
+    def is_high_confidence_merge(
+        merged_orf: str, individual_orfs: list, chain_len: int
+    ) -> bool:
         """
         Apply additional validation for multi-gene merges.
         We want to avoid low-confidence merges that combine many small fragments.
-        
+
         Returns True only if:
         1. The merged ORF is reasonably longer than any individual gene
         2. The protein sequence is plausible (not too many rare codons or anomalies)
@@ -139,20 +151,24 @@ def extract_candidate_proteins(genes, genome_fasta):
         """
         if chain_len == 1:
             return True  # Single genes always pass
-        
+
         merged_len = len(merged_orf)
         max_individual = max((len(o) for o in individual_orfs if o), default=0)
-        
+
         # Merged ORF should be notably longer than the longest individual
         if merged_len <= max_individual:
-            logger.debug(f"Merge rejected: merged_len ({merged_len}) <= max_individual ({max_individual})")
+            logger.debug(
+                f"Merge rejected: merged_len ({merged_len}) <= max_individual ({max_individual})"
+            )
             return False
-        
+
         # Heuristic: merged should be at least 1.3x the longest individual for multi-fragment merges
         if chain_len > 2 and merged_len < max_individual * 1.3:
-            logger.debug(f"Merge rejected: chain_len={chain_len} but merged_len ({merged_len}) < 1.3 * max_individual ({max_individual})")
+            logger.debug(
+                f"Merge rejected: chain_len={chain_len} but merged_len ({merged_len}) < 1.3 * max_individual ({max_individual})"
+            )
             return False
-        
+
         return True
 
     def is_near_boundary(prev_gene: dict, curr_gene: dict, strand: str) -> bool:
@@ -162,11 +178,13 @@ def extract_candidate_proteins(genes, genome_fasta):
             gap = prev_gene["start"] - curr_gene["end"] - 1
         return -2 <= gap <= 2
 
-    def is_canonical_junction(chrom_seq, prev_gene: dict, curr_gene: dict, strand: str) -> tuple:
+    def is_canonical_junction(
+        chrom_seq, prev_gene: dict, curr_gene: dict, strand: str
+    ) -> tuple:
         """
         Validate that genes can be merged at a canonical splice boundary.
         Returns (is_valid, offset_used, reason)
-        
+
         Canonical splice dinucleotides: GT-AG (major), GC-AG, AT-AC
         For proper merging, we check:
         1. The junction region contains canonical splice sites
@@ -174,23 +192,27 @@ def extract_candidate_proteins(genes, genome_fasta):
         3. Stop codons are not introduced at the boundary
         """
         canonical_donors = ("GT", "GC", "AT")  # 5' splice site (donor)
-        canonical_acceptors = ("AG",)           # 3' splice site (acceptor)
-        
+        canonical_acceptors = ("AG",)  # 3' splice site (acceptor)
+
         if strand == "+":
             # For forward strand: check donor site at end of prev_gene, acceptor at start of curr_gene
             prev_end = prev_gene["end"]
             curr_start = curr_gene["start"]
             gap = curr_start - prev_end - 1
-            
+
             # Extract junction regions (±2 bp around boundary)
             try:
                 # Donor site (end of prev gene): should have GT/GC/AT
                 donor_region = str(chrom_seq[prev_end - 1 : prev_end + 1]).upper()
                 # Acceptor site (start of curr gene): should have AG
-                acceptor_region = str(chrom_seq[curr_start - 3 : curr_start - 1]).upper()
-                
-                is_canonical = (donor_region in canonical_donors and 
-                               acceptor_region in canonical_acceptors)
+                acceptor_region = str(
+                    chrom_seq[curr_start - 3 : curr_start - 1]
+                ).upper()
+
+                is_canonical = (
+                    donor_region in canonical_donors
+                    and acceptor_region in canonical_acceptors
+                )
             except (IndexError, TypeError):
                 is_canonical = False
         else:
@@ -198,23 +220,26 @@ def extract_candidate_proteins(genes, genome_fasta):
             prev_start = prev_gene["start"]
             curr_end = curr_gene["end"]
             gap = prev_start - curr_end - 1
-            
+
             try:
                 # Reverse complement the regions to check canonical sites
                 donor_region = str(chrom_seq[curr_end - 2 : curr_end]).upper()
                 donor_rc = str(Seq(donor_region).reverse_complement())
                 acceptor_region = str(chrom_seq[prev_start : prev_start + 2]).upper()
                 acceptor_rc = str(Seq(acceptor_region).reverse_complement())
-                
-                is_canonical = (donor_rc in canonical_donors and 
-                               acceptor_rc in canonical_acceptors)
+
+                is_canonical = (
+                    donor_rc in canonical_donors and acceptor_rc in canonical_acceptors
+                )
             except (IndexError, TypeError):
                 is_canonical = False
-        
+
         # Log boundary analysis for debugging
         if -2 <= gap <= 2:
-            logger.debug(f"Junction gap={gap}, canonical={is_canonical}, donor={donor_region if strand == '+' else donor_rc}, acceptor={acceptor_region if strand == '+' else acceptor_rc}")
-        
+            logger.debug(
+                f"Junction gap={gap}, canonical={is_canonical}, donor={donor_region if strand == '+' else donor_rc}, acceptor={acceptor_region if strand == '+' else acceptor_rc}"
+            )
+
         return is_canonical, gap
 
     logger.info(f"[Step 1] Loading Genome: {genome_fasta}")
@@ -235,7 +260,7 @@ def extract_candidate_proteins(genes, genome_fasta):
                 key=lambda g: g["start"],
                 reverse=(strand == "-"),
             )
-            
+
             # Use strand-specific indexing to avoid opposite-strand genes breaking contiguous chains
             id_to_index = {g["id"]: idx for idx, g in enumerate(st_genes)}
 
@@ -287,23 +312,29 @@ def extract_candidate_proteins(genes, genome_fasta):
                     else:
                         prev = st_genes[j - 1]
                         curr = st_genes[j]
-                        
+
                         # Strict boundary testing with canonical splice junction validation
                         offsets = [0]
                         use_offsets_1_2 = False
-                        
+
                         if is_near_boundary(prev, curr, strand):
                             # Only try offsets 1, 2 if the junction is canonical
-                            is_canonical, gap = is_canonical_junction(chrom_seq, prev, curr, strand)
+                            is_canonical, gap = is_canonical_junction(
+                                chrom_seq, prev, curr, strand
+                            )
                             if is_canonical and -2 <= gap <= 2:
                                 use_offsets_1_2 = True
-                                logger.debug(f"Canonical junction found between {prev['id']} and {curr['id']} (gap={gap})")
+                                logger.debug(
+                                    f"Canonical junction found between {prev['id']} and {curr['id']} (gap={gap})"
+                                )
                             else:
-                                logger.debug(f"Non-canonical junction between {prev['id']} and {curr['id']} (gap={gap}, canonical={is_canonical}) — merging conservatively")
-                        
+                                logger.debug(
+                                    f"Non-canonical junction between {prev['id']} and {curr['id']} (gap={gap}, canonical={is_canonical}) — merging conservatively"
+                                )
+
                         if use_offsets_1_2:
                             offsets = [0, 1, 2]
-                        
+
                         candidates = [
                             running_before + cds_strings[j][offset:]
                             for offset in offsets
@@ -316,16 +347,23 @@ def extract_candidate_proteins(genes, genome_fasta):
                         if is_complete_orf(candidate):
                             # If merged and trailing gene is already valid, skip
                             if j > i and any(
-                                is_complete_orf(cds_strings[k]) for k in range(i + 1, j + 1)
+                                is_complete_orf(cds_strings[k])
+                                for k in range(i + 1, j + 1)
                             ):
-                                logger.debug(f"Merge skipped: found valid individual ORF in chain at position {j}")
+                                logger.debug(
+                                    f"Merge skipped: found valid individual ORF in chain at position {j}"
+                                )
                                 stop_chain = True
                                 break
 
                             # High-confidence merge validation
                             cds_subset = [cds_strings[k] for k in range(i, j + 1)]
-                            if not is_high_confidence_merge(candidate, cds_subset, len(chain)):
-                                logger.debug(f"Merge rejected by high-confidence filter (chain_len={len(chain)})")
+                            if not is_high_confidence_merge(
+                                candidate, cds_subset, len(chain)
+                            ):
+                                logger.debug(
+                                    f"Merge rejected by high-confidence filter (chain_len={len(chain)})"
+                                )
                                 continue
 
                             # Generate ID and Protein
@@ -335,9 +373,15 @@ def extract_candidate_proteins(genes, genome_fasta):
                             merged_id = f"{chrom}~{header_ids}~{strand}"
 
                             # Log merge decision
-                            offset_used = [0, 1, 2][offset_idx] if offset_idx < len([0, 1, 2]) else 0
+                            offset_used = (
+                                [0, 1, 2][offset_idx]
+                                if offset_idx < len([0, 1, 2])
+                                else 0
+                            )
                             if len(chain) > 1:
-                                logger.info(f"[MERGE] {len(chain)} genes: {header_ids} (offset={offset_used})")
+                                logger.info(
+                                    f"[MERGE] {len(chain)} genes: {header_ids} (offset={offset_used})"
+                                )
 
                             # Sanitize sequence for embedding
                             prot_clean = (
@@ -385,12 +429,15 @@ def _embed_worker(args: tuple) -> list:
     from tqdm import tqdm
 
     gpu_id, position, seq_items, max_residues, max_seq_len, max_batch = args
-    _logging.basicConfig(level=_logging.INFO,
-                         format="%(asctime)s - %(levelname)s - %(message)s")
+    _logging.basicConfig(
+        level=_logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
+    )
     _log = _logging.getLogger(__name__)
 
     _device = torch.device(f"cuda:{gpu_id}" if torch.cuda.is_available() else "cpu")
-    _log.info(f"[GPU {gpu_id}] Loading ProtT5 on {_device} ({len(seq_items)} sequences)...")
+    _log.info(
+        f"[GPU {gpu_id}] Loading ProtT5 on {_device} ({len(seq_items)} sequences)..."
+    )
 
     _model = T5EncoderModel.from_pretrained("Rostlab/prot_t5_xl_half_uniref50-enc")
     _model = _model.to(_device).eval()
@@ -440,7 +487,14 @@ def _embed_worker(args: tuple) -> list:
 
             for bi, pid in enumerate(pdb_ids):
                 slen = batch_lens[bi]
-                emb = out.last_hidden_state[bi, :slen].mean(dim=0).detach().cpu().numpy().squeeze()
+                emb = (
+                    out.last_hidden_state[bi, :slen]
+                    .mean(dim=0)
+                    .detach()
+                    .cpu()
+                    .numpy()
+                    .squeeze()
+                )
                 results.append([pid] + emb.tolist())
 
             pbar.update(len(pdb_ids))
@@ -464,7 +518,9 @@ def get_prot_t5_model():
     return model, tokenizer
 
 
-def generate_embeddings(seqs_dict, gpus=None, max_residues=None, max_seq_len=1300, max_batch=None):
+def generate_embeddings(
+    seqs_dict, gpus=None, max_residues=None, max_seq_len=1300, max_batch=None
+):
     """
     Returns a pandas DataFrame where index is ProteinID and columns are 0-1023 (features).
 
@@ -488,15 +544,17 @@ def generate_embeddings(seqs_dict, gpus=None, max_residues=None, max_seq_len=130
     if max_residues is None or max_batch is None:
         try:
             free_mem, _ = torch.cuda.mem_get_info(gpus[0])
-            free_vram_gb = free_mem / (1024 ** 3)
-            _res   = max(1000, int(free_vram_gb * 800))
-            _batch = max(4,    int(free_vram_gb * 4))
+            free_vram_gb = free_mem / (1024**3)
+            _res = max(1000, int(free_vram_gb * 800))
+            _batch = max(4, int(free_vram_gb * 4))
             logger.info(
                 f"[Step 2] GPU {gpus[0]}: {free_vram_gb:.1f} GB free VRAM -> "
                 f"max_residues={_res}, max_batch={_batch}"
             )
         except Exception as e:
-            logger.warning(f"[Step 2] VRAM detection failed ({e}). Using safe fallback: max_residues=3000, max_batch=8")
+            logger.warning(
+                f"[Step 2] VRAM detection failed ({e}). Using safe fallback: max_residues=3000, max_batch=8"
+            )
             _res, _batch = 3000, 8
         max_residues = max_residues or _res
         max_batch = max_batch or _batch
@@ -509,14 +567,16 @@ def generate_embeddings(seqs_dict, gpus=None, max_residues=None, max_seq_len=130
     )
 
     if len(gpus) == 1:
-        results_list = _embed_worker((gpus[0], 0, seq_items, max_residues, max_seq_len, max_batch))
+        results_list = _embed_worker(
+            (gpus[0], 0, seq_items, max_residues, max_seq_len, max_batch)
+        )
     else:
         import concurrent.futures
         import multiprocessing as _mp
 
         # Interleave sequences across GPUs so each GPU gets a balanced mix of
         # long and short proteins (seq_items is sorted longest-first)
-        chunks = [seq_items[i::len(gpus)] for i in range(len(gpus))]
+        chunks = [seq_items[i :: len(gpus)] for i in range(len(gpus))]
         worker_args = [
             (gpu_id, position, chunk, max_residues, max_seq_len, max_batch)
             for position, (gpu_id, chunk) in enumerate(zip(gpus, chunks))
@@ -634,6 +694,7 @@ def read_gff_raw(gff_path):
             break
 
     gene_entries = {}
+    transcript_to_gene = {}
     for line in feats:
         fields = line.rstrip("\n").split("\t")
         if len(fields) != 9:
@@ -655,9 +716,14 @@ def read_gff_raw(gff_path):
             if not parent:
                 continue
             if feature_type == "mRNA":
+                tx_id = attrs.get("ID", "")
                 parent_gene = parent
+                if tx_id:
+                    transcript_to_gene[(seqid, tx_id)] = parent_gene
             else:
-                parent_gene = parent.rsplit(".", 1)[0]
+                parent_gene = transcript_to_gene.get((seqid, parent))
+                if parent_gene is None:
+                    parent_gene = parent.rsplit(".", 1)[0] if "." in parent else parent
 
             key = (seqid, parent_gene)
             if key in gene_entries:
@@ -711,7 +777,9 @@ def merge_group_transcripts(grp, gene_entries, synthetic_mrna_id):
     return synthetic_fields, merged_children
 
 
-def generate_final_gff(predictions_df, input_gff_path, output_gff_path, keep_unmerged=True):
+def generate_final_gff(
+    predictions_df, input_gff_path, output_gff_path, keep_unmerged=True
+):
     logger.info("[Step 4] Filtering and merging GFF based on predictions...")
 
     # Filter for positive predictions
@@ -753,14 +821,14 @@ def generate_final_gff(predictions_df, input_gff_path, output_gff_path, keep_unm
 
     # Track merged genes to avoid duplicate output
     merged_genes = set()
-    for (chrom, gene_tuple) in group_map.keys():
+    for chrom, gene_tuple in group_map.keys():
         for g in gene_tuple:
             merged_genes.add((chrom, g))
 
     # Build Output Items
     items = []
     seen_singles = set()
-    
+
     if keep_unmerged:
         # Keep ALL unmerged genes (those not successfully grouped into a new chunk)
         for key, ge in gene_entries.items():
@@ -779,7 +847,9 @@ def generate_final_gff(predictions_df, input_gff_path, output_gff_path, keep_unm
                 items.append({"type": "single", "key": composite_key, "start": start})
 
     for (chrom, gene_tuple), new_id in group_map.items():
-        member_entries = [gene_entries[(chrom, g)] for g in gene_tuple if (chrom, g) in gene_entries]
+        member_entries = [
+            gene_entries[(chrom, g)] for g in gene_tuple if (chrom, g) in gene_entries
+        ]
         if not member_entries:
             continue
         starts = [int(e["gene_line"][3]) for e in member_entries]
@@ -792,7 +862,9 @@ def generate_final_gff(predictions_df, input_gff_path, output_gff_path, keep_unm
                 "new_id": new_id,
                 "start": min(starts),
                 "end": max(ends),
-                "strand": group_strand.get((chrom, gene_tuple), member_entries[0]["gene_line"][6]),
+                "strand": group_strand.get(
+                    (chrom, gene_tuple), member_entries[0]["gene_line"][6]
+                ),
             }
         )
 
@@ -821,7 +893,9 @@ def generate_final_gff(predictions_df, input_gff_path, output_gff_path, keep_unm
                 chrom = itm["chrom"]
                 gid = itm["new_id"]
                 strand = itm.get("strand")
-                first_valid_key = next(((chrom, g) for g in grp if (chrom, g) in gene_entries), None)
+                first_valid_key = next(
+                    ((chrom, g) for g in grp if (chrom, g) in gene_entries), None
+                )
                 if not first_valid_key:
                     continue
 
@@ -846,7 +920,9 @@ def generate_final_gff(predictions_df, input_gff_path, output_gff_path, keep_unm
                 # Pass composite keys for group members
                 grp_keys = [g for g in grp if (chrom, g) in gene_entries]
                 mrna_fields, merged_children = merge_group_transcripts(
-                    grp_keys, {g: gene_entries[(chrom, g)] for g in grp_keys}, synthetic_mrna_id
+                    grp_keys,
+                    {g: gene_entries[(chrom, g)] for g in grp_keys},
+                    synthetic_mrna_id,
                 )
 
                 if mrna_fields:

@@ -170,18 +170,18 @@ The Docker image at `ghcr.io/plantcad/genecad_v1` bundles the complete runtime. 
 git clone https://github.com/plantcad/genecad && cd genecad
 
 # Pull the image
-docker pull ghcr.io/plantcad/genecad_v1:refine-CrossEntropyLoss
+docker pull ghcr.io/plantcad/genecad_v1:latest
 
 # Run on the bundled Arabidopsis example (auto-downloads FASTA)
 docker run --rm --gpus all \
   -v $(pwd):/workspace -w /workspace \
-  ghcr.io/plantcad/genecad_v1:refine-CrossEntropyLoss \
+  ghcr.io/plantcad/genecad_v1:latest \
   bash predict.sh
 
 # Annotate a custom plant genome
 docker run --rm --gpus all \
   -v $(pwd):/workspace -w /workspace \
-  ghcr.io/plantcad/genecad_v1:refine-CrossEntropyLoss \
+  ghcr.io/plantcad/genecad_v1:latest \
   bash predict.sh \
     -i /workspace/data/my_plant.fa \
     -o /workspace/output \
@@ -191,7 +191,7 @@ docker run --rm --gpus all \
 # Annotate an animal genome
 docker run --rm --gpus all \
   -v $(pwd):/workspace -w /workspace \
-  ghcr.io/plantcad/genecad_v1:refine-CrossEntropyLoss \
+  ghcr.io/plantcad/genecad_v1:latest \
   bash predict.sh \
     -i /workspace/data/my_animal.fa \
     -o /workspace/output \
@@ -258,10 +258,10 @@ sky launch --num-nodes 1 --yes --no-setup \
 
 # SSH into the node, pull the pre-built image, and run
 ssh genecad
-docker pull ghcr.io/plantcad/genecad_v1:refine-CrossEntropyLoss
+docker pull ghcr.io/plantcad/genecad_v1:latest
 docker run --rm --gpus all \
   -v $(pwd):/workspace -w /workspace \
-  ghcr.io/plantcad/genecad_v1:refine-CrossEntropyLoss \
+  ghcr.io/plantcad/genecad_v1:latest \
   bash predict.sh
 
 # Terminate the node when done
@@ -685,9 +685,9 @@ If you want GeneCAD to try to install BUSCO automatically, add `--auto-install-b
 If you run BUSCO with `--augustus`, point `AUGUSTUS_CONFIG_PATH` to a writable directory:
 
 ```bash
-mkdir -p /workdir/$USER
-cp -r /programs/miniconda3/envs/busco-5.5.0/config /workdir/$USER
-export AUGUSTUS_CONFIG_PATH=/workdir/$USER/config
+mkdir -p "$HOME/augustus_config"
+cp -r /programs/miniconda3/envs/busco-5.5.0/config "$HOME/augustus_config"
+export AUGUSTUS_CONFIG_PATH="$HOME/augustus_config/config"
 ```
 
 Other evaluation options:
@@ -845,7 +845,7 @@ hf download plantcad/genecad-dev \
 # Run the full GeneCAD pipeline
 docker run --rm --gpus all \
   -v $(pwd):/workspace -w /workspace \
-  ghcr.io/plantcad/genecad_v1:refine-CrossEntropyLoss \
+  ghcr.io/plantcad/genecad_v1:latest \
   bash predict.sh \
     -i data/plant/fasta/evaluation/Juglans_regia_chr1.fa.gz \
     -o results \
@@ -855,7 +855,7 @@ docker run --rm --gpus all \
 # Evaluate against the reference annotation
 docker run --rm \
   -v $(pwd):/workspace -w /workspace \
-  ghcr.io/plantcad/genecad_v1:refine-CrossEntropyLoss \
+  ghcr.io/plantcad/genecad_v1:latest \
   uv run python scripts/evaluate.py \
     --ref   data/plant/gff/evaluation/Juglans_regia_chr1.gff3 \
     --pred  results/Jregia_GeneCAD_final.gff \

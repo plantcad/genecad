@@ -3,7 +3,7 @@ name: Build and Publish Docker Image
 on:
   # Triggers the workflow when you push to the main branch
   push:
-    branches: [ "main", "master", "refine-CrossEntropyLoss" ]
+    branches: [ "main", "master" ]
     # Also trigger when you create a version tag (e.g., v1.0.0)
     tags: [ 'v*.*.*' ]
   # Allows you to run this workflow manually from the GitHub website
@@ -17,7 +17,7 @@ env:
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
-    
+
     # These permissions allow GitHub to publish the image to your repository's packages
     permissions:
       contents: read
@@ -62,4 +62,3 @@ jobs:
           # This enables layer caching, which makes subsequent builds MUCH faster
           cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache
           cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache,mode=max
-

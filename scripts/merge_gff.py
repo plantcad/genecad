@@ -21,14 +21,14 @@ def prefix_ids_in_attributes(attributes: str, chrom_prefix: str) -> str:
     """Prefix all ID= and Parent= values in a GFF attributes string."""
     # Prefix ID=...
     attributes = re.sub(
-        r'ID=([^;]+)',
-        lambda m: f'ID={chrom_prefix}_{m.group(1)}',
+        r"ID=([^;]+)",
+        lambda m: f"ID={chrom_prefix}_{m.group(1)}",
         attributes,
     )
     # Prefix Parent=...
     attributes = re.sub(
-        r'Parent=([^;]+)',
-        lambda m: f'Parent={chrom_prefix}_{m.group(1)}',
+        r"Parent=([^;]+)",
+        lambda m: f"Parent={chrom_prefix}_{m.group(1)}",
         attributes,
     )
     return attributes

@@ -118,7 +118,7 @@ NEW_SPECIES="Ncolorata Ckanehirae Acoerulea Dcarota Zmarina"
 for sp in $NEW_SPECIES; do
     gff_file="$RAW_GFF_DIR/${sp}_top_transcript.gff3"
     fasta_file="$RAW_FASTA_DIR/${sp}.softmasked_all.fa.gz"
-    
+
     if [ ! -f "$gff_file" ]; then
         echo "ERROR: GFF File not found at $gff_file"
         exit 1
@@ -127,10 +127,10 @@ for sp in $NEW_SPECIES; do
         echo "ERROR: FASTA File not found at $fasta_file"
         exit 1
     fi
-    
+
     ln -sf "$gff_file" "$DATA_DIR/gff/${sp}_top_transcript.gff3"
     ln -sf "$fasta_file" "$DATA_DIR/fasta/${sp}.softmasked_all.fa.gz"
-    
+
     echo "  GFF:   $gff_file -> $DATA_DIR/gff/${sp}_top_transcript.gff3"
     echo "  FASTA: $fasta_file -> $DATA_DIR/fasta/${sp}.softmasked_all.fa.gz"
 done

@@ -30,6 +30,6 @@ setup: |
   curl -LsSf https://astral.sh/uv/install.sh | sh
   source $HOME/.cargo/env || source $HOME/.local/bin/env
   export PATH="$HOME/.local/bin:$PATH"
-  
+
   # Install environment and dependencies
   uv sync --extra torch --extra mamba

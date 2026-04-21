@@ -19,7 +19,7 @@ for CHR_ID in $CHROM_IDS; do
     echo "========================================"
     echo "Running Make pipeline for Chr: $CHR_ID"
     echo "========================================"
-    
+
     # Run the Makefile for this specific chromosome
     CUDA_VISIBLE_DEVICES=0 \
     INPUT_FILE="$INPUT_FILE" \
@@ -32,7 +32,7 @@ for CHR_ID in $CHROM_IDS; do
     REQUIRE_UTRS="no" \
     LAUNCHER="uv run --extra torch python" \
     make -f pipelines/prediction all
-    
+
     # Process the generated GFF for this chromosome:
     # 1. Skip the standard ##gff-version 3 header
     # 2. Modify ID and Parent attributes to include the chromosome ID

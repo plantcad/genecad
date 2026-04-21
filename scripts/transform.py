@@ -908,7 +908,8 @@ def create_labels(
             if set(reasons) != set(all_reasons_in_chrom):
                 reason_to_idx = {r: i for i, r in enumerate(reasons)}
                 expanded_masks = np.ones(
-                    (label_masks.shape[0], len(all_reasons_in_chrom)), dtype=label_masks.dtype
+                    (label_masks.shape[0], len(all_reasons_in_chrom)),
+                    dtype=label_masks.dtype,
                 )
                 for i, reason in enumerate(all_reasons_in_chrom):
                     if reason in reason_to_idx:

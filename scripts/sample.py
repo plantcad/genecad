@@ -204,7 +204,9 @@ def _generate_training_windows(task):
     tag_stats = get_tag_stats(ds.tag_labels_masked, tag_class_map)
 
     # Validate strands
-    if (actual := set(str(s) for s in ds.strand.values)) != (expected := {"positive", "negative"}):
+    if (actual := set(str(s) for s in ds.strand.values)) != (
+        expected := {"positive", "negative"}
+    ):
         raise ValueError(f"Expected strand values {expected}, got {actual}")
 
     # Setup batched processing
