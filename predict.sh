@@ -106,7 +106,7 @@ fi
 case "$MODE" in
   plant)
     BASE_MODEL="emarro/pcad2-200M-cnet-baseline"
-    HEAD_MODEL="zongyanliu/genecad_plant"
+    HEAD_MODEL="zongyanliu/genecad_5-species"
     ;;
   animal)
         BASE_MODEL="emarro/vcad2_small_experimental"
@@ -174,7 +174,9 @@ resolve_batch_size_for_gpu() {
     # before Python, PyTorch, and the model load, so this is a starting point;
     # the retry loop below still shrinks it if the real run needs less.
     local FREE_GB=$(( GPU_MEM_MB / 1024 ))
-    local BS=$(( FREE_GB * 7 / 10 ))   # × 0.70
+    # Use a more aggressive starting point so inference fills more of the GPU
+    # before the retry loop has to back off.
+    local BS=$(( FREE_GB * 9 / 10 ))   # × 0.90
     [[ $BS -lt 8 ]] && BS=8
     echo $BS
 }

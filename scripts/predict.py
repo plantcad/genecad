@@ -106,12 +106,19 @@ def load_classifier(args: Args) -> GeneClassifier:
     hparams = ckpt.get("hyper_parameters") or {}
 
     if hparams:
-        # Hyperparameters were saved flat (each GeneClassifierConfig field stored
-        # individually because `config` was in the ignore list).  Reconstruct the
-        # config object so Lightning can satisfy the required `config` argument.
-        config_field_names = {f.name for f in dataclasses.fields(GeneClassifierConfig)}
-        config_kwargs = {k: v for k, v in hparams.items() if k in config_field_names}
-        config = GeneClassifierConfig(**config_kwargs)
+        # Prefer the serialized config object saved with the checkpoint.
+        # Older checkpoints may still store config values flat, so keep a fallback.
+        config = hparams.get("config")
+        if isinstance(config, dict):
+            config = GeneClassifierConfig(**config)
+        elif not isinstance(config, GeneClassifierConfig):
+            config_field_names = {f.name for f in dataclasses.fields(GeneClassifierConfig)}
+            config_kwargs = {k: v for k, v in hparams.items() if k in config_field_names}
+            if config_kwargs.get("max_sequence_length") is None:
+                config_kwargs["max_sequence_length"] = args.window_size
+            config = GeneClassifierConfig(**config_kwargs)
+        if config.max_sequence_length is None:
+            config.max_sequence_length = args.window_size
         model = GeneClassifier.load_from_checkpoint(
             model_checkpoint, map_location=args.device, strict=False,
             config=config,
