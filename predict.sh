@@ -24,6 +24,9 @@ Options:
   -g, --gpus LIST       Comma-separated GPU IDs to use, or 'all' for all available GPUs.
                         Chromosomes are distributed across GPUs in parallel.
                         (default: 0 — single GPU, sequential)
+  --launcher CMD        Custom entrypoint command to launch predict.py (e.g. 'srun python').
+                        If set, overrides automatic DDP/SLURM detection.
+                        Can also be set via LAUNCHER environment variable.
   -h, --help            Show this help message
 
 Batch size auto-detection:
@@ -64,6 +67,7 @@ MODE="plant"
 BATCH_SIZE_ARG="auto"
 GPUS_ARG="0"
 TOP_N_CONTIGS="all"
+LAUNCHER_ARG="${LAUNCHER:-}"
 
 while [[ $# -gt 0 ]]; do
   case $1 in
@@ -74,6 +78,7 @@ while [[ $# -gt 0 ]]; do
     -n|--top-n-contigs) TOP_N_CONTIGS="$2"; shift 2 ;;
     -b|--batch-size) BATCH_SIZE_ARG="$2"; shift 2 ;;
     -g|--gpus)       GPUS_ARG="$2";       shift 2 ;;
+    --launcher)      LAUNCHER_ARG="$2";   shift 2 ;;
     -h|--help) usage ;;
     *) echo "Unknown option: $1"; usage ;;
   esac
@@ -357,13 +362,12 @@ process_chromosome() {
         local attempt=0
         local max_attempts=20  # 20% reduction per step: ~20 steps to go from 256→1
         local success=0
+        local exit_code=0
         while [[ $attempt -lt $max_attempts ]]; do
             if [[ "$PREDICT_MODE" == "ddp" ]]; then
-                echo "${LOG_PREFIX} [2/6] Prediction via DDP on ${NUM_GPUS} GPUs (batch=${bs}/GPU, attempt $((attempt+1))/${max_attempts})..."
+                echo "${LOG_PREFIX} [2/6] Prediction via DDP (batch=${bs}/GPU, attempt $((attempt+1))/${max_attempts})..."
                 CUDA_VISIBLE_DEVICES="$GPU_LIST_STR" \
-                $PYTHON -m torch.distributed.run \
-                    --standalone \
-                    --nproc_per_node="${NUM_GPUS}" \
+                $PY_LAUNCHER \
                     scripts/predict.py create_predictions \
                     --chromosome-id "$CHR_ID" \
                     --input "$PIPELINE_DIR/sequences.zarr" \
@@ -374,11 +378,24 @@ process_chromosome() {
                     --batch-size "$bs" \
                     --dtype "$DTYPE" \
                     --window-size 8192 \
-                    --stride 4096
+                    --stride 4096 || exit_code=$?
+            elif [[ "$PREDICT_MODE" == "ddp_slurm" ]]; then
+                echo "${LOG_PREFIX} [2/6] Prediction via SLURM distributed (batch=${bs}/GPU, attempt $((attempt+1))/${max_attempts})..."
+                $PY_LAUNCHER scripts/predict.py create_predictions \
+                    --chromosome-id "$CHR_ID" \
+                    --input "$PIPELINE_DIR/sequences.zarr" \
+                    --output-dir "$PIPELINE_DIR/predictions.zarr" \
+                    --model-path "$BASE_MODEL" \
+                    --model-checkpoint "$HEAD_MODEL" \
+                    --species-id "$SPECIES_ID" \
+                    --batch-size "$bs" \
+                    --dtype "$DTYPE" \
+                    --window-size 8192 \
+                    --stride 4096 || exit_code=$?
             else
                 echo "${LOG_PREFIX} [2/6] Prediction on GPU ${gpu_id} (batch=${bs}, attempt $((attempt+1))/${max_attempts})..."
                 CUDA_VISIBLE_DEVICES="$gpu_id" \
-                $PYTHON scripts/predict.py create_predictions \
+                $PY_LAUNCHER scripts/predict.py create_predictions \
                     --chromosome-id "$CHR_ID" \
                     --input "$PIPELINE_DIR/sequences.zarr" \
                     --output-dir "$PIPELINE_DIR/predictions.zarr" \
@@ -389,9 +406,8 @@ process_chromosome() {
                     --dtype "$DTYPE" \
                     --tqdm-position "$gpu_id" \
                     --window-size 8192 \
-                    --stride 4096
+                    --stride 4096 || exit_code=$?
             fi
-            local exit_code=$?
             if [[ $exit_code -eq 0 ]]; then
                 success=1
                 if [[ $attempt -gt 0 ]]; then
@@ -504,7 +520,16 @@ done <<< "$CHROM_IDS"
 # =================================================================
 
 echo "================================================================="
-if [[ $NUM_GPUS -gt 1 && $CHROM_COUNT -lt $NUM_GPUS ]]; then
+if [[ -n "${SLURM_PROCID:-}" || -n "${SLURM_LOCALID:-}" || -n "${WORLD_SIZE:-}" ]] && [[ "${WORLD_SIZE:-1}" -gt 1 || -n "${SLURM_JOB_ID:-}" ]]; then
+    PREDICT_MODE="ddp_slurm"
+    DDP_BATCH="${GPU_BATCH_SIZES[${GPU_ARRAY[0]}]}"
+    for gid in "${GPU_ARRAY[@]}"; do
+        [[ "${GPU_BATCH_SIZES[$gid]}" -lt "$DDP_BATCH" ]] && DDP_BATCH="${GPU_BATCH_SIZES[$gid]}"
+    done
+    echo "Processing ${CHROM_COUNT} chromosome(s) in SLURM distributed mode."
+    echo "  (SLURM/WORLD_SIZE environment detected → DDP handled by SLURM integration)"
+    echo "  Batch size per GPU: ${DDP_BATCH}"
+elif [[ $NUM_GPUS -gt 1 && $CHROM_COUNT -lt $NUM_GPUS ]]; then
     PREDICT_MODE="ddp"
     # Use the minimum batch size across GPUs so no single GPU OOMs.
     DDP_BATCH="${GPU_BATCH_SIZES[${GPU_ARRAY[0]}]}"
@@ -519,12 +544,23 @@ else
     echo "Processing ${CHROM_COUNT} chromosome(s) in parallel — one GPU per chromosome."
     [[ $NUM_GPUS -gt 1 ]] && echo "  Up to ${NUM_GPUS} chromosomes run simultaneously."
 fi
-export PREDICT_MODE
+
+# Set the launcher dynamically
+if [[ -n "$LAUNCHER_ARG" ]]; then
+    PY_LAUNCHER="$LAUNCHER_ARG"
+    echo "  Custom launcher overridden: $PY_LAUNCHER"
+elif [[ "$PREDICT_MODE" == "ddp" ]]; then
+    PY_LAUNCHER="$PYTHON -m torch.distributed.run --standalone --nproc_per_node=${NUM_GPUS}"
+else
+    PY_LAUNCHER="$PYTHON"
+fi
+
+export PREDICT_MODE PY_LAUNCHER
 echo "================================================================="
 
 FAILED=0
 
-if [[ "$PREDICT_MODE" == "ddp" ]]; then
+if [[ "$PREDICT_MODE" == "ddp" || "$PREDICT_MODE" == "ddp_slurm" ]]; then
     # Sequential DDP — all GPUs on each chromosome one at a time
     for CHR_ID in "${CHR_ARRAY[@]}"; do
         process_chromosome "$CHR_ID" "$DDP_BATCH" "" || FAILED=$(( FAILED + 1 ))

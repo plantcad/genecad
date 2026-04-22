@@ -239,7 +239,17 @@ sbatch run_genecad.slurm
 ```
 
 > [!TIP]
-> **Multi-GPU on SLURM:** To use all GPUs on a node, request them with `--gres=gpu:4` (or however many are available) and pass `--gpus all` to `predict.sh`. Chromosomes will be distributed across GPUs automatically. For very large genomes across multiple nodes, split your FASTA by chromosome and submit one job per chromosome.
+> **Multi-GPU on a Single Node:** To use all GPUs on a node, request them with `--gres=gpu:4` (or however many are available) and pass `--gpus all` to `predict.sh`. If there are many chromosomes, they will be distributed across GPUs. If there are fewer chromosomes than GPUs, GeneCAD will automatically split the longest sequences into parallel windows across the GPUs.
+> 
+> **Multi-Node Distributed Inference (e.g., TACC):** GeneCAD natively detects multi-node SLURM topologies. If you allocate multiple nodes (e.g., `#SBATCH --nodes=4`), you can use `srun` to seamlessly process enormous single contigs across the entire cluster. `predict.sh` will automatically bypass local launchers and allow PyTorch Lightning to route the distributed process windows.
+> 
+> ```bash
+> # Request multiple nodes/GPUs and launch via srun
+> #SBATCH --nodes=2
+> #SBATCH --ntasks=8
+> #SBATCH --gres=gpu:4
+> srun bash predict.sh -i /path/to/genome.fa -s MySpecies --gpus all
+> ```
 
 ### Using SkyPilot
 
@@ -607,6 +617,16 @@ bash predict.sh \
   -m plant \
   --model-checkpoint results/my_run/checkpoints/epoch=0-step=5000.ckpt
 ```
+
+### Summarizing training data
+
+To inspect the class balances, masking rates, and terminal codon frequencies of your training or validation splits, you can use the built-in summary tool on your compiled `zarr` datasets:
+
+```bash
+uv run python scripts/summarize.py summarize_training_dataset \
+  --input genecad_result/training/plant/pipeline/prep/splits/train.zarr
+```
+This utility provides key statistics to ensure your model gradients remain stable across custom datasets and species variations.
 
 ---
 
