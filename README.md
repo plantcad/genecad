@@ -250,6 +250,16 @@ sbatch run_genecad.slurm
 > #SBATCH --gres=gpu:4
 > srun bash predict.sh -i /path/to/genome.fa -s MySpecies --gpus all
 > ```
+>
+> **Custom launcher:** If your cluster requires a non-standard Python entrypoint (e.g. `srun python` instead of `torchrun`), use `--launcher` or the `LAUNCHER` environment variable to override automatic detection:
+>
+> ```bash
+> # Via flag
+> bash predict.sh -i genome.fa -s MySpecies --launcher 'srun python'
+>
+> # Via environment variable
+> LAUNCHER='srun python' bash predict.sh -i genome.fa -s MySpecies
+> ```
 
 ### Using SkyPilot
 
@@ -332,6 +342,9 @@ Options:
                         (default: all sequences)
   -b, --batch-size N    Inference batch size per GPU  (default: auto — scaled to GPU VRAM)
   -g, --gpus LIST       GPU IDs to use: comma-separated list or 'all'  (default: 0)
+  --launcher CMD        Custom entrypoint to launch predict.py (e.g. 'srun python').
+                        Overrides automatic DDP/SLURM detection.
+                        Can also be set via the LAUNCHER environment variable.
   -h, --help            Show this help message
 ```
 
