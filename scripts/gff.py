@@ -94,13 +94,16 @@ def remove_features_by_id(
     tuple
         (filtered features, count of removed features, count of indirect removals)
     """
+    has_id = "id" in features.columns
+    has_parent = "parent" in features.columns
+
     # Find all children of features to remove
     to_remove = set(feature_ids_to_remove)
     indirect_removals = set()
 
     # Keep adding children until no more are found
     remaining_ids = set(feature_ids_to_remove)
-    while remaining_ids:
+    while remaining_ids and has_id and has_parent:
         # Find all direct children of the current set of features
         children = set(features[features["parent"].isin(remaining_ids)]["id"].dropna())
         # If no new children, we're done
@@ -116,13 +119,15 @@ def remove_features_by_id(
     indices_to_remove = set()
 
     # First collect indices for features that have IDs in the removal set
-    has_id_indices = features[features["id"].isin(to_remove)].index
-    indices_to_remove.update(has_id_indices)
+    if has_id:
+        has_id_indices = features[features["id"].isin(to_remove)].index
+        indices_to_remove.update(has_id_indices)
 
     # Then collect indices for features that have parents in the removal set
     # (this covers features without IDs)
-    has_parent_indices = features[features["parent"].isin(to_remove)].index
-    indices_to_remove.update(has_parent_indices)
+    if has_parent:
+        has_parent_indices = features[features["parent"].isin(to_remove)].index
+        indices_to_remove.update(has_parent_indices)
 
     # Filter out the features to remove by index
     original_count = features.shape[0]
@@ -393,7 +398,11 @@ def filter_to_min_gene_length(
 
     # Identify genes to remove based on length
     too_short_mask = gene_lengths < min_length
-    too_short_ids = set(genes.loc[too_short_mask, "id"].dropna())
+    if "id" in genes.columns:
+        too_short_ids = set(genes.loc[too_short_mask, "id"].dropna())
+    else:
+        logger.warning("Column 'id' not found; cannot identify short genes by ID")
+        too_short_ids = set()
     logger.info(f"Found {len(too_short_ids)} genes shorter than {min_length} bp")
 
     # Remove features and their children
@@ -460,78 +469,95 @@ def filter_to_min_feature_length(
     small_features_mask = features["type"].isin(feature_types) & (
         features["length"] < min_length
     )
-    small_feature_ids = set(features.loc[small_features_mask, "id"].dropna())
-
-    logger.info(f"Found {len(small_feature_ids)} small features to remove")
+    if "id" in features.columns:
+        small_feature_ids = set(features.loc[small_features_mask, "id"].dropna())
+        logger.info(f"Found {len(small_feature_ids)} small features to remove")
+    else:
+        logger.warning(
+            "Column 'id' not found; counting small features by rows instead of IDs"
+        )
+        logger.info(f"Found {int(small_features_mask.sum())} small features to remove")
 
     # Remove small features
     features_filtered = features[~small_features_mask]
 
-    # Group features by gene and update boundaries
-    genes = features_filtered[features_filtered["type"] == GffFeatureType.GENE.value]
-    mrnas = features_filtered[features_filtered["type"] == GffFeatureType.MRNA.value]
-
-    # Track statistics for boundary updates
+    # Group features by gene and update boundaries when hierarchical columns are available
     genes_updated = 0
     transcripts_updated = 0
-    total_genes = len(genes)
-    total_transcripts = len(mrnas)
 
-    for _, gene in genes.iterrows():
-        gene_id = gene["id"]
-        original_gene_start = gene["start"]
-        original_gene_end = gene["end"]
+    if {"id", "parent"}.issubset(features_filtered.columns):
+        genes = features_filtered[features_filtered["type"] == GffFeatureType.GENE.value]
+        mrnas = features_filtered[features_filtered["type"] == GffFeatureType.MRNA.value]
 
-        # Find all features belonging to this gene (direct children and grandchildren via mRNAs)
-        gene_children = features_filtered[features_filtered["parent"] == gene_id]
-        gene_mrna_ids = gene_children[
-            gene_children["type"] == GffFeatureType.MRNA.value
-        ]["id"].tolist()
+        # Track statistics for boundary updates
+        total_genes = len(genes)
+        total_transcripts = len(mrnas)
 
-        # First, update mRNA boundaries for this gene
-        for mrna_id in gene_mrna_ids:
-            mrna_features = features_filtered[features_filtered["parent"] == mrna_id]
-            if not mrna_features.empty:
-                original_mrna = features_filtered[
-                    features_filtered["id"] == mrna_id
-                ].iloc[0]
-                original_mrna_start = original_mrna["start"]
-                original_mrna_end = original_mrna["end"]
+        for _, gene in genes.iterrows():
+            gene_id = gene["id"]
+            original_gene_start = gene["start"]
+            original_gene_end = gene["end"]
 
-                mrna_start = mrna_features["start"].min()
-                mrna_end = mrna_features["end"].max()
+            # Find all features belonging to this gene (direct children and grandchildren via mRNAs)
+            gene_children = features_filtered[features_filtered["parent"] == gene_id]
+            gene_mrna_ids = gene_children[
+                gene_children["type"] == GffFeatureType.MRNA.value
+            ]["id"].tolist()
 
-                # Update mRNA boundaries and track if changed
-                if mrna_start != original_mrna_start or mrna_end != original_mrna_end:
-                    transcripts_updated += 1
+            # First, update mRNA boundaries for this gene
+            for mrna_id in gene_mrna_ids:
+                mrna_features = features_filtered[features_filtered["parent"] == mrna_id]
+                if not mrna_features.empty:
+                    original_mrna = features_filtered[
+                        features_filtered["id"] == mrna_id
+                    ].iloc[0]
+                    original_mrna_start = original_mrna["start"]
+                    original_mrna_end = original_mrna["end"]
+
+                    mrna_start = mrna_features["start"].min()
+                    mrna_end = mrna_features["end"].max()
+
+                    # Update mRNA boundaries and track if changed
+                    if mrna_start != original_mrna_start or mrna_end != original_mrna_end:
+                        transcripts_updated += 1
+                        features_filtered.loc[
+                            features_filtered["id"] == mrna_id, "start"
+                        ] = mrna_start
+                        features_filtered.loc[
+                            features_filtered["id"] == mrna_id, "end"
+                        ] = mrna_end
+
+            # Now update gene boundaries based on updated mRNA boundaries
+            updated_gene_children = features_filtered[
+                features_filtered["parent"] == gene_id
+            ]
+            updated_mrnas = updated_gene_children[
+                updated_gene_children["type"] == GffFeatureType.MRNA.value
+            ]
+
+            if not updated_mrnas.empty:
+                new_start = updated_mrnas["start"].min()
+                new_end = updated_mrnas["end"].max()
+
+                # Update gene boundaries and track if changed
+                if new_start != original_gene_start or new_end != original_gene_end:
+                    genes_updated += 1
                     features_filtered.loc[
-                        features_filtered["id"] == mrna_id, "start"
-                    ] = mrna_start
-                    features_filtered.loc[features_filtered["id"] == mrna_id, "end"] = (
-                        mrna_end
+                        features_filtered["id"] == gene_id, "start"
+                    ] = new_start
+                    features_filtered.loc[features_filtered["id"] == gene_id, "end"] = (
+                        new_end
                     )
-
-        # Now update gene boundaries based on updated mRNA boundaries
-        updated_gene_children = features_filtered[
-            features_filtered["parent"] == gene_id
-        ]
-        updated_mrnas = updated_gene_children[
-            updated_gene_children["type"] == GffFeatureType.MRNA.value
-        ]
-
-        if not updated_mrnas.empty:
-            new_start = updated_mrnas["start"].min()
-            new_end = updated_mrnas["end"].max()
-
-            # Update gene boundaries and track if changed
-            if new_start != original_gene_start or new_end != original_gene_end:
-                genes_updated += 1
-                features_filtered.loc[features_filtered["id"] == gene_id, "start"] = (
-                    new_start
-                )
-                features_filtered.loc[features_filtered["id"] == gene_id, "end"] = (
-                    new_end
-                )
+    else:
+        total_genes = int(
+            (features_filtered["type"] == GffFeatureType.GENE.value).sum()
+        )
+        total_transcripts = int(
+            (features_filtered["type"] == GffFeatureType.MRNA.value).sum()
+        )
+        logger.warning(
+            "Columns 'id' and/or 'parent' not found; skipping gene/mRNA boundary updates"
+        )
 
     # Remove temporary length column
     features_filtered = features_filtered.drop(columns=["length"])
@@ -732,6 +758,13 @@ def filter_to_valid_genes(
     # Read GFF file
     features = load_gff(input_path)
     original_count = features.shape[0]
+
+    if not {"id", "parent"}.issubset(features.columns):
+        logger.warning(
+            "Columns 'id' and/or 'parent' not found; skipping valid-gene filter"
+        )
+        save_gff(output_path, features)
+        return
 
     # Find all mRNAs
     mrnas = features[features["type"] == GffFeatureType.MRNA.value]
