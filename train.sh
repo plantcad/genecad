@@ -44,7 +44,7 @@
 # =============================================================================
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "$(realpath "${BASH_SOURCE[0]}")")" && pwd)"
 cd "$SCRIPT_DIR"
 
 # ── Argument parsing ──────────────────────────────────────────────────────────
@@ -137,15 +137,15 @@ if [[ "$DOMAIN" == "plant" ]]; then
   VALID_PROPORTION=0.05
   RUN_NAME="${RUN_NAME:-genecad-plant-multispecies}"
 else
-  BASE_MODEL="${BASE_MODEL:-emarro/vcad2_small_experimental}"
+  BASE_MODEL="${BASE_MODEL:-emarro/pcad2_vert_small}"
   SPECIES_IDS="Drerio Ggallus Hsapiens Xtropicalis Mmusculus"
   EPOCHS=1
   ARCHITECTURE="all"
   HEAD_LAYERS=8
-  TOKEN_EMBED_DIM=128
+  TOKEN_EMBED_DIM=256  # Increased from 128 to match plant capacity (animal gene structures are more complex)
   BASE_FROZEN="no"
   NUM_WORKERS=4
-  VALID_PROPORTION=0.01
+  VALID_PROPORTION=0.02
   RUN_NAME="${RUN_NAME:-genecad-animal-multispecies}"
 fi
 

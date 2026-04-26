@@ -360,6 +360,34 @@ def train(args: Args) -> None:
             learning_rate_decay=args.learning_rate_decay,
         )
         config = model.config
+        # Re-apply auto class weights even when fine-tuning: the checkpoint's bias may
+        # have been initialized from a different domain's class frequencies (e.g. plant
+        # priors applied to animal data), causing a persistent miscalibration that
+        # prevents the model from escaping a suboptimal plateau.
+        if token_class_frequencies is not None:
+            logger.info(
+                "Applying auto class weights to fine-tuned checkpoint "
+                "(overrides checkpoint's stored bias and loss criterion)"
+            )
+            freqs = np.clip(
+                np.array([token_class_frequencies[c] for c in config.token_class_names]),
+                a_min=1e-6,
+                a_max=1,
+            )
+            # Reset bias to log10 of actual training-data frequencies
+            model.bias = torch.nn.Parameter(
+                torch.tensor(np.log10(freqs), dtype=model.bias.dtype).to(model.bias.device)
+            )
+            # Recompute inverse-sqrt class weights for CrossEntropyLoss
+            inv_sqrt_freqs = 1.0 / np.sqrt(freqs)
+            max_weight = inv_sqrt_freqs.min() * 100.0
+            weights = np.clip(inv_sqrt_freqs, a_min=0, a_max=max_weight)
+            weights = weights / weights.sum() * config.num_labels
+            model.criterion = torch.nn.CrossEntropyLoss(
+                weight=torch.tensor(weights, dtype=torch.float32)
+            )
+            config.token_class_frequencies = token_class_frequencies
+            logger.info("Bias and criterion updated from auto class weights.")
     else:
         logger.info(
             f"Creating new model (architecture={args.architecture}, base_encoder_path={args.base_encoder_path})"

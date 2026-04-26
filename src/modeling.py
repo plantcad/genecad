@@ -170,6 +170,31 @@ TOKEN_CLASS_FREQUENCIES: dict[str, float] = {
     TokenBiluoClass.L_THREE_PRIME_UTR.value: 8.319502e-05, # [15]
     TokenBiluoClass.U_THREE_PRIME_UTR.value: 2.072122e-07, # [16]
 }
+
+# Token class frequencies computed from actual animal training data
+# (Drerio + Ggallus + Hsapiens + Mmusculus + Xtropicalis, 1001078 windows, 8.18B unmasked tokens)
+# Source: label_qc_summary.json from genecad-animal-tuned-e128-e6 training run
+# Key difference from plant priors: animal genomes have 75% I-intron (vs 10.7%) and only 18.5%
+# intergenic (vs 75%), due to much longer introns (~6 kbp average in vertebrates vs ~500 bp in plants).
+ANIMAL_TOKEN_CLASS_FREQUENCIES: dict[str, float] = {
+    TokenBiluoClass.INTERGENIC.value:       1511640749 / 8181860505,  # 0.18476  [0]
+    TokenBiluoClass.B_INTRON.value:            1521795 / 8181860505,  # 1.860e-4 [1]
+    TokenBiluoClass.I_INTRON.value:         6147850608 / 8181860505,  # 0.75145  [2]
+    TokenBiluoClass.L_INTRON.value:            1521930 / 8181860505,  # 1.860e-4 [3]
+    TokenBiluoClass.U_INTRON.value:                 93 / 8181860505,  # 1.14e-8  [4]
+    TokenBiluoClass.B_FIVE_PRIME_UTR.value:     228502 / 8181860505,  # 2.79e-5  [5]
+    TokenBiluoClass.I_FIVE_PRIME_UTR.value:   40433651 / 8181860505,  # 4.94e-3  [6]
+    TokenBiluoClass.L_FIVE_PRIME_UTR.value:     229625 / 8181860505,  # 2.81e-5  [7]
+    TokenBiluoClass.U_FIVE_PRIME_UTR.value:       1450 / 8181860505,  # 1.77e-7  [8]
+    TokenBiluoClass.B_CDS.value:              1594128 / 8181860505,  # 1.95e-4  [9]
+    TokenBiluoClass.I_CDS.value:           271461051 / 8181860505,  # 3.32e-2  [10]
+    TokenBiluoClass.L_CDS.value:             1594201 / 8181860505,  # 1.95e-4  [11]
+    TokenBiluoClass.U_CDS.value:                 245 / 8181860505,  # 2.99e-8  [12]
+    TokenBiluoClass.B_THREE_PRIME_UTR.value:    169648 / 8181860505,  # 2.07e-5  [13]
+    TokenBiluoClass.I_THREE_PRIME_UTR.value: 203443699 / 8181860505,  # 2.49e-2  [14]
+    TokenBiluoClass.L_THREE_PRIME_UTR.value:    168370 / 8181860505,  # 2.06e-5  [15]
+    TokenBiluoClass.U_THREE_PRIME_UTR.value:       760 / 8181860505,  # 9.29e-8  [16]
+}
 # fmt: on
 # Assert equality of pre-calculated frequency classes until support for dynamic configuration is necessary
 assert TOKEN_CLASS_NAMES == list(TOKEN_CLASS_FREQUENCIES.keys())
@@ -803,15 +828,44 @@ TOKEN_TRANSITION_PROBS_2 = [
     [2.9278358774311944e-04, 3.0940342516742247e-03, 1.2635776951496243e-08, 9.9603932835033049e-01, 5.7384117447525039e-04],  # cds
     [2.8602482119673934e-03, 2.7769522276139527e-04, 1.2582474977861136e-06, 1.8873712466791704e-07, 9.9686060958064870e-01],  # three_prime_utr
 ]
+
+# Transition probabilities for animal genomes, mathematically derived from average
+# feature lengths of 5 species vertebrate training dataset:
+# Intergenic: 20907bp, Intron: 4040bp, 5'UTR: 177bp, CDS: 170bp, 3'UTR: 1204bp
+ANIMAL_TOKEN_TRANSITION_PROBS_1 = [
+    # intergenic              intron                  five_prime_utr          cds                     three_prime_utr
+    [9.99952169130e-01, 0.00000000000e+00, 4.7830870e-05, 0.00000000000e+00, 0.00000000000e+00],  # intergenic
+    [0.00000000000e+00, 9.99752475248e-01, 9.9009900e-06, 2.351485150e-04, 2.4752480e-06],  # intron
+    [0.00000000000e+00, 9.604519770e-04, 9.94350282486e-01, 4.689265537e-03, 0.00000000000e+00],  # five_prime_utr
+    [0.00000000000e+00, 4.705882353e-03, 0.00000000000e+00, 9.94117647059e-01, 1.176470588e-03],  # cds
+    [7.890365450e-04, 4.1528239e-05, 0.00000000000e+00, 0.00000000000e+00, 9.91694352159e-01],  # three_prime_utr
+]
+
+# Transition probabilities for animal genomes, allowing partial transcript annotations
+ANIMAL_TOKEN_TRANSITION_PROBS_2 = [
+    # intergenic              intron                  five_prime_utr          cds                     three_prime_utr
+    [9.99952169130e-01, 0.00000000000e+00, 2.8698522e-05, 1.9132348e-05, 0.00000000000e+00],  # intergenic
+    [0.00000000000e+00, 9.99752475248e-01, 9.9009900e-06, 2.351485150e-04, 2.4752480e-06],  # intron
+    [0.00000000000e+00, 9.604519770e-04, 9.94350282486e-01, 4.689265537e-03, 0.00000000000e+00],  # five_prime_utr
+    [2.941176470e-04, 4.705882353e-03, 0.00000000000e+00, 9.94117647059e-01, 8.823529410e-04],  # cds
+    [7.890365450e-04, 4.1528239e-05, 0.00000000000e+00, 0.00000000000e+00, 9.91694352159e-01],  # three_prime_utr
+]
 # fmt: on
 
 
-def token_transition_probs(remove_incomplete_features: bool = True) -> pd.DataFrame:
-    probs = (
-        TOKEN_TRANSITION_PROBS_1
-        if remove_incomplete_features
-        else TOKEN_TRANSITION_PROBS_2
-    )
+def token_transition_probs(remove_incomplete_features: bool = True, domain: str = "plant") -> pd.DataFrame:
+    if domain == "animal":
+        probs = (
+            ANIMAL_TOKEN_TRANSITION_PROBS_1
+            if remove_incomplete_features
+            else ANIMAL_TOKEN_TRANSITION_PROBS_2
+        )
+    else:
+        probs = (
+            TOKEN_TRANSITION_PROBS_1
+            if remove_incomplete_features
+            else TOKEN_TRANSITION_PROBS_2
+        )
     return pd.DataFrame(
         data=probs,
         # pyrefly: ignore  # bad-argument-type
@@ -819,3 +873,4 @@ def token_transition_probs(remove_incomplete_features: bool = True) -> pd.DataFr
         # pyrefly: ignore  # bad-argument-type
         columns=SEQUENCE_MODELING_FEATURES,
     )
+

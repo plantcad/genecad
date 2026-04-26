@@ -1,6 +1,6 @@
 #!/bin/bash
 set -e
-cd "$(dirname "$0")" || exit 1
+SCRIPT_DIR="$(cd "$(dirname "$(realpath "$0")")" && pwd)"
 
 # =================================================================
 # Multi-Chromosome GeneCAD Prediction Pipeline
@@ -20,6 +20,13 @@ Options:
   -s, --species NAME    Species label prefixed on output filenames (default: Athaliana)
   -m, --mode MODE       Model to use: plant | animal  (default: plant)
   -n, --top-n-contigs N Predict only the N longest FASTA sequences (default: all)
+    -l, --min-transcript-length N
+                                                Minimum transcript length (bp) used during GFF export.
+                                                Higher values can reduce tiny fragments and speed up export.
+                                                (default: 3)
+    -c, --cpu-workers N   CPU worker processes used in GFF export transcript grouping.
+                                                Uses an order-preserving map so outputs remain deterministic.
+                                                (default: 1)
   -b, --batch-size N    Inference batch size per GPU (default: auto — scaled to GPU VRAM)
   -g, --gpus LIST       Comma-separated GPU IDs to use, or 'all' for all available GPUs.
                         Chromosomes are distributed across GPUs in parallel.
@@ -67,6 +74,8 @@ MODE="plant"
 BATCH_SIZE_ARG="auto"
 GPUS_ARG="0"
 TOP_N_CONTIGS="all"
+MIN_TRANSCRIPT_LENGTH="3"
+CPU_WORKERS="1"
 LAUNCHER_ARG="${LAUNCHER:-}"
 
 while [[ $# -gt 0 ]]; do
@@ -76,6 +85,8 @@ while [[ $# -gt 0 ]]; do
     -s|--species)    SPECIES_ID="$2";      shift 2 ;;
     -m|--mode)       MODE="$2";            shift 2 ;;
     -n|--top-n-contigs) TOP_N_CONTIGS="$2"; shift 2 ;;
+    -l|--min-transcript-length) MIN_TRANSCRIPT_LENGTH="$2"; shift 2 ;;
+    -c|--cpu-workers) CPU_WORKERS="$2"; shift 2 ;;
     -b|--batch-size) BATCH_SIZE_ARG="$2"; shift 2 ;;
     -g|--gpus)       GPUS_ARG="$2";       shift 2 ;;
     --launcher)      LAUNCHER_ARG="$2";   shift 2 ;;
@@ -89,6 +100,16 @@ if [[ "$TOP_N_CONTIGS" != "all" ]]; then
         echo "Error: --top-n-contigs must be a positive integer or 'all'."
         exit 1
     fi
+fi
+
+if ! [[ "$MIN_TRANSCRIPT_LENGTH" =~ ^[0-9]+$ ]]; then
+    echo "Error: --min-transcript-length must be a non-negative integer."
+    exit 1
+fi
+
+if ! [[ "$CPU_WORKERS" =~ ^[0-9]+$ ]] || [[ "$CPU_WORKERS" -lt 1 ]]; then
+    echo "Error: --cpu-workers must be a positive integer."
+    exit 1
 fi
 
 echo "================================================================="
@@ -114,8 +135,8 @@ case "$MODE" in
     HEAD_MODEL="zongyanliu/genecad_5-species"
     ;;
   animal)
-        BASE_MODEL="emarro/vcad2_small_experimental"
-    HEAD_MODEL="zongyanliu/genecad_vert"
+        BASE_MODEL="emarro/pcad2_vert_small"
+    HEAD_MODEL="Zong-Yan/genecad_vert"
     ;;
   *)
     echo "Error: Unknown mode '$MODE'. Valid options are: plant, animal"
@@ -153,6 +174,8 @@ echo "Output Dir:  $OUTPUT_DIR"
 echo "Species ID:  $SPECIES_ID"
 echo "Mode:        $MODE  ($BASE_MODEL + $HEAD_MODEL)"
 echo "Top contigs: $TOP_N_CONTIGS"
+echo "Min tx len:  $MIN_TRANSCRIPT_LENGTH"
+echo "CPU workers: $CPU_WORKERS"
 echo "================================================================="
 
 # =================================================================
@@ -205,19 +228,24 @@ if [[ "$BATCH_SIZE_ARG" == "auto" ]]; then
     echo "  > TIP: If you run into CUDA Out-Of-Memory (OOM) errors, lower this using '-b <size>'"
 fi
 
-MERGE_SCRIPT="scripts/merge_gff.py"
+MERGE_SCRIPT="$SCRIPT_DIR/scripts/merge_gff.py"
 TOKENIZER_PATH="$BASE_MODEL"
 DTYPE="bfloat16"
 
-if [[ -n "$VIRTUAL_ENV" && -x "$VIRTUAL_ENV/bin/python" ]]; then
+if [[ -n "${GENECAD_PYTHON:-}" && -x "$GENECAD_PYTHON" ]]; then
+    PYTHON="$GENECAD_PYTHON"
+elif [[ -n "$VIRTUAL_ENV" && -x "$VIRTUAL_ENV/bin/python" ]]; then
     PYTHON="$VIRTUAL_ENV/bin/python"
 elif [[ -x ".venv/bin/python" ]]; then
     VIRTUAL_ENV="$(pwd)/.venv"
     PYTHON=".venv/bin/python"
+elif [[ -x "$SCRIPT_DIR/.venv/bin/python" ]]; then
+    VIRTUAL_ENV="$SCRIPT_DIR/.venv"
+    PYTHON="$SCRIPT_DIR/.venv/bin/python"
 else
     PYTHON="uv run python"
 fi
-export PYTHONPATH=.
+export PYTHONPATH="$SCRIPT_DIR${PYTHONPATH:+:$PYTHONPATH}"
 
 mkdir -p "$OUTPUT_DIR"
 
@@ -345,7 +373,7 @@ process_chromosome() {
         echo "${LOG_PREFIX} [1/6] Skipping — sequences.zarr already exists"
     else
         echo "${LOG_PREFIX} [1/6] Extracting sequences..."
-        $PYTHON scripts/extract.py extract_fasta_file \
+        $PYTHON "$SCRIPT_DIR/scripts/extract.py" extract_fasta_file \
             --species-id "$SPECIES_ID" \
             --fasta-file "$INPUT_FILE" \
             --chrom-map "${CHR_ID}:${CHR_ID}" \
@@ -362,13 +390,13 @@ process_chromosome() {
         local attempt=0
         local max_attempts=20  # 20% reduction per step: ~20 steps to go from 256→1
         local success=0
-        local exit_code=0
         while [[ $attempt -lt $max_attempts ]]; do
+            local exit_code=0
             if [[ "$PREDICT_MODE" == "ddp" ]]; then
                 echo "${LOG_PREFIX} [2/6] Prediction via DDP (batch=${bs}/GPU, attempt $((attempt+1))/${max_attempts})..."
                 CUDA_VISIBLE_DEVICES="$GPU_LIST_STR" \
                 $PY_LAUNCHER \
-                    scripts/predict.py create_predictions \
+                    "$SCRIPT_DIR/scripts/predict.py" create_predictions \
                     --chromosome-id "$CHR_ID" \
                     --input "$PIPELINE_DIR/sequences.zarr" \
                     --output-dir "$PIPELINE_DIR/predictions.zarr" \
@@ -381,7 +409,7 @@ process_chromosome() {
                     --stride 4096 || exit_code=$?
             elif [[ "$PREDICT_MODE" == "ddp_slurm" ]]; then
                 echo "${LOG_PREFIX} [2/6] Prediction via SLURM distributed (batch=${bs}/GPU, attempt $((attempt+1))/${max_attempts})..."
-                $PY_LAUNCHER scripts/predict.py create_predictions \
+                $PY_LAUNCHER "$SCRIPT_DIR/scripts/predict.py" create_predictions \
                     --chromosome-id "$CHR_ID" \
                     --input "$PIPELINE_DIR/sequences.zarr" \
                     --output-dir "$PIPELINE_DIR/predictions.zarr" \
@@ -395,7 +423,7 @@ process_chromosome() {
             else
                 echo "${LOG_PREFIX} [2/6] Prediction on GPU ${gpu_id} (batch=${bs}, attempt $((attempt+1))/${max_attempts})..."
                 CUDA_VISIBLE_DEVICES="$gpu_id" \
-                $PY_LAUNCHER scripts/predict.py create_predictions \
+                $PY_LAUNCHER "$SCRIPT_DIR/scripts/predict.py" create_predictions \
                     --chromosome-id "$CHR_ID" \
                     --input "$PIPELINE_DIR/sequences.zarr" \
                     --output-dir "$PIPELINE_DIR/predictions.zarr" \
@@ -436,11 +464,12 @@ process_chromosome() {
         echo "${LOG_PREFIX} [3/6] Skipping — intervals.zarr already exists"
     else
         echo "${LOG_PREFIX} [3/6] Detecting intervals (Viterbi decoding)..."
-        $PYTHON scripts/predict.py detect_intervals \
+        $PYTHON "$SCRIPT_DIR/scripts/predict.py" detect_intervals \
             --input-dir "$PIPELINE_DIR/predictions.zarr" \
             --output "$PIPELINE_DIR/intervals.zarr" \
-            --decoding-methods "direct,viterbi" \
-            --remove-incomplete-features yes
+            --decoding-methods "viterbi" \
+            --remove-incomplete-features yes \
+            --domain "$MODE"
     fi
 
     # --- Step 4: Export Raw GFF ---
@@ -452,11 +481,12 @@ process_chromosome() {
         if [[ -n "$gpu_id" ]]; then
             export_tqdm_args=(--tqdm-position "$gpu_id")
         fi
-        $PYTHON scripts/predict.py export_gff \
+        $PYTHON "$SCRIPT_DIR/scripts/predict.py" export_gff \
             --input "$PIPELINE_DIR/intervals.zarr" \
             --output "$PIPELINE_DIR/predictions__raw.gff" \
-            --decoding-method direct \
-            --min-transcript-length 3 \
+            --decoding-method viterbi \
+            --min-transcript-length "$MIN_TRANSCRIPT_LENGTH" \
+            --cpu-workers "$CPU_WORKERS" \
             --strip-introns yes \
             "${export_tqdm_args[@]}"
     fi
@@ -467,7 +497,7 @@ process_chromosome() {
     if [[ -f "$PIPELINE_DIR/predictions__raw__feat_len_2.gff" ]]; then
         echo "${LOG_PREFIX}   Skipping feature-length filter — output already exists"
     else
-        $PYTHON scripts/gff.py filter_to_min_feature_length \
+        $PYTHON "$SCRIPT_DIR/scripts/gff.py" filter_to_min_feature_length \
             --input "$PIPELINE_DIR/predictions__raw.gff" \
             --output "$PIPELINE_DIR/predictions__raw__feat_len_2.gff" \
             --feature-types "five_prime_UTR,three_prime_UTR,CDS" \
@@ -477,7 +507,7 @@ process_chromosome() {
     if [[ -f "$PIPELINE_DIR/predictions__raw__feat_len_2__gene_len_30.gff" ]]; then
         echo "${LOG_PREFIX}   Skipping gene-length filter — output already exists"
     else
-        $PYTHON scripts/gff.py filter_to_min_gene_length \
+        $PYTHON "$SCRIPT_DIR/scripts/gff.py" filter_to_min_gene_length \
             --input "$PIPELINE_DIR/predictions__raw__feat_len_2.gff" \
             --output "$PIPELINE_DIR/predictions__raw__feat_len_2__gene_len_30.gff" \
             --min-length 30
@@ -486,7 +516,7 @@ process_chromosome() {
     if [[ -f "$PIPELINE_DIR/predictions_recall__raw.gff" ]]; then
         echo "${LOG_PREFIX}   Skipping valid-gene filter — output already exists"
     else
-        $PYTHON scripts/gff.py filter_to_valid_genes \
+        $PYTHON "$SCRIPT_DIR/scripts/gff.py" filter_to_valid_genes \
             --input "$PIPELINE_DIR/predictions__raw__feat_len_2__gene_len_30.gff" \
             --output "$PIPELINE_DIR/predictions_recall__raw.gff" \
             --require-utrs "no"
@@ -520,7 +550,10 @@ done <<< "$CHROM_IDS"
 # =================================================================
 
 echo "================================================================="
-if [[ -n "${SLURM_PROCID:-}" || -n "${SLURM_LOCALID:-}" || -n "${WORLD_SIZE:-}" ]] && [[ "${WORLD_SIZE:-1}" -gt 1 || -n "${SLURM_JOB_ID:-}" ]]; then
+# Only switch to SLURM distributed mode when the shell is actually running in
+# a multi-rank context. A bare SLURM allocation (SLURM_JOB_ID only) should keep
+# normal per-GPU scheduling, otherwise we serialize chromosomes and underutilize GPUs.
+if [[ "${WORLD_SIZE:-1}" -gt 1 || "${SLURM_NTASKS:-1}" -gt 1 || -n "${SLURM_PROCID:-}" || -n "${SLURM_LOCALID:-}" ]]; then
     PREDICT_MODE="ddp_slurm"
     DDP_BATCH="${GPU_BATCH_SIZES[${GPU_ARRAY[0]}]}"
     for gid in "${GPU_ARRAY[@]}"; do
@@ -627,7 +660,7 @@ echo "================================================================="
 if [[ -f "$FINAL_GFF" ]]; then
     echo "Skipping refinement — ${SPECIES_ID}_GeneCAD_final.gff already exists"
 else
-    $PYTHON scripts/refine.py \
+    $PYTHON "$SCRIPT_DIR/scripts/refine.py" \
         --gff "$RAW_GFF" \
         --genome "$INPUT_FILE" \
         --out "$FINAL_GFF" \

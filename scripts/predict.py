@@ -1,6 +1,7 @@
 import argparse
 import dataclasses
 import logging
+import multiprocessing as mp
 import os
 import tqdm
 from typing import Literal, Any
@@ -521,13 +522,18 @@ def warmup_triton(args: Args):
     if pad_value is None:
         pad_value = 0
 
-    # Warm up with a conservative probe batch so we exercise the kernels
-    # without risking an OOM on large auto-detected inference batch sizes.
-    warmup_batch_size = max(1, min(args.batch_size, 4))
-    if warmup_batch_size != args.batch_size:
-        logger.info(
-            f"[warmup] Capping probe batch from {args.batch_size} to {warmup_batch_size} for safety"
-        )
+    # Warm up with either the exact requested probe batch or a conservative
+    # capped batch when no explicit probe size was provided.
+    warmup_batch_size = getattr(args, "warmup_batch_size", None)
+    if warmup_batch_size is None:
+        warmup_batch_size = max(1, min(args.batch_size, 4))
+        if warmup_batch_size != args.batch_size:
+            logger.info(
+                f"[warmup] Capping probe batch from {args.batch_size} to {warmup_batch_size} for safety"
+            )
+    else:
+        warmup_batch_size = max(1, warmup_batch_size)
+        logger.info(f"[warmup] Using exact probe batch size {warmup_batch_size}")
 
     dummy = torch.full(
         (warmup_batch_size, args.window_size),
@@ -714,7 +720,8 @@ def _detect_intervals(
         logits: npt.ArrayLike, remove_incomplete_features: bool
     ) -> np.ndarray:
         transition_probs = token_transition_probs(
-            remove_incomplete_features=remove_incomplete_features
+            remove_incomplete_features=remove_incomplete_features,
+            domain=getattr(args, "domain", "plant")
         )
         if (
             transition_probs.columns.tolist()
@@ -928,9 +935,27 @@ def process_single_transcript(
         return None
 
 
+_TRANSCRIPT_WORKER_FEATURES: pd.DataFrame | None = None
+
+
+def _init_transcript_worker(all_features: pd.DataFrame) -> None:
+    global _TRANSCRIPT_WORKER_FEATURES
+    _TRANSCRIPT_WORKER_FEATURES = all_features
+
+
+def _process_single_transcript_worker(
+    transcript_row_dict: dict,
+) -> pd.DataFrame | None:
+    if _TRANSCRIPT_WORKER_FEATURES is None:
+        raise RuntimeError("Transcript worker was not initialized with features")
+    transcript_row = pd.Series(transcript_row_dict)
+    return process_single_transcript(transcript_row, _TRANSCRIPT_WORKER_FEATURES)
+
+
 def group_intervals_by_transcript(
     intervals: pd.DataFrame,
     min_transcript_length: int = 0,
+    cpu_workers: int = 1,
     tqdm_position: int | None = None,
     tqdm_desc: str | None = None,
 ) -> list[pd.DataFrame]:
@@ -943,6 +968,9 @@ def group_intervals_by_transcript(
         ``strand``, and ``entity_name`` columns.
     min_transcript_length : int, default 0
         Minimum transcript length in base pairs required to keep a transcript.
+    cpu_workers : int, default 1
+        Number of CPU worker processes for transcript grouping. A value of 1
+        preserves original single-process behavior.
     tqdm_position : int or None, default None
         Optional terminal row index for tqdm when multiple processes are
         writing progress bars concurrently.
@@ -978,19 +1006,47 @@ def group_intervals_by_transcript(
 
     feature_intervals = intervals[intervals["entity_name"] != "transcript"]
 
-    results = [
-        process_single_transcript(row, feature_intervals)
-        # pyrefly: ignore  # not-iterable
-        for _, row in tqdm.tqdm(
-            transcript_intervals.iterrows(),
-            total=len(transcript_intervals),
-            desc=tqdm_desc,
-            position=tqdm_position,
-            dynamic_ncols=True,
-            leave=False,
-            mininterval=0.1,
+    # Preserve deterministic transcript order so generated gene IDs and final
+    # GFF record ordering remain unchanged regardless of worker count.
+    transcript_rows = [row.to_dict() for _, row in transcript_intervals.iterrows()]
+
+    if cpu_workers <= 1 or len(transcript_rows) == 0:
+        results = [
+            process_single_transcript(pd.Series(row), feature_intervals)
+            for row in tqdm.tqdm(
+                transcript_rows,
+                total=len(transcript_rows),
+                desc=tqdm_desc,
+                position=tqdm_position,
+                dynamic_ncols=True,
+                leave=False,
+                mininterval=0.1,
+            )
+        ]
+    else:
+        logger.info(
+            f"Grouping transcripts with cpu_workers={cpu_workers} (order-preserving map)"
         )
-    ]
+        start_methods = mp.get_all_start_methods()
+        ctx_name = "fork" if "fork" in start_methods else start_methods[0]
+        ctx = mp.get_context(ctx_name)
+        with ctx.Pool(
+            processes=cpu_workers,
+            initializer=_init_transcript_worker,
+            initargs=(feature_intervals,),
+        ) as pool:
+            results = list(
+                tqdm.tqdm(
+                    pool.imap(_process_single_transcript_worker, transcript_rows),
+                    total=len(transcript_rows),
+                    desc=tqdm_desc,
+                    position=tqdm_position,
+                    dynamic_ncols=True,
+                    leave=False,
+                    mininterval=0.1,
+                )
+            )
+
     genes = [group for group in results if group is not None]
 
     logger.info(f"Grouped intervals into {len(genes)} transcripts/genes.")
@@ -1196,6 +1252,7 @@ def export_gff(args: Args):
     genes = group_intervals_by_transcript(
         intervals_table,
         args.min_transcript_length,
+        cpu_workers=args.cpu_workers,
         tqdm_position=tqdm_position,
         tqdm_desc=f"[GFF {chrom_id}]",
     )
@@ -1339,6 +1396,12 @@ def main():
         help="Batch size used during inference (must match actual run)",
     )
     warmup_parser.add_argument(
+        "--warmup-batch-size",
+        type=int,
+        default=None,
+        help="Exact batch size to probe during warmup (overrides conservative capping)",
+    )
+    warmup_parser.add_argument(
         "--dtype",
         type=str,
         default="bfloat16",
@@ -1390,6 +1453,13 @@ def main():
         default="no",
         help="Whether to remove incomplete features from predictions (default: no)",
     )
+    detect_parser.add_argument(
+        "--domain",
+        type=str,
+        choices=["plant", "animal"],
+        default="plant",
+        help="Biological domain for Viterbi transition priors (default: plant)",
+    )
 
     # Export GFF command
     gff_parser = subparsers.add_parser(
@@ -1424,6 +1494,12 @@ def main():
         type=int,
         default=None,
         help="Optional tqdm row to use for export when multiple jobs run in one terminal",
+    )
+    gff_parser.add_argument(
+        "--cpu-workers",
+        type=int,
+        default=1,
+        help="CPU worker processes for transcript grouping (default: 1)",
     )
 
     args = parser.parse_args()

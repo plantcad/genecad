@@ -1,23 +1,31 @@
+<div align="center">
+
+# GeneCAD: Foundation Model Genome Annotation
+
 ![](https://img.shields.io/badge/version-1.1.0-blue)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![CI](https://github.com/plantcad/genecad/actions/workflows/ci.yaml/badge.svg)](https://github.com/plantcad/genecad/actions/workflows/ci.yaml)
 [![DOI](https://zenodo.org/badge/DOI/10.1101/2025.10.31.685877.svg)](https://doi.org/10.1101/2025.10.31.685877)
 [![GeneCAD Downloads](https://img.shields.io/github/downloads/plantcad/genecad/total?label=GitHub%20downloads)](https://github.com/plantcad/genecad/releases)
 [![Hugging Face](https://img.shields.io/badge/🤗-Hugging%20Face-yellow.svg?style=flat)](https://huggingface.co/collections/plantcad/genecad-68c686ccf14312bf6de356de)
-[![Container](https://img.shields.io/badge/container-ghcr.io%2Fplantcad%2Fgenecad__v1-blue?logo=github)](https://github.com/orgs/plantcad/packages/container/package/genecad_v1)
-[![Pytorch](https://img.shields.io/badge/PyTorch-%23EE4C2C.svg?e&logo=PyTorch&logoColor=white)](https://pytorch.org/)
 
-# GeneCAD
+GeneCAD is an end-to-end genome annotation pipeline for plants and animals, powered by the DNA foundation model [PlantCAD2](https://doi.org/10.1101/2025.10.31.685877).
 
-GeneCAD is an end-to-end genome annotation pipeline for plants and animals, powered by the DNA foundation model [PlantCAD2](https://doi.org/10.1101/2025.10.31.685877). Unlike traditional annotation tools that rely on hand-crafted features or splice-site grammars, GeneCAD learns gene structure directly from sequence using a pretrained transformer encoder followed by a Viterbi decoder and protein-level refinement via [ReelProtein](https://onlinelibrary.wiley.com/doi/10.1111/tpj.70483). It requires no species-specific training data or external alignments, and supports single- or multi-GPU inference out of the box.
+*No species-specific training data. No external alignments. Out-of-the-box multi-GPU scalability.*
 
-GeneCAD supports both plant and animal genome annotation; use `-m plant` (default) or `-m animal` to select the model family.
+</div>
+
+Unlike traditional annotation tools that rely on hand-crafted features or splice-site grammars, GeneCAD learns gene structure directly from sequence using a pretrained transformer encoder followed by a Viterbi decoder and protein-level refinement via [ReelProtein](https://onlinelibrary.wiley.com/doi/10.1111/tpj.70483).
+
+GeneCAD natively supports both plant and animal genome annotation; use `-m plant` (default) or `-m animal` to select the model family.
 
 ## Contents
 
 - [Quick Start](#quick-start)
+- [Web Interface (No-Code)](#web-interface-no-code)
 - [Prerequisites](#prerequisites)
 - [Setup](#setup)
+  - [Using GitHub Release wheel](#using-github-release-wheel)
   - [Using uv](#using-uv)
   - [Using Docker](#using-docker)
   - [Using SLURM](#using-slurm)
@@ -43,22 +51,18 @@ GeneCAD supports both plant and animal genome annotation; use `-m plant` (defaul
 
 ## Quick Start
 
-Annotate a full plant genome in four commands. No configuration required — the example *Arabidopsis thaliana* TAIR12 sequence is downloaded automatically.
+Annotate a full plant genome in two commands. No configuration required — the example *Arabidopsis thaliana* TAIR12 sequence is downloaded automatically.
 
 ```bash
-# 1. Clone the repository
-git clone https://github.com/plantcad/genecad && cd genecad
+# 1. Create and activate a virtual environment
+uv venv
+source .venv/bin/activate
 
-# 2. Install uv and make it available in the current shell
-curl -LsSf https://astral.sh/uv/install.sh | sh
-export PATH="$HOME/.local/bin:$PATH"
+# 2. Install GeneCAD with the correct PyTorch CUDA index (mamba and causal-conv1d build from source — 3–30 min)
+uv pip install --extra-index-url https://download.pytorch.org/whl/cu128 "genecad[torch,mamba] @ https://github.com/plantcad/genecad/releases/download/v1.1.0/genecad-1.1.0-py3-none-any.whl"
 
-# 3. Install Python dependencies
-#    mamba and causal-conv1d build from source — this can take 3–30 minutes
-uv sync --extra torch --extra mamba
-
-# 4. Run the full prediction pipeline
-bash predict.sh
+# 3. Run the full prediction pipeline
+genecad predict
 ```
 
 > [!TIP]
@@ -72,7 +76,7 @@ bash predict.sh
 To annotate your own genome, pass your FASTA file and a few labels:
 
 ```bash
-bash predict.sh \
+genecad predict \
   -i /path/to/my_genome.fa \
   -o /path/to/output_dir \
   -s MySpecies \
@@ -82,8 +86,27 @@ bash predict.sh \
 **Use all available GPUs** to run chromosomes in parallel (significantly faster on large genomes):
 
 ```bash
-bash predict.sh --gpus all
+genecad predict --gpus all
 ```
+
+> [!NOTE]
+> Prefer cloning the repo? See [Using uv](#using-uv) in the Setup section — it gives the same result without the download count.
+
+---
+
+## Web Interface (No-Code)
+
+If you are not comfortable with the command line or are SSH'd into a remote computing cluster, GeneCAD provides a simple graphical web interface to run annotations directly from your browser.
+
+1. Ensure the optional `ui` dependency is installed (it installs `gradio`):
+   ```bash
+   uv pip install gradio
+   ```
+2. Launch the Web UI. If you are running this on a remote cluster without GUI access, use the `--share` flag to generate a secure, temporary public link:
+   ```bash
+   genecad ui --share
+   ```
+3. Look for a link like `https://xxxxx.gradio.live` in your terminal. Click it to open the GeneCAD UI on your local laptop, where you can upload your FASTA or enter the cluster path and click "Run GeneCAD Pipeline".
 
 ---
 
@@ -107,6 +130,7 @@ Choose the installation method that best fits your environment:
 
 | Method | Best for |
 |--------|----------|
+| [GitHub Release wheel](#using-github-release-wheel) | Stable install with download tracking |
 | [uv](#using-uv) | Local development and interactive use |
 | [Docker](#using-docker) | Reproducible runs, no local environment setup |
 | [SLURM](#using-slurm) | HPC / supercomputer clusters |
@@ -118,11 +142,31 @@ The recommended default for most users is `uv` (local run and development). Use 
 <summary>Need help choosing a setup path?</summary>
 
 - Choose **uv** if you want local development and easiest iteration.
+- Choose **GitHub Release wheel** if you want a stable install and accurate GitHub download counting.
 - Choose **Docker** if you want reproducibility and fewer environment issues.
 - Choose **SLURM** for HPC clusters with schedulers.
 - Choose **SkyPilot** for on-demand cloud GPUs without manual infra setup.
 
 </details>
+
+### Using GitHub Release wheel
+
+Install the stable pre-built wheel directly from GitHub Releases. This is the recommended method if you want the download counter badge to reflect installs.
+
+```bash
+uv tool install "genecad[torch,mamba] @ https://github.com/plantcad/genecad/releases/download/v1.1.0/genecad-1.1.0-py3-none-any.whl"
+```
+
+> [!TIP]
+> If you are installing into an existing active virtual environment, you can use `uv pip install` instead.
+
+For development or contributing, clone and sync dependencies instead:
+
+```bash
+git clone https://github.com/plantcad/genecad.git
+cd genecad
+uv sync --extra torch --extra mamba
+```
 
 ### Using uv
 
@@ -868,10 +912,10 @@ To reproduce the published GeneCAD results for *Juglans regia* (Walnut) chromoso
 mkdir -p data results
 
 # Download FASTA and reference GFF from Hugging Face
-hf download plantcad/genecad-dev \
+uv run huggingface-cli download plantcad/genecad-dev \
   data/plant/fasta/evaluation/Juglans_regia_chr1.fa.gz \
   --repo-type dataset --local-dir .
-hf download plantcad/genecad-dev \
+uv run huggingface-cli download plantcad/genecad-dev \
   data/plant/gff/evaluation/Juglans_regia_chr1.gff3 \
   --repo-type dataset --local-dir .
 
@@ -889,7 +933,7 @@ docker run --rm --gpus all \
 docker run --rm \
   -v $(pwd):/workspace -w /workspace \
   ghcr.io/plantcad/genecad_v1:latest \
-  uv run python scripts/evaluate.py \
+  python scripts/evaluate.py \
     --ref   data/plant/gff/evaluation/Juglans_regia_chr1.gff3 \
     --pred  results/Jregia_GeneCAD_final.gff \
     --fasta data/plant/fasta/evaluation/Juglans_regia_chr1.fa.gz \

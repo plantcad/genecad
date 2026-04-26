@@ -36,7 +36,15 @@ import os
 import shlex
 import subprocess
 import sys
+import gzip
 from collections import defaultdict
+
+
+def open_file(path, mode="rt"):
+    """Open a file, handling gzip compression automatically if the extension is .gz."""
+    if str(path).endswith(".gz"):
+        return gzip.open(path, mode)
+    return open(path, mode)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -55,7 +63,7 @@ def parse_attributes(attr_str):
 
 def parse_gff(path, ftypes):
     records = []
-    with open(path) as fh:
+    with open_file(path) as fh:
         for line in fh:
             if line.startswith("#"):
                 continue
@@ -398,7 +406,7 @@ def load_fasta(fasta_path):
     print(f"[INFO] Loading genome FASTA: {fasta_path}", file=sys.stderr)
     genome = {}
     chrom, seq = None, []
-    with open(fasta_path) as fh:
+    with open_file(fasta_path) as fh:
         for line in fh:
             line = line.strip()
             if line.startswith(">"):
@@ -755,7 +763,7 @@ def parse_busco_summary(summary_path, busco_dir=None):
     """Read BUSCO short_summary*.txt, then clean up the BUSCO directory."""
     result = {"path": summary_path, "lines": []}
     if summary_path and os.path.isfile(summary_path):
-        with open(summary_path) as fh:
+        with open_file(summary_path) as fh:
             result["lines"] = fh.readlines()
     if busco_dir:
         print(f"[INFO] BUSCO results kept in: {busco_dir}", file=sys.stderr)
