@@ -1,8 +1,13 @@
 import os
+import re
 import subprocess
 import urllib.request
 from pathlib import Path
 import gradio as gr
+
+_TQDM_RE = re.compile(
+    r'\[GPU\s+(\d+)[^\]]*\]:\s+(\d+)%\|.*?\|\s*(\d+)/(\d+)'
+)
 
 
 UI_CSS = """
@@ -217,29 +222,33 @@ UI_CSS = """
     border: none !important;
 }
 
-/* Checkbox (Standard Apple Toggle look) */
-.gene-qs-outer .form,
-.gene-qs-outer [class*="form"],
+/* Compact example checkbox row */
+.gene-qs-outer {
+    max-width: 1100px !important;
+    margin: 0 auto 0.5rem !important;
+    padding: 0 1.5rem !important;
+    gap: 0 !important;
+}
+.gene-qs-outer > *,
+.gene-qs-outer .gap {
+    gap: 0 !important;
+}
 #example_checkbox,
 .gradio-container #example_checkbox,
 .gradio-container .block.example-checkbox {
-    margin-top: 1rem !important;
+    margin: 0 !important;
+    padding: 0.4rem 0 !important;
     background: transparent !important;
     border: none !important;
     box-shadow: none !important;
+    min-height: unset !important;
 }
 #example_checkbox label.checkbox-container,
-.gradio-container #example_checkbox label.checkbox-container,
-.gradio-container .block.example-checkbox label.checkbox-container {
+.gradio-container #example_checkbox label.checkbox-container {
     background: transparent !important;
     border: none !important;
     box-shadow: none !important;
     padding: 0 !important;
-}
-.gradio-container input[type="checkbox"]:checked + span,
-.gradio-container input[type="checkbox"]:checked ~ span:not(:last-of-type) {
-    background: #34c759 !important; /* Apple Green */
-    border-color: #34c759 !important;
 }
 
 /* Logs */
@@ -349,6 +358,14 @@ UI_CSS = """
     background: rgba(10, 132, 255, 0.05) !important;
 }
 
+/* GFF preview box — fixed height, scrollable, monospace */
+#gff_preview_box textarea {
+    font-family: "SF Mono", ui-monospace, monospace !important;
+    font-size: 0.8rem !important;
+    line-height: 1.5 !important;
+    resize: none !important;
+}
+
 /* Accordion */
 .advanced-accordion {
     background: transparent !important;
@@ -425,15 +442,18 @@ def run_genecad(
     fasta_upload, fasta_path, output_dir, species, domain,
     top_n_contigs, min_transcript_length, cpu_workers,
     batch_size, gpus, use_example,
+    progress=gr.Progress(),
 ):
     input_file = fasta_path.strip() if fasta_path else ""
 
+    _nop = (gr.update(), gr.update(), gr.update(), gr.update())
+
     if use_example:
-        yield "Preparing built-in Arabidopsis chr5 example FASTA...\n", None
+        yield "Preparing built-in Arabidopsis chr5 example FASTA...\n", *_nop
         try:
             input_file = ensure_example_fasta()
         except Exception as exc:
-            yield f"Error: Failed to download example: {exc}", None
+            yield f"Error: Failed to download example: {exc}", *_nop
             return
         if not species or species == "MySpecies":
             species = "Athaliana"
@@ -444,16 +464,16 @@ def run_genecad(
         input_file = fasta_upload.name
 
     if not input_file:
-        yield "Error: Please provide a FASTA file, or enable the built-in example.", None
+        yield "Error: Please provide a FASTA file, or enable the built-in example.", *_nop
         return
     if not os.path.exists(input_file):
-        yield f"Error: Input file not found: {input_file}", None
+        yield f"Error: Input file not found: {input_file}", *_nop
         return
 
     script_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     predict_sh = os.path.join(script_dir, "predict.sh")
     if not os.path.exists(predict_sh):
-        yield f"Error: predict.sh not found at {predict_sh}", None
+        yield f"Error: predict.sh not found at {predict_sh}", *_nop
         return
 
     cmd = [
@@ -477,27 +497,55 @@ def run_genecad(
         text=True, bufsize=1,
     )
     log = f"--- GeneCAD Started ---\nCommand: {' '.join(cmd)}\n\n"
-    yield log, None
+    yield log, *_nop
 
+    gpu_progress: dict[str, float] = {}
     for line in iter(process.stdout.readline, ""):
+        # tqdm uses \r to overwrite lines in a TTY; split on both \r and \n
+        for segment in re.split(r'[\r\n]', line):
+            m = _TQDM_RE.search(segment)
+            if m:
+                gpu_id, pct_str, cur, total = m.group(1), m.group(2), m.group(3), m.group(4)
+                gpu_progress[gpu_id] = int(pct_str) / 100.0
+                avg = sum(gpu_progress.values()) / len(gpu_progress)
+                progress(avg, desc=f"GPU {gpu_id}: {cur}/{total} batches")
         log += line
-        yield log, None
+        yield log, *_nop
 
     process.stdout.close()
     rc = process.wait()
 
     if rc == 0:
         log += "\n\n--- Completed successfully ---\n"
-        out_path = os.path.join(output_dir, f"{species}_predictions")
-        log += f"Results: {out_path}\n"
-        files = [
-            os.path.join(out_path, f)
-            for f in os.listdir(out_path) if f.endswith(".gff")
-        ] if os.path.exists(out_path) else []
-        yield log, files
+        abs_out = os.path.abspath(output_dir)
+        log += f"Results: {abs_out}\n"
+        gff_files = [
+            os.path.join(abs_out, f)
+            for f in os.listdir(abs_out) if f.endswith(".gff")
+        ] if os.path.exists(abs_out) else []
+        paths = {}
+        raw_gff = next((f for f in gff_files if f.endswith("_raw.gff")), None)
+        final_gff = next((f for f in gff_files if f.endswith("_final.gff")), None)
+        if raw_gff:
+            paths["Raw GFF"] = raw_gff
+        if final_gff:
+            paths["Final GFF"] = final_gff
+        choices = list(paths.keys())
+        default = "Final GFF" if "Final GFF" in paths else (choices[0] if choices else None)
+        preview = ""
+        if default:
+            with open(paths[default]) as fh:
+                preview = "".join(fh.readline() for _ in range(100))
+        yield (
+            log,
+            preview,
+            paths,
+            gr.update(choices=choices, value=default, visible=bool(choices)),
+            gr.update(value=paths.get(default), visible=bool(default)),
+        )
     else:
         log += f"\n\n--- Failed (exit {rc}) ---\n"
-        yield log, None
+        yield log, *_nop
 
 
 def create_ui():
@@ -515,25 +563,6 @@ def create_ui():
         </div>
         """)
 
-        # ── Quick-start card (pure HTML, no Gradio components inside) ────
-        gr.HTML("""
-        <div class="gene-qs-outer">
-          <div class="gene-qs">
-            <div class="gene-qs-badge">New here? Start here</div>
-            <h3>Try the built-in Arabidopsis example</h3>
-            <p>
-              No file needed. Tick the checkbox below and click
-              <strong>Run GeneCAD</strong>.<br>
-              GeneCAD downloads a small <em>Arabidopsis thaliana</em>
-              chr&nbsp;5 genome (~30&nbsp;MB) and fills in
-              <strong>Species&nbsp;=&nbsp;Athaliana</strong>,
-              <strong>Model&nbsp;=&nbsp;Plant</strong>, and
-              <strong>Output&nbsp;=&nbsp;<code>genecad_result/Athaliana_predictions</code></strong>.
-              These values guide you on what format to use for your own run.
-            </p>
-          </div>
-        </div>
-        """)
 
         with gr.Row(elem_classes=["gene-qs-outer"]):
             use_example = gr.Checkbox(
@@ -661,13 +690,30 @@ def create_ui():
                 with gr.Group(elem_classes=["gene-card"]):
                     gr.HTML("""
                     <span class="gene-step">Results</span>
-                    <p class="gene-head">Download files</p>
+                    <p class="gene-head">GFF preview</p>
                     <p class="gene-hint">
-                      Annotation GFF files appear here when the pipeline finishes.
+                      Select a file to preview and download.
                     </p>
                     """)
-                    download_files = gr.File(
-                        label="Generated GFF files", interactive=False, elem_id="download_box"
+                    gff_paths_state = gr.State({})
+                    gff_radio = gr.Radio(
+                        choices=[],
+                        label="Select file",
+                        visible=False,
+                        interactive=True,
+                    )
+                    gff_preview = gr.Textbox(
+                        label="",
+                        show_label=False,
+                        lines=14,
+                        max_lines=14,
+                        interactive=False,
+                        elem_id="gff_preview_box",
+                    )
+                    download_btn = gr.DownloadButton(
+                        label="⬇  Download selected GFF",
+                        variant="primary",
+                        visible=False,
                     )
 
         # ── Events ────────────────────────────────────────────────────────
@@ -684,6 +730,14 @@ def create_ui():
             inputs=[use_example],
             outputs=[species, domain, output_dir, plant_btn, animal_btn],
         )
+        def _on_radio_change(choice, paths):
+            path = paths.get(choice, "")
+            preview = ""
+            if path and os.path.exists(path):
+                with open(path) as fh:
+                    preview = "".join(fh.readline() for _ in range(100))
+            return preview, gr.update(value=path or None, visible=bool(path))
+
         run_btn.click(
             fn=run_genecad,
             inputs=[
@@ -691,7 +745,12 @@ def create_ui():
                 top_n_contigs, min_transcript_length, cpu_workers,
                 batch_size, gpus, use_example,
             ],
-            outputs=[logs, download_files],
+            outputs=[logs, gff_preview, gff_paths_state, gff_radio, download_btn],
+        )
+        gff_radio.change(
+            fn=_on_radio_change,
+            inputs=[gff_radio, gff_paths_state],
+            outputs=[gff_preview, download_btn],
         )
 
     return demo

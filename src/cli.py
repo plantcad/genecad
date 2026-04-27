@@ -132,6 +132,7 @@ def cmd_ui(argv: list[str]) -> int:
         share=args.share,
         server_name="0.0.0.0",
         server_port=args.port,
+        allowed_paths=[os.getcwd()],
         theme=gr.themes.Default(
             primary_hue=gr.themes.colors.blue,
             secondary_hue=gr.themes.colors.gray,

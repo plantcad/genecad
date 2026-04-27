@@ -6,7 +6,6 @@
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![CI](https://github.com/plantcad/genecad/actions/workflows/ci.yaml/badge.svg)](https://github.com/plantcad/genecad/actions/workflows/ci.yaml)
 [![DOI](https://zenodo.org/badge/DOI/10.1101/2025.10.31.685877.svg)](https://doi.org/10.1101/2025.10.31.685877)
-[![Quick Start](https://img.shields.io/badge/Quick%20Start-1%20script-blue)](#quick-start)
 [![Web UI](https://img.shields.io/badge/Web%20UI-No--code-green)](#web-interface-no-code)
 [![Release Wheel](https://img.shields.io/badge/Install-GitHub%20Release%20Wheel-orange)](#using-github-release-wheel)
 [![GeneCAD Downloads](https://img.shields.io/github/downloads/plantcad/genecad/total?label=GitHub%20downloads)](https://github.com/plantcad/genecad/releases)
@@ -79,7 +78,7 @@ bash scripts/install_release.sh
 
 ### Step 2: Choose Your Interface
 
-#### 🌐 Option A: Web Interface (No-Code)
+#### Option A: Web Interface (No-Code)
 
 If you are not comfortable with the command line or are working on a remote cluster, use our visual web interface. It runs directly in your web browser.
 
@@ -95,7 +94,7 @@ If you are not comfortable with the command line or are working on a remote clus
    - Configure GPUs and CPU workers
 4. Click **"Run GeneCAD Pipeline"** to start and monitor progress directly from the web page.
 
-#### 💻 Option B: Command Line (CLI)
+#### Option B: Command Line (CLI)
 
 For users who prefer the terminal or want to process multiple genomes automatically.
 
@@ -160,15 +159,7 @@ If you need to install a specific historical version, you can override the defau
 
 ```bash
 # Example: Install a specific older version instead of the default
-GENECAD_VERSION=1.0.0 bash scripts/install_release.sh
-```
-
-For development or contributing, clone and sync dependencies instead:
-
-```bash
-git clone https://github.com/plantcad/genecad.git
-cd genecad
-uv sync --extra torch --extra mamba
+GENECAD_VERSION=0.1.0 bash scripts/install_release.sh
 ```
 
 ### Install from Source (Using uv)
@@ -208,7 +199,7 @@ causal-conv1d = { path = "path/to/causal_conv1d-1.5.0.post8-*.whl" }
 
 ### Using Docker
 
-The Docker image at `ghcr.io/plantcad/genecad_v0.1` bundles the complete runtime. Source code is **mounted at run time**, so changes you make to the cloned repository take effect immediately — no rebuild needed.
+The Docker image at `ghcr.io/plantcad/genecad_v1` bundles the complete runtime. Source code is **mounted at run time**, so changes you make to the cloned repository take effect immediately — no rebuild needed.
 
 > [!IMPORTANT]
 > If your environment requires a specific Docker alias (e.g., `docker1`), replace `docker` with your local command in the examples below.
@@ -218,18 +209,18 @@ The Docker image at `ghcr.io/plantcad/genecad_v0.1` bundles the complete runtime
 git clone https://github.com/plantcad/genecad && cd genecad
 
 # Pull the image
-docker pull ghcr.io/plantcad/genecad_v0.1:latest
+docker pull ghcr.io/plantcad/genecad_v1:latest
 
 # Run on the bundled Arabidopsis example (auto-downloads FASTA)
 docker run --rm --gpus all \
   -v $(pwd):/workspace -w /workspace \
-  ghcr.io/plantcad/genecad_v0.1:latest \
+  ghcr.io/plantcad/genecad_v1:latest \
   bash predict.sh
 
 # Annotate a custom plant genome
 docker run --rm --gpus all \
   -v $(pwd):/workspace -w /workspace \
-  ghcr.io/plantcad/genecad_v0.1:latest \
+  ghcr.io/plantcad/genecad_v1:latest \
   bash predict.sh \
     -i /workspace/data/my_plant.fa \
     -o /workspace/output \
@@ -239,7 +230,7 @@ docker run --rm --gpus all \
 # Annotate an animal genome
 docker run --rm --gpus all \
   -v $(pwd):/workspace -w /workspace \
-  ghcr.io/plantcad/genecad_v0.1:latest \
+  ghcr.io/plantcad/genecad_v1:latest \
   bash predict.sh \
     -i /workspace/data/my_animal.fa \
     -o /workspace/output \
@@ -326,10 +317,10 @@ sky launch --num-nodes 1 --yes --no-setup \
 
 # SSH into the node, pull the pre-built image, and run
 ssh genecad
-docker pull ghcr.io/plantcad/genecad_v0.1:latest
+docker pull ghcr.io/plantcad/genecad_v1:latest
 docker run --rm --gpus all \
   -v $(pwd):/workspace -w /workspace \
-  ghcr.io/plantcad/genecad_v0.1:latest \
+  ghcr.io/plantcad/genecad_v1:latest \
   bash predict.sh
 
 # Terminate the node when done
@@ -892,19 +883,19 @@ If you use GeneCAD in your research, please cite:
 ```bash
 # Build the image (requires Linux with Docker and NVIDIA drivers)
 sudo usermod -aG docker ubuntu && newgrp docker
-docker build --progress=plain --no-cache -t genecad:v1.0.1 .
+docker build --progress=plain --no-cache -t genecad:v0.1.0 .
 
 # Test the build — runs the full pipeline on the Arabidopsis example
-docker run --rm --gpus all -v $(pwd):/workspace -w /workspace genecad:v1.0.1 \
+docker run --rm --gpus all -v $(pwd):/workspace -w /workspace genecad:v0.1.0 \
   bash predict.sh
 
 # Publish to GitHub Container Registry
 # Requires a personal access token with "write:packages" stored in GHCR_TOKEN
-IMAGE=ghcr.io/plantcad/genecad_v0.1
-docker tag genecad:v1.0.1 $IMAGE:v1.0.1
-docker tag genecad:v1.0.1 $IMAGE:latest
+IMAGE=ghcr.io/plantcad/genecad_v1
+docker tag genecad:v0.1.0 $IMAGE:v0.1.0
+docker tag genecad:v0.1.0 $IMAGE:latest
 echo $GHCR_TOKEN | docker login ghcr.io -u <github-username> --password-stdin
-docker push $IMAGE:v1.0.1
+docker push $IMAGE:v0.1.0
 docker push $IMAGE:latest
 ```
 
@@ -926,7 +917,7 @@ uv run huggingface-cli download plantcad/genecad-dev \
 # Run the full GeneCAD pipeline
 docker run --rm --gpus all \
   -v $(pwd):/workspace -w /workspace \
-  ghcr.io/plantcad/genecad_v0.1:latest \
+  ghcr.io/plantcad/genecad_v1:latest \
   bash predict.sh \
     -i data/plant/fasta/evaluation/Juglans_regia_chr1.fa.gz \
     -o results \
@@ -936,7 +927,7 @@ docker run --rm --gpus all \
 # Evaluate against the reference annotation
 docker run --rm \
   -v $(pwd):/workspace -w /workspace \
-  ghcr.io/plantcad/genecad_v0.1:latest \
+  ghcr.io/plantcad/genecad_v1:latest \
   python scripts/evaluate.py \
     --ref   data/plant/gff/evaluation/Juglans_regia_chr1.gff3 \
     --pred  results/Jregia_GeneCAD_final.gff \
