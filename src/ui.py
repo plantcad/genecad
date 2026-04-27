@@ -1,238 +1,214 @@
 import os
-import re
 import subprocess
 import urllib.request
 from pathlib import Path
 import gradio as gr
 
-_TQDM_RE = re.compile(
-    r'\[GPU\s+(\d+)[^\]]*\]:\s+(\d+)%\|.*?\|\s*(\d+)/(\d+)'
-)
-
 
 UI_CSS = """
-/* ══════════════════════════════════════════════════════
-   GeneCAD — Ultimate Apple-style UI
-   ══════════════════════════════════════════════════════ */
+/* ═══════════════════════════════════════
+   GeneCAD — Modern Clean UI
+   Palette: Slate + Indigo
+   ═══════════════════════════════════════ */
 
-/* Force Apple Fonts */
+/* ── Fonts ── */
 .gradio-container {
-    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Helvetica Neue", Helvetica, Arial, sans-serif !important;
+    font-family: "Inter", -apple-system, BlinkMacSystemFont,
+                 "Segoe UI", sans-serif !important;
 }
 
-/* Light Mode Variables (Apple) */
+/* ── Light mode tokens ── */
 .gradio-container {
-    --body-background-fill: #f5f5f7 !important;
-    --background-fill-primary: #ffffff !important;
-    --background-fill-secondary: #f2f2f7 !important;
-    --block-background-fill: #ffffff !important;
-    --card-bg: #ffffff !important;
-    --block-border-width: 1px !important;
-    --block-shadow: 0 4px 24px rgba(0,0,0,0.04) !important;
-    --block-radius: 20px !important;
-    --input-background-fill: #f2f2f7 !important;
-    --input-border-width: 0px !important;
-    --input-radius: 12px !important;
-    --color-accent: #0071e3 !important;
-    --body-text-color: #1d1d1f !important;
-    --body-text-color-subdued: #86868b !important;
+    --gc-bg:        #F8FAFC;
+    --gc-card:      #FFFFFF;
+    --gc-input:     #F1F5F9;
+    --gc-border:    rgba(148, 163, 184, 0.25);
+    --gc-text:      #0F172A;
+    --gc-muted:     #64748B;
+    --gc-accent:    #6366F1;
+    --gc-accent-h:  #4F46E5;
+    --gc-accent-bg: rgba(99, 102, 241, 0.08);
+    --gc-term-bg:   #0F172A;
+    --gc-term-fg:   #86EFAC;
+
+    --body-background-fill:   var(--gc-bg)    !important;
+    --background-fill-primary: var(--gc-card) !important;
+    --background-fill-secondary: var(--gc-input) !important;
+    --block-background-fill:  var(--gc-card)  !important;
+    --block-border-width:     1px             !important;
+    --block-border-color:     var(--gc-border)!important;
+    --block-shadow:           0 1px 3px rgba(0,0,0,0.06), 0 4px 16px rgba(0,0,0,0.04) !important;
+    --block-radius:           16px            !important;
+    --input-background-fill:  var(--gc-input) !important;
+    --input-border-width:     1px             !important;
+    --input-radius:           10px            !important;
+    --color-accent:           var(--gc-accent)!important;
+    --body-text-color:        var(--gc-text)  !important;
+    --body-text-color-subdued:var(--gc-muted) !important;
 }
 
-/* Dark Mode Variables (Apple) */
+/* ── Dark mode tokens ── */
 .dark, .dark .gradio-container {
-    --body-background-fill: #000000 !important;
-    --background-fill-primary: #000000 !important;
-    --background-fill-secondary: #1c1c1e !important;
-    --block-background-fill: #1c1c1e !important;
-    --card-bg: #1c1c1e !important;
-    --block-border-width: 1px !important;
-    --block-border-color: rgba(255,255,255,0.08) !important;
-    --block-shadow: 0 4px 24px rgba(0,0,0,0.4) !important;
-    --input-background-fill: #2c2c2e !important;
-    --input-border-width: 0px !important;
-    --color-accent: #0a84ff !important;
-    --body-text-color: #f5f5f7 !important;
-    --body-text-color-subdued: #86868b !important;
+    --gc-bg:        #0F172A;
+    --gc-card:      #1E293B;
+    --gc-input:     #0F172A;
+    --gc-border:    rgba(148, 163, 184, 0.12);
+    --gc-text:      #F1F5F9;
+    --gc-muted:     #94A3B8;
+    --gc-accent:    #818CF8;
+    --gc-accent-h:  #6366F1;
+    --gc-accent-bg: rgba(129, 140, 248, 0.12);
+    --gc-term-bg:   #020617;
+    --gc-term-fg:   #86EFAC;
+
+    --body-background-fill:   var(--gc-bg)    !important;
+    --background-fill-primary: var(--gc-card) !important;
+    --background-fill-secondary: var(--gc-input) !important;
+    --block-background-fill:  var(--gc-card)  !important;
+    --block-border-color:     var(--gc-border)!important;
+    --block-shadow:           none            !important;
+    --input-background-fill:  var(--gc-input) !important;
+    --color-accent:           var(--gc-accent)!important;
+    --body-text-color:        var(--gc-text)  !important;
+    --body-text-color-subdued:var(--gc-muted) !important;
 }
 
-/* Base typography */
-.gradio-container * {
-    box-sizing: border-box;
-}
+/* ── Base ── */
+.gradio-container * { box-sizing: border-box; }
 
-/* Hero Section */
+/* ── Hero ── */
 .gene-hero {
     text-align: center;
-    padding: 4rem 1.5rem 2rem;
+    padding: 3rem 1.5rem 1.5rem;
     max-width: 1100px;
     margin: 0 auto;
 }
 .gene-eyebrow {
-    display: inline-block;
-    padding: 0.35rem 1rem;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.3rem 0.9rem;
     border-radius: 999px;
-    background: rgba(0, 113, 227, 0.1);
-    color: #0071e3;
-    font-size: 0.75rem;
-    font-weight: 700;
-    letter-spacing: 0.12em;
-    text-transform: uppercase;
-    margin-bottom: 1rem;
-}
-.dark .gene-eyebrow {
-    background: rgba(10, 132, 255, 0.2);
-    color: #0a84ff;
-}
-.gene-title {
-    margin: 0 0 0.8rem 0;
-    font-size: clamp(2.5rem, 6vw, 4.5rem);
-    font-weight: 800;
-    letter-spacing: -0.04em;
-    line-height: 1.05;
-}
-.gene-subtitle {
-    font-size: 1.15rem;
-    line-height: 1.6;
-    color: var(--body-text-color-subdued);
-    max-width: 54rem;
-    margin: 0 auto;
-}
-
-/* Quick-start Card */
-.gene-qs-outer {
-    max-width: 1100px;
-    margin: 0 auto 1.5rem;
-    padding: 0 1.5rem;
-}
-
-.gene-qs-badge {
-    display: inline-block;
-    background: #34c759;
-    color: #ffffff;
-    font-size: 0.7rem;
+    background: var(--gc-accent-bg);
+    color: var(--gc-accent);
+    font-size: 0.72rem;
     font-weight: 700;
     letter-spacing: 0.1em;
     text-transform: uppercase;
-    padding: 0.25rem 0.6rem;
-    border-radius: 999px;
-    margin-bottom: 0.6rem;
+    margin-bottom: 1rem;
+    border: 1px solid var(--gc-border);
 }
-.dark .gene-qs-badge {
-    background: #32d74b;
-    color: #000000;
+.gene-title {
+    margin: 0 0 0.75rem;
+    font-size: clamp(2rem, 5vw, 3.5rem);
+    font-weight: 800;
+    letter-spacing: -0.03em;
+    line-height: 1.08;
+    color: var(--gc-text);
+    background: linear-gradient(135deg, var(--gc-text) 60%, var(--gc-accent));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
 }
-.gene-qs h3 {
-    margin: 0 0 0.4rem 0;
-    font-size: 1.1rem;
-    font-weight: 600;
-}
-.gene-qs p {
-    margin: 0;
-    font-size: 0.9rem;
-    color: var(--body-text-color-subdued);
-    line-height: 1.6;
-}
-.gene-qs code {
-    font-family: "SF Mono", ui-monospace, monospace;
-    background: var(--input-background-fill);
-    padding: 0.15em 0.4em;
-    border-radius: 6px;
-    font-size: 0.85em;
+.gene-subtitle {
+    font-size: 1.05rem;
+    line-height: 1.65;
+    color: var(--gc-muted);
+    max-width: 50rem;
+    margin: 0 auto;
 }
 
-/* Group Cards */
+/* ── Cards ── */
 .gradio-container .group,
 .gene-card {
-    background: var(--card-bg) !important;
-    border-radius: 20px !important;
-    border: 1px solid var(--block-border-color) !important;
-    box-shadow: 0 4px 20px rgba(0,0,0,0.03) !important;
+    background: var(--gc-card) !important;
+    border-radius: 16px !important;
+    border: 1px solid var(--gc-border) !important;
+    box-shadow: var(--block-shadow) !important;
     overflow: hidden !important;
 }
 .gradio-container .group .form,
 .gradio-container .group [class*="form"],
-.gene-card .form,
-.gene-card [class*="form"],
+.gene-card .form, .gene-card [class*="form"],
 .gene-card .block {
     background: transparent !important;
     border: none !important;
     box-shadow: none !important;
 }
 
-/* Step Labels */
+/* ── Section labels ── */
 .gene-step {
     display: block;
-    font-size: 0.7rem;
+    font-size: 0.68rem;
     font-weight: 700;
     letter-spacing: 0.12em;
     text-transform: uppercase;
-    color: var(--color-accent);
-    margin: 0 0 0.25rem 0;
+    color: var(--gc-accent);
+    margin: 0 0 0.2rem;
 }
 .gene-head {
-    font-size: 1.15rem;
-    font-weight: 600;
-    letter-spacing: -0.01em;
-    margin: 0 0 0.3rem 0;
-    color: var(--body-text-color);
+    font-size: 1.1rem;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    margin: 0 0 0.25rem;
+    color: var(--gc-text);
 }
 .gene-hint {
-    font-size: 0.9rem;
-    color: var(--body-text-color-subdued);
-    margin: 0 0 1rem 0;
-    line-height: 1.5;
+    font-size: 0.875rem;
+    color: var(--gc-muted);
+    margin: 0 0 1rem;
+    line-height: 1.55;
 }
 
-/* Layout */
+/* ── Layout ── */
 .gene-layout {
     max-width: 1100px;
     margin: 0 auto;
     padding: 0 1.5rem 3rem;
 }
 
-/* Inputs and Forms */
+/* ── Inputs ── */
 .gradio-container input[type="text"],
 .gradio-container input[type="number"],
 .gradio-container textarea {
-    background: var(--input-background-fill) !important;
-    border: 2px solid transparent !important;
+    background: var(--gc-input) !important;
+    border: 1px solid var(--gc-border) !important;
     border-radius: var(--input-radius) !important;
-    color: var(--body-text-color) !important;
-    font-size: 0.95rem !important;
-    transition: all 0.2s ease !important;
-    padding: 0.75rem 1rem !important;
+    color: var(--gc-text) !important;
+    font-size: 0.925rem !important;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease !important;
+    padding: 0.65rem 0.9rem !important;
     box-shadow: none !important;
 }
 .gradio-container input[type="text"]:focus,
 .gradio-container input[type="number"]:focus,
 .gradio-container textarea:focus {
-    border-color: var(--color-accent) !important;
-    background: var(--block-background-fill) !important;
+    border-color: var(--gc-accent) !important;
+    box-shadow: 0 0 0 3px var(--gc-accent-bg) !important;
+    outline: none !important;
 }
 
-/* Hide Gradio's ugly label backgrounds */
+/* ── Labels ── */
 .gradio-container .label-wrap > span,
 .gradio-container .block > label > span:first-child {
     background: transparent !important;
-    color: var(--body-text-color-subdued) !important;
-    font-size: 0.85rem !important;
-    font-weight: 500 !important;
+    color: var(--gc-muted) !important;
+    font-size: 0.8rem !important;
+    font-weight: 600 !important;
+    letter-spacing: 0.02em !important;
     padding: 0 !important;
-    margin-bottom: 0.4rem !important;
+    margin-bottom: 0.35rem !important;
     border: none !important;
 }
 
-/* Compact example checkbox row */
+/* ── Compact checkbox row ── */
 .gene-qs-outer {
     max-width: 1100px !important;
     margin: 0 auto 0.5rem !important;
     padding: 0 1.5rem !important;
     gap: 0 !important;
 }
-.gene-qs-outer > *,
-.gene-qs-outer .gap {
-    gap: 0 !important;
-}
+.gene-qs-outer > *, .gene-qs-outer .gap { gap: 0 !important; }
 #example_checkbox,
 .gradio-container #example_checkbox,
 .gradio-container .block.example-checkbox {
@@ -251,145 +227,120 @@ UI_CSS = """
     padding: 0 !important;
 }
 
-/* Logs */
+/* ── Terminal log ── */
 #logs_box textarea {
-    background: #000000 !important;
-    color: #32d74b !important; /* Terminal green */
-    border-radius: 12px !important;
-    font-family: "SF Mono", ui-monospace, monospace !important;
-    font-size: 0.85rem !important;
-    line-height: 1.6 !important;
+    background: var(--gc-term-bg) !important;
+    color: var(--gc-term-fg) !important;
+    border-radius: 10px !important;
+    border: 1px solid rgba(134,239,172,0.15) !important;
+    font-family: "JetBrains Mono", "Fira Code", ui-monospace, monospace !important;
+    font-size: 0.82rem !important;
+    line-height: 1.65 !important;
     padding: 1rem !important;
 }
-.light #logs_box textarea {
-    background: #f2f2f7 !important;
-    color: #1d1d1f !important;
-}
 
-/* Buttons */
+/* ── Buttons ── */
 .gradio-container button {
-    border-radius: 99px !important;
+    border-radius: 10px !important;
     font-weight: 600 !important;
-    font-size: 0.95rem !important;
-    min-height: 44px !important;
-    transition: all 0.2s ease !important;
+    font-size: 0.9rem !important;
+    min-height: 42px !important;
+    transition: all 0.15s ease !important;
     border: none !important;
+    letter-spacing: 0.01em !important;
 }
 .gradio-container button.primary {
-    background: var(--color-accent) !important;
-    color: #ffffff !important;
+    background: var(--gc-accent) !important;
+    color: #fff !important;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.1), 0 0 0 0 var(--gc-accent-bg) !important;
 }
 .gradio-container button.primary:hover {
-    filter: brightness(1.1) !important;
-    transform: scale(1.02) !important;
+    background: var(--gc-accent-h) !important;
+    box-shadow: 0 4px 12px rgba(99,102,241,0.35) !important;
+    transform: translateY(-1px) !important;
 }
-.gradio-container button.primary:active {
-    transform: scale(0.98) !important;
-}
+.gradio-container button.primary:active { transform: translateY(0) !important; }
 .gradio-container button.secondary {
-    background: var(--input-background-fill) !important;
-    color: var(--body-text-color) !important;
+    background: var(--gc-input) !important;
+    color: var(--gc-text) !important;
+    border: 1px solid var(--gc-border) !important;
 }
 .gradio-container button.secondary:hover {
-    filter: brightness(0.95) !important;
-    transform: scale(1.02) !important;
-}
-.dark .gradio-container button.secondary:hover {
-    filter: brightness(1.2) !important;
-}
-.gradio-container button.secondary:active {
-    transform: scale(0.98) !important;
+    border-color: var(--gc-accent) !important;
+    color: var(--gc-accent) !important;
+    background: var(--gc-accent-bg) !important;
 }
 #run_pipeline {
-    margin-top: 1.5rem !important;
-    min-height: 52px !important;
-    font-size: 1.05rem !important;
+    margin-top: 1.25rem !important;
+    min-height: 50px !important;
+    font-size: 1rem !important;
+    border-radius: 12px !important;
+    width: 100% !important;
 }
 
-/* Tiny buttons */
+/* ── Tiny toolbar buttons ── */
 .gradio-container .textbox button,
-.gradio-container [data-testid="textbox"] button,
-.gradio-container .copy-btn {
-    border-radius: 8px !important;
-    background: var(--input-background-fill) !important;
-    min-height: 32px !important;
-    min-width: 32px !important;
+.gradio-container [data-testid="textbox"] button {
+    border-radius: 6px !important;
+    background: var(--gc-input) !important;
+    border: 1px solid var(--gc-border) !important;
+    min-height: 28px !important;
+    min-width: 28px !important;
 }
 
-/* File Upload */
-#upload_box, #download_box,
-.gradio-container .file-preview,
+/* ── File upload ── */
+#upload_box,
 .gradio-container [data-testid="file-upload"],
-.gradio-container .upload-container,
-#upload_box .upload-container,
-#upload_box [style*="dashed"],
-#download_box [style*="dashed"] {
-    background: var(--input-background-fill) !important;
-    border: none !important;
-    border-style: none !important;
-    border-width: 0px !important;
-    border-radius: 16px !important;
-    transition: all 0.2s ease !important;
+.gradio-container .upload-container {
+    background: var(--gc-input) !important;
+    border: 1px dashed var(--gc-border) !important;
+    border-radius: 12px !important;
+    transition: border-color 0.15s ease, background 0.15s ease !important;
 }
-.gradio-container .border-dashed {
-    border: none !important;
-    border-style: none !important;
-}
+.gradio-container .border-dashed { border-style: dashed !important; }
 #upload_box *,
-#download_box *,
 .gradio-container [data-testid="file-upload"] *,
-.gradio-container .file-preview *,
 .gradio-container .upload-container * {
-    border-style: none !important;
     border-color: transparent !important;
 }
 .gradio-container [data-testid="file-upload"] button,
-.gradio-container [data-testid="file-upload"] > div {
-    border: none !important;
-}
-#upload_box:hover, #download_box:hover,
+.gradio-container [data-testid="file-upload"] > div { border: none !important; }
+#upload_box:hover,
 .gradio-container [data-testid="file-upload"]:hover,
 .gradio-container .upload-container:hover {
-    background: rgba(0, 113, 227, 0.05) !important;
-}
-.dark #upload_box:hover, .dark #download_box:hover,
-.dark .gradio-container [data-testid="file-upload"]:hover,
-.dark .gradio-container .upload-container:hover {
-    background: rgba(10, 132, 255, 0.05) !important;
+    border-color: var(--gc-accent) !important;
+    background: var(--gc-accent-bg) !important;
 }
 
-/* GFF preview box — fixed height, scrollable, monospace */
+/* ── GFF preview ── */
 #gff_preview_box textarea {
-    font-family: "SF Mono", ui-monospace, monospace !important;
-    font-size: 0.8rem !important;
-    line-height: 1.5 !important;
+    font-family: "JetBrains Mono", "Fira Code", ui-monospace, monospace !important;
+    font-size: 0.78rem !important;
+    line-height: 1.6 !important;
     resize: none !important;
 }
 
-/* Accordion */
-.advanced-accordion {
-    background: transparent !important;
-    border: none !important;
-}
+/* ── Accordion ── */
+.advanced-accordion { background: transparent !important; border: none !important; }
 .gradio-container details.advanced-accordion,
 .advanced-accordion details {
-    background: var(--input-background-fill) !important;
-    border-radius: 14px !important;
-    border: none !important;
-    margin-top: 1rem !important;
-}
-/* Quick Start Section */
-.gene-qs {
-    background: var(--card-bg) !important;
-    border-radius: 20px !important;
-    padding: 1.5rem !important;
-    border: 1px solid var(--block-border-color) !important;
+    background: var(--gc-input) !important;
+    border-radius: 10px !important;
+    border: 1px solid var(--gc-border) !important;
+    margin-top: 0.75rem !important;
 }
 .gradio-container details summary {
-    padding: 1rem 1.2rem !important;
-    font-size: 0.95rem !important;
+    padding: 0.75rem 1rem !important;
+    font-size: 0.875rem !important;
     font-weight: 600 !important;
-    color: var(--body-text-color) !important;
+    color: var(--gc-text) !important;
+}
+
+/* ── Plant/Animal pill buttons ── */
+#plant_btn, #animal_btn {
+    border-radius: 10px !important;
+    min-height: 40px !important;
+    font-size: 0.875rem !important;
 }
 """
 
@@ -418,8 +369,8 @@ def on_use_example_change(use_ex: bool):
             gr.update(value="Athaliana"),
             "plant",
             gr.update(value="genecad_result/Athaliana_predictions"),
-            gr.update(variant="primary"),    # plant_btn active
-            gr.update(variant="secondary"),  # animal_btn inactive
+            gr.update(variant="primary"),
+            gr.update(variant="secondary"),
         )
     return (
         gr.update(value="MySpecies"),
@@ -442,7 +393,6 @@ def run_genecad(
     fasta_upload, fasta_path, output_dir, species, domain,
     top_n_contigs, min_transcript_length, cpu_workers,
     batch_size, gpus, use_example,
-    progress=gr.Progress(),
 ):
     input_file = fasta_path.strip() if fasta_path else ""
 
@@ -499,16 +449,7 @@ def run_genecad(
     log = f"--- GeneCAD Started ---\nCommand: {' '.join(cmd)}\n\n"
     yield log, *_nop
 
-    gpu_progress: dict[str, float] = {}
     for line in iter(process.stdout.readline, ""):
-        # tqdm uses \r to overwrite lines in a TTY; split on both \r and \n
-        for segment in re.split(r'[\r\n]', line):
-            m = _TQDM_RE.search(segment)
-            if m:
-                gpu_id, pct_str, cur, total = m.group(1), m.group(2), m.group(3), m.group(4)
-                gpu_progress[gpu_id] = int(pct_str) / 100.0
-                avg = sum(gpu_progress.values()) / len(gpu_progress)
-                progress(avg, desc=f"GPU {gpu_id}: {cur}/{total} batches")
         log += line
         yield log, *_nop
 
@@ -563,7 +504,6 @@ def create_ui():
         </div>
         """)
 
-
         with gr.Row(elem_classes=["gene-qs-outer"]):
             use_example = gr.Checkbox(
                 label="Use built-in Arabidopsis chr5 example — auto-fills the form below",
@@ -573,16 +513,12 @@ def create_ui():
             )
 
         # ── Main two-column layout ─────────────────────────────────────────
-        # NOTE: no gr.HTML div wrappers around Gradio components.
-        # The Column blocks themselves become white cards via
-        # --block-background-fill: #ffffff and --block-border-color.
         with gr.Row(equal_height=False, elem_classes=["gene-layout"]):
 
             # ── Left column: settings ──────────────────────────────────────
             with gr.Column(scale=1):
 
                 with gr.Group(elem_classes=["gene-card"]):
-                    # Step 1
                     gr.HTML("""
                     <span class="gene-step">Step 1</span>
                     <p class="gene-head">Input genome</p>
@@ -598,7 +534,6 @@ def create_ui():
                     fasta_upload = gr.File(label="Upload FASTA", elem_id="upload_box")
 
                 with gr.Group(elem_classes=["gene-card"]):
-                    # Step 2
                     gr.HTML("""
                     <span class="gene-step">Step 2</span>
                     <p class="gene-head">Configure the run</p>
@@ -617,7 +552,6 @@ def create_ui():
                     </p>
                     """)
 
-                    # Plant / Animal
                     domain = gr.State("plant")
                     with gr.Row():
                         plant_btn = gr.Button(
@@ -730,6 +664,7 @@ def create_ui():
             inputs=[use_example],
             outputs=[species, domain, output_dir, plant_btn, animal_btn],
         )
+
         def _on_radio_change(choice, paths):
             path = paths.get(choice, "")
             preview = ""
