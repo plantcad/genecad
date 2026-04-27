@@ -105,10 +105,6 @@ UI_CSS = """
     letter-spacing: -0.03em;
     line-height: 1.08;
     color: var(--gc-text);
-    background: linear-gradient(135deg, var(--gc-text) 60%, var(--gc-accent));
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    background-clip: text;
 }
 .gene-subtitle {
     font-size: 1.05rem;
@@ -207,8 +203,10 @@ UI_CSS = """
     margin: 0 auto 0.25rem !important;
     padding: 0 1.5rem !important;
     gap: 0 !important;
+    overflow: hidden !important;
 }
 .gene-qs-outer > *, .gene-qs-outer .gap { gap: 0 !important; }
+.gene-qs-outer > div { width: 100% !important; min-width: 0 !important; }
 #example_checkbox,
 .gradio-container #example_checkbox,
 .gradio-container .block.example-checkbox {
