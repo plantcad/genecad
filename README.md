@@ -2,7 +2,7 @@
 
 # GeneCAD: Foundation Model Genome Annotation
 
-![](https://img.shields.io/badge/version-1.1.0-blue)
+![](https://img.shields.io/badge/version-0.1.0-blue)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![CI](https://github.com/plantcad/genecad/actions/workflows/ci.yaml/badge.svg)](https://github.com/plantcad/genecad/actions/workflows/ci.yaml)
 [![DOI](https://zenodo.org/badge/DOI/10.1101/2025.10.31.685877.svg)](https://doi.org/10.1101/2025.10.31.685877)
@@ -208,7 +208,7 @@ causal-conv1d = { path = "path/to/causal_conv1d-1.5.0.post8-*.whl" }
 
 ### Using Docker
 
-The Docker image at `ghcr.io/plantcad/genecad_v1` bundles the complete runtime. Source code is **mounted at run time**, so changes you make to the cloned repository take effect immediately — no rebuild needed.
+The Docker image at `ghcr.io/plantcad/genecad_v0.1` bundles the complete runtime. Source code is **mounted at run time**, so changes you make to the cloned repository take effect immediately — no rebuild needed.
 
 > [!IMPORTANT]
 > If your environment requires a specific Docker alias (e.g., `docker1`), replace `docker` with your local command in the examples below.
@@ -218,18 +218,18 @@ The Docker image at `ghcr.io/plantcad/genecad_v1` bundles the complete runtime. 
 git clone https://github.com/plantcad/genecad && cd genecad
 
 # Pull the image
-docker pull ghcr.io/plantcad/genecad_v1:latest
+docker pull ghcr.io/plantcad/genecad_v0.1:latest
 
 # Run on the bundled Arabidopsis example (auto-downloads FASTA)
 docker run --rm --gpus all \
   -v $(pwd):/workspace -w /workspace \
-  ghcr.io/plantcad/genecad_v1:latest \
+  ghcr.io/plantcad/genecad_v0.1:latest \
   bash predict.sh
 
 # Annotate a custom plant genome
 docker run --rm --gpus all \
   -v $(pwd):/workspace -w /workspace \
-  ghcr.io/plantcad/genecad_v1:latest \
+  ghcr.io/plantcad/genecad_v0.1:latest \
   bash predict.sh \
     -i /workspace/data/my_plant.fa \
     -o /workspace/output \
@@ -239,7 +239,7 @@ docker run --rm --gpus all \
 # Annotate an animal genome
 docker run --rm --gpus all \
   -v $(pwd):/workspace -w /workspace \
-  ghcr.io/plantcad/genecad_v1:latest \
+  ghcr.io/plantcad/genecad_v0.1:latest \
   bash predict.sh \
     -i /workspace/data/my_animal.fa \
     -o /workspace/output \
@@ -326,10 +326,10 @@ sky launch --num-nodes 1 --yes --no-setup \
 
 # SSH into the node, pull the pre-built image, and run
 ssh genecad
-docker pull ghcr.io/plantcad/genecad_v1:latest
+docker pull ghcr.io/plantcad/genecad_v0.1:latest
 docker run --rm --gpus all \
   -v $(pwd):/workspace -w /workspace \
-  ghcr.io/plantcad/genecad_v1:latest \
+  ghcr.io/plantcad/genecad_v0.1:latest \
   bash predict.sh
 
 # Terminate the node when done
@@ -900,7 +900,7 @@ docker run --rm --gpus all -v $(pwd):/workspace -w /workspace genecad:v1.0.1 \
 
 # Publish to GitHub Container Registry
 # Requires a personal access token with "write:packages" stored in GHCR_TOKEN
-IMAGE=ghcr.io/plantcad/genecad_v1
+IMAGE=ghcr.io/plantcad/genecad_v0.1
 docker tag genecad:v1.0.1 $IMAGE:v1.0.1
 docker tag genecad:v1.0.1 $IMAGE:latest
 echo $GHCR_TOKEN | docker login ghcr.io -u <github-username> --password-stdin
@@ -926,7 +926,7 @@ uv run huggingface-cli download plantcad/genecad-dev \
 # Run the full GeneCAD pipeline
 docker run --rm --gpus all \
   -v $(pwd):/workspace -w /workspace \
-  ghcr.io/plantcad/genecad_v1:latest \
+  ghcr.io/plantcad/genecad_v0.1:latest \
   bash predict.sh \
     -i data/plant/fasta/evaluation/Juglans_regia_chr1.fa.gz \
     -o results \
@@ -936,7 +936,7 @@ docker run --rm --gpus all \
 # Evaluate against the reference annotation
 docker run --rm \
   -v $(pwd):/workspace -w /workspace \
-  ghcr.io/plantcad/genecad_v1:latest \
+  ghcr.io/plantcad/genecad_v0.1:latest \
   python scripts/evaluate.py \
     --ref   data/plant/gff/evaluation/Juglans_regia_chr1.gff3 \
     --pred  results/Jregia_GeneCAD_final.gff \
