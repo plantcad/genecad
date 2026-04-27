@@ -6,6 +6,9 @@
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![CI](https://github.com/plantcad/genecad/actions/workflows/ci.yaml/badge.svg)](https://github.com/plantcad/genecad/actions/workflows/ci.yaml)
 [![DOI](https://zenodo.org/badge/DOI/10.1101/2025.10.31.685877.svg)](https://doi.org/10.1101/2025.10.31.685877)
+[![Quick Start](https://img.shields.io/badge/Quick%20Start-1%20script-blue)](#quick-start)
+[![Web UI](https://img.shields.io/badge/Web%20UI-No--code-green)](#web-interface-no-code)
+[![Release Wheel](https://img.shields.io/badge/Install-GitHub%20Release%20Wheel-orange)](#using-github-release-wheel)
 [![GeneCAD Downloads](https://img.shields.io/github/downloads/plantcad/genecad/total?label=GitHub%20downloads)](https://github.com/plantcad/genecad/releases)
 [![Hugging Face](https://img.shields.io/badge/🤗-Hugging%20Face-yellow.svg?style=flat)](https://huggingface.co/collections/plantcad/genecad-68c686ccf14312bf6de356de)
 
@@ -18,6 +21,8 @@ GeneCAD is an end-to-end genome annotation pipeline for plants and animals, powe
 Unlike traditional annotation tools that rely on hand-crafted features or splice-site grammars, GeneCAD learns gene structure directly from sequence using a pretrained transformer encoder followed by a Viterbi decoder and protein-level refinement via [ReelProtein](https://onlinelibrary.wiley.com/doi/10.1111/tpj.70483).
 
 GeneCAD natively supports both plant and animal genome annotation; use `-m plant` (default) or `-m animal` to select the model family.
+
+**Recommended install:** run the quick start below. It installs from the tracked GitHub release wheel, so the GitHub download counter is updated.
 
 ## Contents
 
@@ -51,15 +56,15 @@ GeneCAD natively supports both plant and animal genome annotation; use `-m plant
 
 ## Quick Start
 
-Annotate a full plant genome in two commands. No configuration required — the example *Arabidopsis thaliana* TAIR12 sequence is downloaded automatically.
+Annotate a full plant genome in a few commands. No configuration required — the example *Arabidopsis thaliana* TAIR12 sequence is downloaded automatically.
 
 ```bash
 # 1. Create and activate a virtual environment
 uv venv
 source .venv/bin/activate
 
-# 2. Install GeneCAD with the correct PyTorch CUDA index (mamba and causal-conv1d build from source — 3–30 min)
-uv pip install --extra-index-url https://download.pytorch.org/whl/cu128 "genecad[torch,mamba] @ https://github.com/plantcad/genecad/releases/download/v1.1.0/genecad-1.1.0-py3-none-any.whl"
+# 2. Install GeneCAD from tracked GitHub release wheel
+bash scripts/install_release.sh
 
 # 3. Run the full prediction pipeline
 genecad predict
@@ -98,15 +103,26 @@ genecad predict --gpus all
 
 If you are not comfortable with the command line or are SSH'd into a remote computing cluster, GeneCAD provides a simple graphical web interface to run annotations directly from your browser.
 
-1. Ensure the optional `ui` dependency is installed (it installs `gradio`):
-   ```bash
-   uv pip install gradio
-   ```
+1. Install GeneCAD first by running the quick start install command:
+  ```bash
+  bash scripts/install_release.sh
+  ```
 2. Launch the Web UI. If you are running this on a remote cluster without GUI access, use the `--share` flag to generate a secure, temporary public link:
    ```bash
    genecad ui --share
    ```
-3. Look for a link like `https://xxxxx.gradio.live` in your terminal. Click it to open the GeneCAD UI on your local laptop, where you can upload your FASTA or enter the cluster path and click "Run GeneCAD Pipeline".
+3. Look for a link like `https://xxxxx.gradio.live` in your terminal. Click it to open the GeneCAD UI on your local laptop.
+4. The web UI lets you set the same main options as the command line, including:
+  - input FASTA path or file upload
+  - output directory
+  - species name
+  - model family (`plant` or `animal`)
+  - top contigs to process
+  - minimum transcript length
+  - CPU workers
+  - batch size
+  - GPUs (`all` or a comma-separated list)
+5. Click "Run GeneCAD Pipeline" to start annotation.
 
 ---
 
@@ -126,39 +142,21 @@ Model weights are downloaded automatically from Hugging Face on first run. Inter
 
 ## Setup
 
-Choose the installation method that best fits your environment:
+Quick Start is the recommended path for most users because it is the simplest and it tracks GitHub downloads.
 
-| Method | Best for |
-|--------|----------|
-| [GitHub Release wheel](#using-github-release-wheel) | Stable install with download tracking |
-| [uv](#using-uv) | Local development and interactive use |
-| [Docker](#using-docker) | Reproducible runs, no local environment setup |
-| [SLURM](#using-slurm) | HPC / supercomputer clusters |
-| [SkyPilot](#using-skypilot) | On-demand cloud GPUs |
-
-The recommended default for most users is `uv` (local run and development). Use Docker when you need a fully packaged, reproducible runtime.
-
-<details>
-<summary>Need help choosing a setup path?</summary>
-
-- Choose **uv** if you want local development and easiest iteration.
-- Choose **GitHub Release wheel** if you want a stable install and accurate GitHub download counting.
-- Choose **Docker** if you want reproducibility and fewer environment issues.
-- Choose **SLURM** for HPC clusters with schedulers.
-- Choose **SkyPilot** for on-demand cloud GPUs without manual infra setup.
-
-</details>
+If you need an advanced setup, use one of the sections below.
 
 ### Using GitHub Release wheel
 
-Install the stable pre-built wheel directly from GitHub Releases. This is the recommended method if you want the download counter badge to reflect installs.
+Use the **Quick Start** install commands above.
+
+That path is the recommended install and is the most reliable setup we currently support.
+
+If needed, you can override the version in the installer script:
 
 ```bash
-uv tool install "genecad[torch,mamba] @ https://github.com/plantcad/genecad/releases/download/v1.1.0/genecad-1.1.0-py3-none-any.whl"
+GENECAD_VERSION=1.1.0 bash scripts/install_release.sh
 ```
-
-> [!TIP]
-> If you are installing into an existing active virtual environment, you can use `uv pip install` instead.
 
 For development or contributing, clone and sync dependencies instead:
 

@@ -123,12 +123,27 @@ def cmd_ui(argv: list[str]) -> int:
         return 1
 
     # Importing dynamically so the headless CLI doesn't strictly depend on Gradio early on
-    from src.ui import create_ui
+    from src.ui import create_ui, UI_CSS
     demo = create_ui()
     
     # We use server_name="0.0.0.0" to ensure it's accessible over network
     # We use queue() to enable streaming output
-    demo.queue().launch(share=args.share, server_name="0.0.0.0", server_port=args.port)
+    demo.queue().launch(
+        share=args.share,
+        server_name="0.0.0.0",
+        server_port=args.port,
+        theme=gr.themes.Default(
+            primary_hue=gr.themes.colors.blue,
+            secondary_hue=gr.themes.colors.gray,
+        ).set(
+            block_border_width="0px",
+            panel_border_width="0px",
+            button_border_width="0px",
+            input_border_width="0px",
+            checkbox_border_width="0px"
+        ),
+        css=UI_CSS,
+    )
     return 0
 
 
