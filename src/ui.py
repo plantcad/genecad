@@ -217,23 +217,31 @@ UI_CSS = """
     box-shadow: none !important;
     min-height: unset !important;
 }
+#example_checkbox label,
 #example_checkbox label.checkbox-container,
+.gradio-container #example_checkbox label,
 .gradio-container #example_checkbox label.checkbox-container {
     background: transparent !important;
     border: none !important;
     box-shadow: none !important;
     padding: 0 !important;
     color: var(--gc-text) !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    white-space: normal !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
 }
-/* Remove green highlight when checkbox is checked */
-#example_checkbox label.checkbox-container:has(input:checked),
-.gradio-container #example_checkbox label.checkbox-container:has(input:checked) {
+/* Remove any highlight color when checked */
+#example_checkbox label:has(input:checked),
+#example_checkbox label.checkbox-container:has(input:checked) {
     background: transparent !important;
     color: var(--gc-text) !important;
 }
 #example_checkbox input[type="checkbox"],
 .gradio-container #example_checkbox input[type="checkbox"] {
     accent-color: var(--gc-accent) !important;
+    flex-shrink: 0 !important;
 }
 
 /* ── Terminal log ── */
@@ -505,7 +513,7 @@ def create_ui():
         gr.HTML("""
         <div class="gene-hero">
             <div class="gene-eyebrow">GeneCAD · Browser App</div>
-            <h1 class="gene-title">Genome Annotation</h1>
+            <h1 class="gene-title">GeneCAD — Genome Annotation</h1>
             <p class="gene-subtitle">
                 Plant or animal genome annotation, right in your browser.
                 Upload a FASTA file or paste a cluster path — then hit Run.
