@@ -9,8 +9,10 @@ ENV PATH="/root/.local/bin:$PATH"
 # Set working directory
 WORKDIR /build
 
-# Copy project files and directories
-COPY pyproject.toml LICENSE README.md ./
+# Copy files required for dependency resolution and local package build metadata
+COPY pyproject.toml LICENSE README.md predict.sh train.sh ./
+COPY scripts ./scripts
+COPY src ./src
 
 # Install dependencies
 RUN uv sync --extra torch --extra mamba
