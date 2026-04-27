@@ -204,7 +204,7 @@ UI_CSS = """
 /* ── Compact checkbox row ── */
 .gene-qs-outer {
     max-width: 1100px !important;
-    margin: 0 auto 0.5rem !important;
+    margin: 0 auto 0.25rem !important;
     padding: 0 1.5rem !important;
     gap: 0 !important;
 }
@@ -213,7 +213,7 @@ UI_CSS = """
 .gradio-container #example_checkbox,
 .gradio-container .block.example-checkbox {
     margin: 0 !important;
-    padding: 0.4rem 0 !important;
+    padding: 0.25rem 0 !important;
     background: transparent !important;
     border: none !important;
     box-shadow: none !important;
@@ -225,6 +225,17 @@ UI_CSS = """
     border: none !important;
     box-shadow: none !important;
     padding: 0 !important;
+    color: var(--gc-text) !important;
+}
+/* Remove green highlight when checkbox is checked */
+#example_checkbox label.checkbox-container:has(input:checked),
+.gradio-container #example_checkbox label.checkbox-container:has(input:checked) {
+    background: transparent !important;
+    color: var(--gc-text) !important;
+}
+#example_checkbox input[type="checkbox"],
+.gradio-container #example_checkbox input[type="checkbox"] {
+    accent-color: var(--gc-accent) !important;
 }
 
 /* ── Terminal log ── */
