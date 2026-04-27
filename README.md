@@ -22,12 +22,11 @@ Unlike traditional annotation tools that rely on hand-crafted features or splice
 
 GeneCAD natively supports both plant and animal genome annotation; use `-m plant` (default) or `-m animal` to select the model family.
 
-**Recommended install:** run the quick start below. It installs from the tracked GitHub release wheel, so the GitHub download counter is updated.
-
 ## Contents
 
-- [Quick Start](#quick-start)
-- [Web Interface (No-Code)](#web-interface-no-code)
+- [🚀 Getting Started](#-getting-started)
+  - [Step 1: Download and Install](#step-1-download-and-install)
+  - [Step 2: Choose Your Interface](#step-2-choose-your-interface)
 - [Prerequisites](#prerequisites)
 - [Setup](#setup)
   - [Using GitHub Release wheel](#using-github-release-wheel)
@@ -47,6 +46,7 @@ GeneCAD natively supports both plant and animal genome annotation; use `-m plant
   - [Throughput](#throughput)
   - [Troubleshooting](#troubleshooting)
 - [Evaluation](#evaluation)
+- [Training](#training)
 - [Citation](#citation)
 - [Development](#development)
   - [Docker](#docker)
@@ -54,75 +54,79 @@ GeneCAD natively supports both plant and animal genome annotation; use `-m plant
 
 ---
 
-## Quick Start
+## 🚀 Getting Started
 
-Annotate a full plant genome in a few commands. No configuration required — the example *Arabidopsis thaliana* TAIR12 sequence is downloaded automatically.
+We provide two ways to use GeneCAD: a **No-Code Web Interface** (best for beginners) and a **Command Line Interface** (best for automated pipelines).
+
+### Step 1: Download and Install
+
+Open your terminal application and run these commands to download and install GeneCAD. You can copy and paste the entire block:
 
 ```bash
-# 1. Create and activate a virtual environment
+# 1. Install 'uv' (a fast Python package manager)
+curl -LsSf https://astral.sh/uv/install.sh | sh
+export PATH="$HOME/.local/bin:$PATH"
+
+# 2. Download the GeneCAD repository
+git clone https://github.com/plantcad/genecad.git
+cd genecad
+
+# 3. Create a virtual environment and install GeneCAD
 uv venv
 source .venv/bin/activate
-
-# 2. Install GeneCAD from tracked GitHub release wheel
 bash scripts/install_release.sh
+```
 
-# 3. Run the full prediction pipeline
+### Step 2: Choose Your Interface
+
+#### 🌐 Option A: Web Interface (No-Code)
+
+If you are not comfortable with the command line or are working on a remote cluster, use our visual web interface. It runs directly in your web browser.
+
+1. **Launch the interface** from your terminal:
+   ```bash
+   genecad ui --share
+   ```
+2. **Open the link**: Look for a link like `https://xxxxx.gradio.live` in your terminal output. Click it (or copy and paste it into your browser).
+3. **Run an annotation**: The web UI lets you easily configure your run:
+   - Upload your genome FASTA file or specify its path
+   - Select your organism type (`plant` or `animal`)
+   - Choose output directory and species name
+   - Configure GPUs and CPU workers
+4. Click **"Run GeneCAD Pipeline"** to start and monitor progress directly from the web page.
+
+#### 💻 Option B: Command Line (CLI)
+
+For users who prefer the terminal or want to process multiple genomes automatically.
+
+**Run a test example (Arabidopsis):**
+No configuration required — the example *Arabidopsis thaliana* TAIR12 sequence is downloaded automatically.
+```bash
 genecad predict
 ```
 
-> [!TIP]
-> Two GFF3 files are written to `genecad_result/Athaliana_predictions/`:
->
-> | File | Description |
-> |------|-------------|
-> | `Athaliana_GeneCAD_raw.gff` | Raw model predictions (all chromosomes merged) |
-> | `Athaliana_GeneCAD_final.gff` | Protein-refined, publication-ready annotations |
-
-To annotate your own genome, pass your FASTA file and a few labels:
-
+**Annotate your own genome:**
 ```bash
 genecad predict \
   -i /path/to/my_genome.fa \
   -o /path/to/output_dir \
   -s MySpecies \
-  -m plant   # or: -m animal  for vertebrate genomes
+  -m plant   # Use -m animal for vertebrate genomes
 ```
 
-**Use all available GPUs** to run chromosomes in parallel (significantly faster on large genomes):
-
+**Use all available GPUs** to speed up processing (significantly faster on large genomes):
 ```bash
 genecad predict --gpus all
 ```
 
-> [!NOTE]
-> Prefer cloning the repo? See [Using uv](#using-uv) in the Setup section — it gives the same result without the download count.
-
----
-
-## Web Interface (No-Code)
-
-If you are not comfortable with the command line or are SSH'd into a remote computing cluster, GeneCAD provides a simple graphical web interface to run annotations directly from your browser.
-
-1. Install GeneCAD first by running the quick start install command:
-  ```bash
-  bash scripts/install_release.sh
-  ```
-2. Launch the Web UI. If you are running this on a remote cluster without GUI access, use the `--share` flag to generate a secure, temporary public link:
-   ```bash
-   genecad ui --share
-   ```
-3. Look for a link like `https://xxxxx.gradio.live` in your terminal. Click it to open the GeneCAD UI on your local laptop.
-4. The web UI lets you set the same main options as the command line, including:
-  - input FASTA path or file upload
-  - output directory
-  - species name
-  - model family (`plant` or `animal`)
-  - top contigs to process
-  - minimum transcript length
-  - CPU workers
-  - batch size
-  - GPUs (`all` or a comma-separated list)
-5. Click "Run GeneCAD Pipeline" to start annotation.
+> [!TIP]
+> **Output Files**
+> GeneCAD will generate two main GFF3 files in your output directory (e.g., `genecad_result/Athaliana_predictions/`):
+>
+> | File | Description |
+> |------|-------------|
+> | `[Species]_GeneCAD_raw.gff` | Raw model predictions (all chromosomes merged) |
+> | `[Species]_GeneCAD_final.gff` | Protein-refined, publication-ready annotations |
 
 ---
 
@@ -142,20 +146,21 @@ Model weights are downloaded automatically from Hugging Face on first run. Inter
 
 ## Setup
 
-Quick Start is the recommended path for most users because it is the simplest and it tracks GitHub downloads.
+The **Getting Started** section above is the recommended path for most users because it is the simplest and it tracks GitHub downloads.
 
 If you need an advanced setup, use one of the sections below.
 
 ### Using GitHub Release wheel
 
-Use the **Quick Start** install commands above.
+Use the install commands provided in the **Getting Started** section above.
 
 That path is the recommended install and is the most reliable setup we currently support.
 
-If needed, you can override the version in the installer script:
+If you need to install a specific historical version, you can override the default version during installation:
 
 ```bash
-GENECAD_VERSION=1.1.0 bash scripts/install_release.sh
+# Example: Install a specific older version instead of the default
+GENECAD_VERSION=1.0.0 bash scripts/install_release.sh
 ```
 
 For development or contributing, clone and sync dependencies instead:
@@ -166,9 +171,9 @@ cd genecad
 uv sync --extra torch --extra mamba
 ```
 
-### Using uv
+### Install from Source (Using uv)
 
-[uv](https://docs.astral.sh/uv/) is a fast Python package manager that handles the virtual environment and all dependencies in one command.
+If you are a developer and want to install GeneCAD from the source code instead of using the pre-built wheel, use [uv](https://docs.astral.sh/uv/):
 
 ```bash
 # Clone the repository
@@ -176,16 +181,17 @@ git clone https://github.com/plantcad/genecad && cd genecad
 
 # Install uv
 curl -LsSf https://astral.sh/uv/install.sh | sh
-
-# Make uv available immediately (or open a new terminal)
 export PATH="$HOME/.local/bin:$PATH"
 
 # Install all dependencies
 # mamba and causal-conv1d build from source — this can take 3–30 minutes
 uv sync --extra torch --extra mamba
 
+# Activate the virtual environment
+source .venv/bin/activate
+
 # Run the pipeline
-bash predict.sh
+genecad predict
 ```
 
 PyTorch is pinned to 2.7.1 (CUDA 12.8) to ensure compatibility with `mamba` (2.2.4) and `causal-conv1d` (1.5.0.post8). Newer combinations may work but are not officially tested.
@@ -243,7 +249,7 @@ docker run --rm --gpus all \
 
 ### Using SLURM
 
-Follow the [uv](#using-uv) instructions above to create a virtual environment on your cluster. Load the appropriate modules for your cluster (e.g. CUDA 12.8, Python 3.12). The minimum tested combination is CUDA 12.4, Python 3.11, and PyTorch 2.5.1.
+Follow the [Install from Source](#install-from-source-using-uv) instructions above to create a virtual environment on your cluster. Load the appropriate modules for your cluster (e.g. CUDA 12.8, Python 3.12). The minimum tested combination is CUDA 12.4, Python 3.11, and PyTorch 2.5.1.
 
 **Interactive single-node job:**
 
@@ -251,7 +257,7 @@ Follow the [uv](#using-uv) instructions above to create a virtual environment on
 salloc --partition=gpu-queue --nodes=1 --ntasks=1 --gres=gpu:1
 
 cd /path/to/genecad
-bash predict.sh \
+genecad predict \
   -i /path/to/input.fa \
   -o /path/to/output \
   -s MySpecies \
@@ -270,7 +276,7 @@ cat << 'EOF' > run_genecad.slurm
 #SBATCH --job-name=genecad
 
 cd /path/to/genecad
-bash predict.sh \
+genecad predict \
   -i /path/to/input.fa \
   -o /path/to/output \
   -s MySpecies \
@@ -281,26 +287,26 @@ sbatch run_genecad.slurm
 ```
 
 > [!TIP]
-> **Multi-GPU on a Single Node:** To use all GPUs on a node, request them with `--gres=gpu:4` (or however many are available) and pass `--gpus all` to `predict.sh`. If there are many chromosomes, they will be distributed across GPUs. If there are fewer chromosomes than GPUs, GeneCAD will automatically split the longest sequences into parallel windows across the GPUs.
+> **Multi-GPU on a Single Node:** To use all GPUs on a node, request them with `--gres=gpu:4` (or however many are available) and pass `--gpus all` to `genecad predict`. If there are many chromosomes, they will be distributed across GPUs. If there are fewer chromosomes than GPUs, GeneCAD will automatically split the longest sequences into parallel windows across the GPUs.
 > 
-> **Multi-Node Distributed Inference (e.g., TACC):** GeneCAD natively detects multi-node SLURM topologies. If you allocate multiple nodes (e.g., `#SBATCH --nodes=4`), you can use `srun` to seamlessly process enormous single contigs across the entire cluster. `predict.sh` will automatically bypass local launchers and allow PyTorch Lightning to route the distributed process windows.
+> **Multi-Node Distributed Inference (e.g., TACC):** GeneCAD natively detects multi-node SLURM topologies. If you allocate multiple nodes (e.g., `#SBATCH --nodes=4`), you can use `srun` to seamlessly process enormous single contigs across the entire cluster. `genecad predict` will automatically bypass local launchers and allow PyTorch Lightning to route the distributed process windows.
 > 
 > ```bash
 > # Request multiple nodes/GPUs and launch via srun
 > #SBATCH --nodes=2
 > #SBATCH --ntasks=8
 > #SBATCH --gres=gpu:4
-> srun bash predict.sh -i /path/to/genome.fa -s MySpecies --gpus all
+> srun genecad predict -i /path/to/genome.fa -s MySpecies --gpus all
 > ```
 >
 > **Custom launcher:** If your cluster requires a non-standard Python entrypoint (e.g. `srun python` instead of `torchrun`), use `--launcher` or the `LAUNCHER` environment variable to override automatic detection:
 >
 > ```bash
 > # Via flag
-> bash predict.sh -i genome.fa -s MySpecies --launcher 'srun python'
+> genecad predict -i genome.fa -s MySpecies --launcher 'srun python'
 >
 > # Via environment variable
-> LAUNCHER='srun python' bash predict.sh -i genome.fa -s MySpecies
+> LAUNCHER='srun python' genecad predict -i genome.fa -s MySpecies
 > ```
 
 ### Using SkyPilot
@@ -369,10 +375,10 @@ GeneCAD provides two pre-trained models for different taxonomic groups. Both are
 
 ### Running the pipeline
 
-The primary entry point is `predict.sh`. It discovers all chromosomes in the input FASTA automatically and runs the complete pipeline on each one.
+The primary entry point is the command line tool `genecad predict`. It discovers all chromosomes in the input FASTA automatically and runs the complete pipeline on each one.
 
 ```
-Usage: predict.sh [OPTIONS]
+Usage: genecad predict [OPTIONS]
 
 Options:
   -i, --input PATH      Genome FASTA file to annotate
@@ -391,7 +397,7 @@ Options:
 ```
 
 > [!IMPORTANT]
-> `predict.sh` is the **only script you need to run**. Files under `scripts/` (`scripts/predict.py`, `scripts/gff.py`, etc.) are internal pipeline modules called automatically by `predict.sh` — do not run them directly.
+> `genecad predict` internally manages the pipeline. Files under `scripts/` (`scripts/predict.py`, `scripts/gff.py`, etc.) are internal pipeline modules called automatically — do not run them directly.
 
 **Default example (Arabidopsis TAIR12, auto-downloaded):**
 
@@ -406,7 +412,7 @@ For common real-world commands (custom genome, top-N contigs, multi-GPU), see [C
 **Custom plant genome:**
 
 ```bash
-bash predict.sh \
+genecad predict \
   -i /path/to/Zmays.fa \
   -o /path/to/output \
   -s Zmays \
@@ -416,7 +422,7 @@ bash predict.sh \
 **Custom animal genome:**
 
 ```bash
-bash predict.sh \
+genecad predict \
   -i /path/to/genome.fa \
   -o /path/to/output \
   -s Hsapiens \
@@ -426,7 +432,7 @@ bash predict.sh \
 **Run only top N longest contigs/scaffolds** (useful for very fragmented assemblies):
 
 ```bash
-bash predict.sh \
+genecad predict \
   -i /path/to/genome.fa \
   -o /path/to/output \
   -s MySpecies \
@@ -439,28 +445,28 @@ When `--top-n-contigs` is used, GeneCAD selects the N longest sequences by lengt
 **Use all GPUs with automatic per-GPU batch sizing:**
 
 ```bash
-bash predict.sh -i /path/to/genome.fa -s MySpecies --gpus all
+genecad predict -i /path/to/genome.fa -s MySpecies --gpus all
 ```
 
 **Pin a known-safe batch size for reproducibility:**
 
 ```bash
-bash predict.sh -i /path/to/genome.fa -s MySpecies --gpus all --batch-size 4
+genecad predict -i /path/to/genome.fa -s MySpecies --gpus all --batch-size 4
 ```
 
 ### Multi-GPU acceleration
 
-By default, `predict.sh` uses GPU `0` and processes chromosomes sequentially. Pass `--gpus` to distribute chromosomes across multiple GPUs and process them **in parallel** — ideal for large, multi-chromosome genomes.
+By default, `genecad predict` uses GPU `0` and processes chromosomes sequentially. Pass `--gpus` to distribute chromosomes across multiple GPUs and process them **in parallel** — ideal for large, multi-chromosome genomes.
 
 ```bash
 # Use all available GPUs (auto-detected)
-bash predict.sh -i genome.fa -s MySpecies --gpus all
+genecad predict -i genome.fa -s MySpecies --gpus all
 
 # Use specific GPUs (e.g. 0, 1, 2, 3)
-bash predict.sh -i genome.fa -s MySpecies --gpus 0,1,2,3
+genecad predict -i genome.fa -s MySpecies --gpus 0,1,2,3
 
 # Use 2 GPUs with a fixed batch size
-bash predict.sh -i genome.fa -s MySpecies --gpus 0,1 -b 32
+genecad predict -i genome.fa -s MySpecies --gpus 0,1 -b 32
 ```
 
 Chromosomes are assigned round-robin across the specified GPUs. The batch size is auto-scaled independently per GPU (so mixed fleets — e.g. an A100 and a V100 — work correctly).
@@ -513,7 +519,7 @@ Coordinates are 1-based and inclusive, consistent with GFF3 conventions.
 
 ### Resuming an interrupted run
 
-`predict.sh` is fully **resumable** — if a run is interrupted (e.g. job timeout or OOM), simply re-run the same command. Each step checks whether its output file already exists and skips it if so. Only the remaining work will run.
+`genecad predict` is fully **resumable** — if a run is interrupted (e.g. job timeout or OOM), simply re-run the same command. Each step checks whether its output file already exists and skips it if so. Only the remaining work will run.
 
 To **force a step to re-run**, delete its output:
 
@@ -663,10 +669,10 @@ Notes:
 > [!WARNING]
 > The `pipeline/` directory can be **several hundred GB** depending on genome sizes and number of species. It is safe to delete after training — checkpoints are self-contained. The pipeline is resumable, so intermediate files are preserved by default to avoid recomputation.
 
-To use a trained checkpoint for inference, pass it to `predict.sh`:
+To use a trained checkpoint for inference, pass it to `genecad predict`:
 
 ```bash
-bash predict.sh \
+genecad predict \
   -i genome.fa \
   -s MySpecies \
   -m plant \
