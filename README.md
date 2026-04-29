@@ -361,8 +361,8 @@ GeneCAD provides two pre-trained models for different taxonomic groups. Both are
 
 | Mode (`-m`) | Organism type | Base model | GeneCAD head |
 |-------------|--------------|------------|--------------|
-| `plant` *(default)* | Plants | [`plantcad/pcad2-200M-cnet-baseline`](https://huggingface.co/plantcad/pcad2-200M-cnet-baseline) | [`Zong-Yan/genecad_plant`](https://huggingface.co/Zong-Yan/genecad_plant) |
-| `animal` | Animals / vertebrates | [`emarro/vcad2_small_experimental`](https://huggingface.co/emarro/vcad2_small_experimental) | [`Zong-Yan/genecad_vert`](https://huggingface.co/Zong-Yan/genecad_vert) |
+| `plant` *(default)* | Plants | [`emarro/pcad2-200M-cnet-baseline`](https://huggingface.co/emarro/pcad2-200M-cnet-baseline) | [`plantcad/genecad_plant`](https://huggingface.co/plantcad/genecad_plant) |
+| `animal` | Animals / vertebrates | [`emarro/pcad2_vert_small`](https://huggingface.co/emarro/pcad2_vert_small) | [`plantcad/genecad_vert`](https://huggingface.co/plantcad/genecad_vert) |
 
 ### Running the pipeline
 

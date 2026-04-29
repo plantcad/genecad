@@ -132,11 +132,11 @@ fi
 case "$MODE" in
   plant)
     BASE_MODEL="emarro/pcad2-200M-cnet-baseline"
-    HEAD_MODEL="zongyanliu/genecad_5-species"
+    HEAD_MODEL="plantcad/genecad_plant"
     ;;
   animal)
-        BASE_MODEL="emarro/pcad2_vert_small"
-    HEAD_MODEL="Zong-Yan/genecad_vert"
+    BASE_MODEL="emarro/pcad2_vert_small"
+    HEAD_MODEL="plantcad/genecad_vert"
     ;;
   *)
     echo "Error: Unknown mode '$MODE'. Valid options are: plant, animal"

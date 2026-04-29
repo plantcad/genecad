@@ -36,15 +36,7 @@ import os
 import shlex
 import subprocess
 import sys
-import gzip
 from collections import defaultdict
-
-
-def open_file(path, mode="rt"):
-    """Open a file, handling gzip compression automatically if the extension is .gz."""
-    if str(path).endswith(".gz"):
-        return gzip.open(path, mode)
-    return open(path, mode)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -53,6 +45,7 @@ def open_file(path, mode="rt"):
 
 
 def parse_attributes(attr_str):
+    """Parse GFF3 attribute string into a key-value dict."""
     attrs = {}
     for field in attr_str.strip().split(";"):
         if "=" in field:
@@ -62,8 +55,9 @@ def parse_attributes(attr_str):
 
 
 def parse_gff(path, ftypes):
+    """Parse a GFF3 file, returning records whose feature type is in ftypes."""
     records = []
-    with open_file(path) as fh:
+    with open(path) as fh:
         for line in fh:
             if line.startswith("#"):
                 continue
@@ -100,10 +94,12 @@ def merge_intervals(ivs):
 
 
 def bases_in_merged(ivs):
+    """Return the total number of bases covered by a list of (start, end) intervals."""
     return sum(e - s + 1 for s, e in merge_intervals(ivs))
 
 
 def overlap_bases(ivs_a, ivs_b):
+    """Return the number of bases shared between two lists of (start, end) intervals."""
     ma, mb = merge_intervals(ivs_a), merge_intervals(ivs_b)
     tp = i = j = 0
     while i < len(ma) and j < len(mb):
@@ -118,6 +114,7 @@ def overlap_bases(ivs_a, ivs_b):
 
 
 def introns_from_exons(sorted_exons, chrom, strand):
+    """Derive intron coordinates from a sorted list of (start, end) exon tuples."""
     return [
         (chrom, sorted_exons[i][1] + 1, sorted_exons[i + 1][0] - 1, strand)
         for i in range(len(sorted_exons) - 1)
@@ -126,6 +123,7 @@ def introns_from_exons(sorted_exons, chrom, strand):
 
 
 def prf(tp, fp, fn):
+    """Compute precision, recall, and F1 from TP/FP/FN counts."""
     p = tp / (tp + fp) if (tp + fp) > 0 else 0.0
     r = tp / (tp + fn) if (tp + fn) > 0 else 0.0
     f = 2 * p * r / (p + r) if (p + r) > 0 else 0.0
@@ -138,6 +136,7 @@ def prf(tp, fp, fn):
 
 
 def _build_gene_tx(records, cds_ftype="CDS"):
+    """Build gene→transcript→CDS hierarchy from parsed GFF records."""
     genes, tx2gene, tx_cds = {}, {}, defaultdict(list)
     for r in records:
         ft, rid = r["ftype"], r["id"]
@@ -157,6 +156,7 @@ def _build_gene_tx(records, cds_ftype="CDS"):
 
 
 def build_ref_cds(records):
+    """Build reference gene structures and a per-chromosome CDS frozenset index."""
     genes = _build_gene_tx(records)
     by_chrom = defaultdict(set)
     for gdata in genes.values():
@@ -167,6 +167,7 @@ def build_ref_cds(records):
 
 
 def eval_cds(ref_genes, ref_by_chrom, pred_genes):
+    """Score predictions at the locus, transcript, and CDS-exon level (CDS only, no UTRs)."""
     ref_cds_iv = defaultdict(set)
     for gdata in ref_genes.values():
         for fs in gdata["transcripts"].values():
@@ -286,6 +287,7 @@ def build_pred_exon(records):
 
 
 def eval_gffcompare(ref_genes, pred_genes):
+    """Score predictions at base, exon, intron, intron-chain, and locus levels."""
     ref_exon_iv = defaultdict(set)
     ref_intron_iv = defaultdict(set)
     ref_ichain = defaultdict(set)
@@ -403,10 +405,11 @@ def eval_gffcompare(ref_genes, pred_genes):
 
 
 def load_fasta(fasta_path):
+    """Load a FASTA file into a dict mapping sequence name to sequence string."""
     print(f"[INFO] Loading genome FASTA: {fasta_path}", file=sys.stderr)
     genome = {}
     chrom, seq = None, []
-    with open_file(fasta_path) as fh:
+    with open(fasta_path) as fh:
         for line in fh:
             line = line.strip()
             if line.startswith(">"):
@@ -423,6 +426,7 @@ def load_fasta(fasta_path):
 
 
 def _revcomp(seq):
+    """Return the reverse complement of a DNA sequence."""
     comp = str.maketrans("ACGTacgtNn", "TGCAtgcaNn")
     return seq.translate(comp)[::-1]
 
@@ -446,12 +450,18 @@ def eval_splice_sites(pred_exon_genes, genome):
             if not exons or len(exons) < 2:
                 continue
             for i in range(len(exons) - 1):
-                intr_s = exons[i][1] + 1  # 1-based intron start
-                intr_e = exons[i + 1][0] - 1  # 1-based intron end
+                intr_s = exons[i][1] + 1      # 1-based inclusive intron start
+                intr_e = exons[i + 1][0] - 1  # 1-based inclusive intron end
                 if intr_e < intr_s:
                     continue
                 total += 1
-                # Extract 2-bp donor and acceptor (convert to 0-based)
+                # Donor: first 2 bases of intron (1-based intr_s, intr_s+1)
+                #   → 0-based slice [intr_s-1 : intr_s+1]
+                # Acceptor: last 2 bases of intron (1-based intr_e-1, intr_e)
+                #   → 0-based slice [intr_e-2 : intr_e]
+                #   (1-based inclusive end == 0-based exclusive end, so intr_e
+                #    is used directly as the Python slice upper bound)
+                # On '-' strand the donor/acceptor windows swap and are revcomped.
                 if st == "+":
                     donor = seq[intr_s - 1 : intr_s + 1].upper()
                     acceptor = seq[intr_e - 2 : intr_e].upper()
@@ -763,7 +773,7 @@ def parse_busco_summary(summary_path, busco_dir=None):
     """Read BUSCO short_summary*.txt, then clean up the BUSCO directory."""
     result = {"path": summary_path, "lines": []}
     if summary_path and os.path.isfile(summary_path):
-        with open_file(summary_path) as fh:
+        with open(summary_path) as fh:
             result["lines"] = fh.readlines()
     if busco_dir:
         print(f"[INFO] BUSCO results kept in: {busco_dir}", file=sys.stderr)
@@ -878,6 +888,7 @@ def eval_sites(ref_cds_genes, pred_cds_genes, ref_exon_genes, pred_exon_genes):
 
 
 def format_site_report(r):
+    """Format the site-level error breakdown (Section 5) as a string."""
     lines = [
         "=" * 62,
         "SECTION 5 – Site-Level Error Breakdown",
@@ -910,6 +921,7 @@ def format_site_report(r):
 
 
 def _row(title, m):
+    """Format a single metric block (TP/FP/FN + P/R/F1) as a list of lines."""
     return [
         f"--- {title} ---",
         f"  TP: {m['TP']}   FP: {m['FP']}   FN: {m['FN']}",
@@ -921,6 +933,7 @@ def _row(title, m):
 
 
 def format_cds_report(r):
+    """Format the CDS-based evaluation results (Section 1) as a string."""
     lines = [
         "=" * 62,
         "SECTION 1 – CDS-Based Evaluation (UTRs ignored)",
@@ -941,6 +954,7 @@ def format_cds_report(r):
 
 
 def format_gffcompare_report(r):
+    """Format the gffcompare-style evaluation results (Section 2) as a string."""
     lines = [
         "=" * 62,
         "SECTION 2 – gffcompare-Style Evaluation (full exon incl. UTRs)",
@@ -970,6 +984,7 @@ def format_gffcompare_report(r):
 
 
 def format_splice_report(r):
+    """Format the splice site analysis results (Section 3) as a string."""
     total = r["total"]
     if total == 0:
         return "\n".join(
@@ -995,6 +1010,7 @@ def format_splice_report(r):
 
 
 def format_busco_report(busco):
+    """Format the BUSCO evaluation results (Section 4) as a string."""
     lines = [
         "=" * 62,
         "SECTION 4 – BUSCO Evaluation",
