@@ -95,40 +95,47 @@ bash scripts/install_release.sh
 
 If you are not comfortable with the command line or are working on a remote cluster, use our visual web interface. It runs directly in your web browser.
 
-1. **Set up credentials** (required before first launch):
+1. **Set credentials and launch** — pick whichever option fits your setup:
 
+   **Option A — environment variable (quickest, no file needed):**
    ```bash
-   # Option 1 — credentials file (recommended for shared servers)
-   echo "myusername:mypassword" > ~/.genecad_credentials
-   chmod 600 ~/.genecad_credentials
+   # Local network only (recommended for shared clusters)
+   GENECAD_AUTH="myusername:mypassword" genecad ui
 
-   # Option 2 — environment variable
-   export GENECAD_AUTH="myusername:mypassword"
+   # Public Gradio tunnel (accessible from anywhere — ensure strong credentials)
+   GENECAD_AUTH="myusername:mypassword" genecad ui --share
    ```
 
    > [!TIP]
-   > You can add multiple users by separating them with commas (`user1:pass1,user2:pass2`) or putting one per line in the credentials file.
+   > To avoid retyping, add `export GENECAD_AUTH="myusername:mypassword"` to your `~/.bashrc` (or `~/.zshrc`) so it is set automatically every time you open a terminal.
 
-2. **Launch the interface** from your terminal:
-
+   **Option B — credentials file (recommended for shared servers or multiple users):**
    ```bash
-   # Local network only (recommended for shared clusters)
+   echo "myusername:mypassword" > ~/.genecad_credentials
+   chmod 600 ~/.genecad_credentials   # keep it private
+
+   # Local network only
    genecad ui --auth-file ~/.genecad_credentials
 
-   # Public Gradio tunnel (accessible from anywhere — ensure strong credentials)
+   # Public Gradio tunnel
    genecad ui --auth-file ~/.genecad_credentials --share
+   ```
 
-   # Local development only — no authentication required
+   > [!TIP]
+   > Multiple users: separate with commas in the env var (`GENECAD_AUTH="user1:pass1,user2:pass2"`) or add one `username:password` per line in the credentials file.
+
+   **Option C — local development only (no authentication):**
+   ```bash
    genecad ui --no-auth
    ```
 
-3. **Open the link**: Look for a line like `Running on local URL: http://0.0.0.0:7860` in your terminal output. Open that address in your browser, then log in with the credentials you configured.
+2. **Open the link**: Look for a line like `Running on local URL: http://0.0.0.0:7860` in your terminal output. Open that address in your browser, then log in with the credentials you configured.
 
-4. **Run an annotation**: The web UI lets you easily configure your run:
+3. **Run an annotation**: The web UI lets you easily configure your run:
    - Upload your genome FASTA file or specify its path on the server
    - Select your organism type (`plant` or `animal`)
    - Configure GPUs and CPU workers
-5. Click **"Run GeneCAD Pipeline"** to start and monitor progress directly from the web page.
+4. Click **"Run GeneCAD Pipeline"** to start and monitor progress directly from the web page.
 
 #### Option B: Command Line (CLI)
 
@@ -940,20 +947,24 @@ This section applies only when you run `genecad ui`. The CLI (`genecad predict`)
 
 Authentication is **required** by default. The server refuses to start without credentials unless `--no-auth` is passed explicitly.
 
-| Method | Command |
-|--------|---------|
-| Credentials file | `genecad ui --auth-file /path/to/creds.txt` |
-| Environment variable | `GENECAD_AUTH="user:pass" genecad ui` |
+| Method | How to use |
+|--------|-----------|
+| Environment variable (quickest) | `GENECAD_AUTH="user:pass" genecad ui` |
+| Credentials file (multiple users) | `genecad ui --auth-file /path/to/creds.txt` |
 | Disable (local/trusted only) | `genecad ui --no-auth` |
 
-**Credentials file format** — one `username:password` per line; lines starting with `#` are ignored:
+**Environment variable** — supports multiple users via comma separation:
+```bash
+GENECAD_AUTH="alice:strongpassword,bob:anotherpassword" genecad ui
+```
+Add `export GENECAD_AUTH="..."` to `~/.bashrc` to set it permanently.
 
+**Credentials file format** — one `username:password` per line; lines starting with `#` are ignored:
 ```
 # ~/.genecad_credentials
 alice:strongpassword
 bob:anotherpassword
 ```
-
 ```bash
 chmod 600 ~/.genecad_credentials   # keep it private
 genecad ui --auth-file ~/.genecad_credentials
