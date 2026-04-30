@@ -309,8 +309,14 @@ if [[ -z "$ANIMAL_GFF_DIR" ]]; then
   ANIMAL_GFF_DIR="$GFF_DIR"
 fi
 
-if [[ -n "${VIRTUAL_ENV:-}" && -x "${VIRTUAL_ENV}/bin/python" ]]; then
+if [[ -n "${GENECAD_PYTHON:-}" && -x "$GENECAD_PYTHON" ]]; then
+  PYTHON_CMD=("$GENECAD_PYTHON")
+elif [[ -n "${VIRTUAL_ENV:-}" && -x "${VIRTUAL_ENV}/bin/python" ]]; then
   PYTHON_CMD=("${VIRTUAL_ENV}/bin/python")
+elif [[ -x "$SCRIPT_DIR/.venv/bin/python" ]]; then
+  PYTHON_CMD=("$SCRIPT_DIR/.venv/bin/python")
+elif [[ -x ".venv/bin/python" ]]; then
+  PYTHON_CMD=(".venv/bin/python")
 else
   PYTHON_CMD=(uv run python)
 fi
@@ -318,7 +324,7 @@ fi
 run_python() {
   "${PYTHON_CMD[@]}" "$@"
 }
-export PYTHONPATH=.
+export PYTHONPATH="$SCRIPT_DIR${PYTHONPATH:+:$PYTHONPATH}"
 
 # Download a single file from a HuggingFace dataset repo using the Python API
 # Usage: hf_download <repo_id> <remote_path> <local_dir>
@@ -326,7 +332,7 @@ hf_download() {
     local repo_id="$1"
     local remote_path="$2"
     local local_dir="$3"
-    uv run python -c "
+    "${PYTHON_CMD[@]}" -c "
 import sys
 from huggingface_hub import hf_hub_download
 hf_hub_download(
@@ -345,7 +351,7 @@ normalize_animal_gff() {
   local src="$1"
   local dst="$2"
 
-  ANIMAL_GFF_SRC="$src" ANIMAL_GFF_DST="$dst" uv run python - <<'PY'
+  ANIMAL_GFF_SRC="$src" ANIMAL_GFF_DST="$dst" "${PYTHON_CMD[@]}" - <<'PY'
 import gzip
 import os
 
@@ -522,7 +528,7 @@ hf_upload_folder() {
   HF_UPLOAD_REPO_TYPE="$repo_type" \
   HF_UPLOAD_PATH_IN_REPO="$path_in_repo" \
   HF_UPLOAD_COMMIT_MSG="$commit_message" \
-  uv run python -c "
+  "${PYTHON_CMD[@]}" -c "
 import os
 from huggingface_hub import HfApi
 

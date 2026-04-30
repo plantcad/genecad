@@ -1,8 +1,216 @@
+import gzip
 import os
+import re
+import resource
+import shutil
 import subprocess
+import time
 import urllib.request
+from collections import defaultdict
 from pathlib import Path
+from threading import Lock
+
 import gradio as gr
+
+# ── Limits ────────────────────────────────────────────────────────────────────
+_VALID_EXTENSIONS   = {'.fa', '.fasta', '.fna', '.ffn', '.fa.gz', '.fasta.gz', '.fna.gz'}
+_MAX_UPLOAD_MB      = 10 * 1024    # 10 GB — covers maize (2.3 GB) and larger genomes
+_MAX_DECOMP_MB      = 50 * 1024    # 50 GB decompressed stream (gzip-bomb ceiling)
+_MAX_SEQUENCES      = 100_000      # number of > headers
+_MAX_SEQ_LEN        = 500_000_000  # bases per contig (500 Mbp)
+_MAX_SPECIES_LEN    = 64
+_MAX_CPU_WORKERS    = os.cpu_count() or 1   # allow all cores — user decides
+
+# System directories that must never be used as output
+_PROTECTED_ROOTS = ('/etc', '/usr', '/bin', '/sbin', '/boot',
+                    '/sys', '/proc', '/dev', '/lib', '/lib64', '/run')
+
+
+# ── Rate limiter ──────────────────────────────────────────────────────────────
+class _RateLimiter:
+    def __init__(self, max_per_hour: int = 3):
+        self._max = max_per_hour
+        self._history: dict[str, list[float]] = defaultdict(list)
+        self._lock = Lock()
+
+    def allow(self, ip: str) -> bool:
+        now = time.time()
+        with self._lock:
+            self._history[ip] = [t for t in self._history[ip] if now - t < 3600]
+            if len(self._history[ip]) >= self._max:
+                return False
+            self._history[ip].append(now)
+            return True
+
+
+_rate_limiter = _RateLimiter(max_per_hour=3)
+
+
+# ── Hardware detection ────────────────────────────────────────────────────────
+def _available_gpus() -> list[str]:
+    """Return GPU indices reported by nvidia-smi; empty list if none available."""
+    try:
+        out = subprocess.check_output(
+            ["nvidia-smi", "--query-gpu=index", "--format=csv,noheader,nounits"],
+            text=True, timeout=5, stderr=subprocess.DEVNULL,
+        )
+        return [x.strip() for x in out.strip().splitlines() if x.strip()]
+    except Exception:
+        return []
+
+
+def _cap_gpus(requested: str) -> str:
+    """Clamp the requested GPU list to GPUs that actually exist on this machine."""
+    available = _available_gpus()
+    if not available:
+        return "0"  # predict.sh falls back to CPU when CUDA is absent
+    if not requested or requested.strip().lower() == "all":
+        return ",".join(available)
+    if not re.fullmatch(r'[\d,\s]+', requested):
+        return available[0]
+    ids = [x.strip() for x in requested.split(",") if x.strip()]
+    valid = [g for g in ids if g in available]
+    return ",".join(valid) if valid else available[0]
+
+
+# ── Input sanitization ────────────────────────────────────────────────────────
+def _sanitize_species(raw: str) -> tuple[str, str | None]:
+    """Allow only filesystem-safe characters for the species label."""
+    s = raw.strip()[:_MAX_SPECIES_LEN]
+    if not s:
+        return "", "Species name cannot be empty."
+    if not re.fullmatch(r'[A-Za-z0-9._-]+', s):
+        return "", "Species name may only contain letters, digits, dots, hyphens, and underscores."
+    return s, None
+
+
+def _sanitize_output_dir(raw: str) -> tuple[str, str | None]:
+    """Resolve the output path and reject writes to protected system directories."""
+    raw = raw.strip() if raw else ""
+    if not raw:
+        raw = "genecad_result"
+    try:
+        resolved = str(Path(raw).resolve())
+    except Exception:
+        return "", "Invalid output directory path."
+    for root in _PROTECTED_ROOTS:
+        if resolved == root or resolved.startswith(root + "/"):
+            return "", f"Writing to system directory '{root}' is not allowed."
+    return resolved, None
+
+
+def _sanitize_input_path(raw: str) -> tuple[str, str | None]:
+    """Resolve an explicit server-side path; allow it if the file exists."""
+    try:
+        resolved = str(Path(raw.strip()).resolve())
+    except Exception:
+        return "", "Invalid file path."
+    if not os.path.isfile(resolved):
+        return "", "Input file not found."
+    return resolved, None
+
+
+# ── FASTA validation ──────────────────────────────────────────────────────────
+def _delete_upload(path: str) -> None:
+    """Immediately remove an uploaded file and its Gradio temp directory."""
+    try:
+        tmp_dir = os.path.dirname(path)
+        if tmp_dir and tmp_dir != "/" and "gradio" in tmp_dir.lower():
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+        elif os.path.isfile(path):
+            os.unlink(path)
+    except Exception:
+        pass
+
+
+def _validate_fasta(path: str) -> str | None:
+    """Stream-validate a FASTA file (plain or .gz) in two phases.
+
+    Phase 1 — structure & size (cheap, stops gzip bombs before full scan):
+      • Extension is a recognised FASTA suffix.
+      • On-disk size ≤ _MAX_UPLOAD_MB.
+      • For .gz: decompressed stream ≤ _MAX_DECOMP_MB (gzip-bomb ceiling).
+      • First non-empty line is a '>' header.
+      • Sequence count ≤ _MAX_SEQUENCES; each contig ≤ _MAX_SEQ_LEN bases.
+
+    Phase 2 — strict character check (every sequence byte):
+      • Only A/C/G/T/N accepted (upper or lower — lowercase is standard
+        soft-masking in genome assemblies; anything else is rejected).
+
+    Returns an error string on failure, or None when the file is clean.
+    The caller is responsible for deleting the file via _delete_upload() on error.
+    """
+    name = os.path.basename(path).lower()
+    if not any(name.endswith(ext) for ext in _VALID_EXTENSIONS):
+        return (
+            "Unsupported file type. Expected one of: "
+            + ", ".join(sorted(_VALID_EXTENSIONS))
+        )
+
+    size_mb = os.path.getsize(path) / (1024 * 1024)
+    if size_mb > _MAX_UPLOAD_MB:
+        return f"File too large ({size_mb:.0f} MB). Maximum is {_MAX_UPLOAD_MB} MB."
+
+    is_gz = name.endswith('.gz')
+    _ALLOWED = frozenset('ACGTNacgtn')
+    decomp_bytes = 0
+    seq_count    = 0
+    seq_len      = 0
+    saw_header   = False
+
+    try:
+        opener = gzip.open if is_gz else open
+        with opener(path, 'rt', errors='replace') as fh:
+            for raw_line in fh:
+
+                # ── Phase 1: gzip-bomb guard (counts decompressed bytes) ───
+                if is_gz:
+                    decomp_bytes += len(raw_line.encode('utf-8', errors='replace'))
+                    if decomp_bytes > _MAX_DECOMP_MB * 1024 * 1024:
+                        return (
+                            f"Decompressed content exceeds {_MAX_DECOMP_MB // 1024} GB "
+                            "(possible gzip bomb — file rejected)."
+                        )
+
+                line = raw_line.strip()
+                if not line:
+                    continue
+
+                if line.startswith('>'):
+                    # ── Phase 1: structure checks ─────────────────────────
+                    saw_header = True
+                    seq_count += 1
+                    seq_len = 0
+                    if seq_count > _MAX_SEQUENCES:
+                        return f"Too many sequences (max {_MAX_SEQUENCES:,})."
+                else:
+                    if not saw_header:
+                        return (
+                            "Not a valid FASTA file — "
+                            "first non-empty line must be a '>' header."
+                        )
+                    seq_len += len(line)
+                    if seq_len > _MAX_SEQ_LEN:
+                        return (
+                            f"Sequence too long (max {_MAX_SEQ_LEN // 1_000_000} Mbp "
+                            "per contig)."
+                        )
+                    # ── Phase 2: strict ACGTN character check ─────────────
+                    invalid = frozenset(line) - _ALLOWED
+                    if invalid:
+                        samples = "', '".join(sorted(invalid)[:5])
+                        return (
+                            f"Invalid character(s) '{samples}' in sequence. "
+                            "Only A, C, G, T, N (and lowercase equivalents) are allowed."
+                        )
+
+    except (gzip.BadGzipFile, EOFError, OSError) as exc:
+        return f"Cannot read file: {exc}"
+
+    if seq_count == 0:
+        return "File contains no FASTA sequences."
+
+    return None  # both phases passed
 
 
 UI_CSS = """
@@ -406,15 +614,67 @@ def select_animal():
     return "animal", gr.update(variant="secondary"), gr.update(variant="primary")
 
 
+def _make_sandbox(max_output_gb: int = 50, max_procs: int = 512):
+    """Return a preexec_fn that applies kernel-enforced resource limits.
+
+    Applied *inside* the child process before exec, so the job cannot raise them.
+
+    RLIMIT_FSIZE  — max bytes any single file may grow (disk-fill guard).
+    RLIMIT_NPROC  — max child processes the job may fork (fork-bomb guard).
+    RLIMIT_NOFILE — max open file descriptors (fd-exhaustion guard).
+
+    RLIMIT_AS (virtual address space) is intentionally skipped: PyTorch and CUDA
+    pre-map huge virtual ranges before any real allocation, so capping it kills
+    the process immediately on import.  Wall-clock time is capped separately via
+    process.wait(timeout=…) in the caller.
+    """
+    max_bytes = max_output_gb * 1024 ** 3
+
+    def _setup():
+        resource.setrlimit(resource.RLIMIT_FSIZE,  (max_bytes, max_bytes))
+        resource.setrlimit(resource.RLIMIT_NPROC,  (max_procs, max_procs))
+        resource.setrlimit(resource.RLIMIT_NOFILE, (4096, 4096))
+
+    return _setup
+
+
 def run_genecad(
     fasta_upload, fasta_path, output_dir, species, domain,
     top_n_contigs, min_transcript_length, cpu_workers,
     batch_size, gpus, use_example,
+    request: gr.Request,
 ):
-    input_file = fasta_path.strip() if fasta_path else ""
-
     _nop = (gr.update(), gr.update(), gr.update(), gr.update())
 
+    try:
+        yield from _run_genecad_inner(
+            fasta_upload, fasta_path, output_dir, species, domain,
+            top_n_contigs, min_transcript_length, cpu_workers,
+            batch_size, gpus, use_example, request, _nop,
+        )
+    finally:
+        # Clean up the Gradio temp dir for the uploaded file
+        if fasta_upload is not None:
+            try:
+                tmp = os.path.dirname(fasta_upload.name)
+                if tmp and tmp != "/" and "gradio" in tmp.lower():
+                    shutil.rmtree(tmp, ignore_errors=True)
+            except Exception:
+                pass
+
+
+def _run_genecad_inner(
+    fasta_upload, fasta_path, output_dir, species, domain,
+    top_n_contigs, min_transcript_length, cpu_workers,
+    batch_size, gpus, use_example, request, _nop,
+):
+    # ── Rate limit ────────────────────────────────────────────────────────────
+    ip = getattr(getattr(request, 'client', None), 'host', 'unknown')
+    if not _rate_limiter.allow(ip):
+        yield "Error: Too many requests. Please wait before submitting again.", *_nop
+        return
+
+    # ── Resolve input file ────────────────────────────────────────────────────
     if use_example:
         yield "Preparing built-in Arabidopsis chr5 example FASTA...\n", *_nop
         try:
@@ -422,56 +682,108 @@ def run_genecad(
         except Exception as exc:
             yield f"Error: Failed to download example: {exc}", *_nop
             return
-        if not species or species == "MySpecies":
-            species = "Athaliana"
-        domain = "plant"
-        if not output_dir or output_dir.strip() == "genecad_result":
+        species  = "Athaliana"
+        domain   = "plant"
+        if not output_dir or output_dir.strip() in ("", "genecad_result"):
             output_dir = "genecad_result/Athaliana_predictions"
-    elif not input_file and fasta_upload is not None:
+    elif fasta_path and fasta_path.strip():
+        input_file, err = _sanitize_input_path(fasta_path)
+        if err:
+            yield f"Error: {err}", *_nop
+            return
+    elif fasta_upload is not None:
         input_file = fasta_upload.name
-
-    if not input_file:
+    else:
         yield "Error: Please provide a FASTA file, or enable the built-in example.", *_nop
         return
-    if not os.path.exists(input_file):
-        yield f"Error: Input file not found: {input_file}", *_nop
+
+    # ── Validate FASTA content (skipped for the trusted built-in example) ─────
+    # Validation runs BEFORE predict.sh ever opens the file, so nothing in the
+    # pipeline sees data that has not passed both the structure and ACGTN checks.
+    # Invalid uploaded files are deleted immediately — not deferred to cleanup.
+    if not use_example:
+        yield "Validating input file...\n", *_nop
+        err = _validate_fasta(input_file)
+        if err:
+            if fasta_upload is not None:
+                _delete_upload(input_file)
+            yield f"Error: {err}", *_nop
+            return
+
+    # ── Sanitize run parameters ───────────────────────────────────────────────
+    species, err = _sanitize_species(species or "MySpecies")
+    if err:
+        yield f"Error: {err}", *_nop
         return
 
+    output_dir, err = _sanitize_output_dir(output_dir)
+    if err:
+        yield f"Error: {err}", *_nop
+        return
+
+    # Cap CPU workers to half the available cores so the OS stays responsive
+    safe_workers = min(int(cpu_workers or 1), _MAX_CPU_WORKERS)
+
+    # Clamp GPUs to hardware that actually exists (works on no-GPU machines too)
+    safe_gpus = _cap_gpus(gpus or "0")
+
+    # ── Locate predict.sh ─────────────────────────────────────────────────────
     script_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     predict_sh = os.path.join(script_dir, "predict.sh")
     if not os.path.exists(predict_sh):
-        yield f"Error: predict.sh not found at {predict_sh}", *_nop
+        yield "Error: Pipeline script not found. Please reinstall GeneCAD.", *_nop
         return
 
+    # ── Build command ─────────────────────────────────────────────────────────
     cmd = [
         "bash", predict_sh,
-        "-i", input_file, "-o", output_dir,
-        "-s", species, "-m", domain,
+        "-i", input_file,
+        "-o", output_dir,
+        "-s", species,
+        "-m", domain,
     ]
     if top_n_contigs != "all":
         cmd.extend(["-n", str(top_n_contigs)])
     if min_transcript_length not in (None, "", "3"):
         cmd.extend(["-l", str(min_transcript_length)])
-    if cpu_workers not in (None, "", "1"):
-        cmd.extend(["-c", str(cpu_workers)])
+    if safe_workers > 1:
+        cmd.extend(["-c", str(safe_workers)])
     if batch_size not in (None, "", "auto"):
         cmd.extend(["-b", str(batch_size)])
-    if gpus and gpus.strip().lower() != "all":
-        cmd.extend(["--gpus", gpus.strip()])
+    cmd.extend(["--gpus", safe_gpus])
 
+    # No hard timeout cap — large genomes on slow machines can legitimately run
+    # for many hours.  We keep a generous 2-hour floor so trivially bad jobs
+    # don't block the queue forever, and scale linearly above that.
+    file_size_mb = os.path.getsize(input_file) / (1024 * 1024)
+    job_timeout  = max(7200, int(file_size_mb * 60))   # 2 h floor, ~1 min/MB
+
+    # ── Run with sandbox ──────────────────────────────────────────────────────
     process = subprocess.Popen(
         cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         text=True, bufsize=1,
+        preexec_fn=_make_sandbox(),
     )
-    log = f"--- GeneCAD Started ---\nCommand: {' '.join(cmd)}\n\n"
+    log = "--- GeneCAD Started ---\n\n"
     yield log, *_nop
 
-    for line in iter(process.stdout.readline, ""):
-        log += line
-        yield log, *_nop
+    try:
+        for line in iter(process.stdout.readline, ""):
+            log += line
+            yield log, *_nop
+    except Exception:
+        pass
 
     process.stdout.close()
-    rc = process.wait()
+    try:
+        rc = process.wait(timeout=job_timeout)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait()
+        hrs, mins = job_timeout // 3600, (job_timeout % 3600) // 60
+        log += f"\n\n--- Job timed out after {hrs}h {mins}m ---\n"
+        yield log, *_nop
+        return
 
     if rc == 0:
         log += "\n\n--- Completed successfully ---\n"
@@ -555,13 +867,18 @@ def create_ui():
                     <span class="gene-step">Step 2</span>
                     <p class="gene-head">Configure the run</p>
                     <p class="gene-hint">
-                      Species label is only used for output file names.
+                      <strong>Run label</strong> — a short name for this run.
+                      Used as the output file prefix
+                      (e.g. <code>Zmays_GeneCAD_final.gff</code>) and as an internal
+                      data key in intermediate files. Any consistent label works —
+                      it does <em>not</em> affect the model or annotation results.
+                      Allowed characters: letters, digits, dots, hyphens, underscores.
                     </p>
                     """)
                     species = gr.Textbox(
-                        label="Species name",
+                        label="Run label (used as output file prefix — e.g. Zmays, sample_01)",
                         value="MySpecies",
-                        placeholder="e.g. Athaliana",
+                        placeholder="e.g. Zmays  or  Athaliana  or  sample_01",
                     )
                     gr.HTML("""
                     <p class="gene-hint" style="margin-top:0.8rem;margin-bottom:0.4rem">

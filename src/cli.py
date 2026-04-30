@@ -107,6 +107,70 @@ def cmd_predict(argv: list[str]) -> int:
     return result.returncode
 
 
+def cmd_train(argv: list[str]) -> int:
+    script_dir = _find_script_dir()
+    cmd = ["bash", str(script_dir / "train.sh")] + argv
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(script_dir) + os.pathsep + env.get("PYTHONPATH", "")
+    env["GENECAD_PYTHON"] = sys.executable
+    result = subprocess.run(cmd, env=env)
+    return result.returncode
+
+
+def cmd_evaluate(argv: list[str]) -> int:
+    script_dir = _find_script_dir()
+    cmd = [sys.executable, str(script_dir / "scripts" / "evaluate.py")] + argv
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(script_dir) + os.pathsep + env.get("PYTHONPATH", "")
+    result = subprocess.run(cmd, env=env)
+    return result.returncode
+
+
+def cmd_summarize(argv: list[str]) -> int:
+    script_dir = _find_script_dir()
+    cmd = [sys.executable, str(script_dir / "scripts" / "summarize.py")] + argv
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(script_dir) + os.pathsep + env.get("PYTHONPATH", "")
+    result = subprocess.run(cmd, env=env)
+    return result.returncode
+
+
+def _load_auth(auth_file: str | None) -> list[tuple[str, str]] | None:
+    """Load (username, password) pairs from --auth-file or GENECAD_AUTH env var.
+
+    GENECAD_AUTH format: "user1:pass1,user2:pass2"
+    Auth file format: one "user:password" per line, # lines are ignored.
+    Returns None if no credentials are configured (auth disabled).
+    """
+    sources: list[str] = []
+
+    if auth_file:
+        try:
+            with open(auth_file) as f:
+                sources = [l.strip() for l in f if l.strip() and not l.startswith("#")]
+        except OSError as e:
+            print(f"Error: cannot read auth file '{auth_file}': {e}", file=sys.stderr)
+            sys.exit(1)
+    else:
+        env = os.environ.get("GENECAD_AUTH", "").strip()
+        if env:
+            sources = [item.strip() for item in env.split(",") if item.strip()]
+
+    if not sources:
+        return None
+
+    pairs: list[tuple[str, str]] = []
+    for entry in sources:
+        if ":" not in entry:
+            print(f"Warning: ignoring malformed auth entry (expected user:password): {entry!r}",
+                  file=sys.stderr)
+            continue
+        user, _, password = entry.partition(":")
+        pairs.append((user, password))
+
+    return pairs or None
+
+
 def cmd_ui(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(
         prog="genecad ui",
@@ -114,6 +178,20 @@ def cmd_ui(argv: list[str]) -> int:
     )
     parser.add_argument("--share", action="store_true", help="Create a public Gradio tunnel link")
     parser.add_argument("--port", type=int, default=7860, help="Port to run the UI on (default: 7860)")
+    parser.add_argument(
+        "--auth-file",
+        default=None,
+        metavar="FILE",
+        help=(
+            "Path to a credentials file (one 'user:password' per line). "
+            "Alternatively set GENECAD_AUTH='user1:pass1,user2:pass2' in the environment."
+        ),
+    )
+    parser.add_argument(
+        "--no-auth",
+        action="store_true",
+        help="Explicitly disable authentication. Only use on trusted local networks.",
+    )
     args = parser.parse_args(argv)
 
     try:
@@ -122,17 +200,40 @@ def cmd_ui(argv: list[str]) -> int:
         print("Error: gradio is not installed. Please install it using 'uv pip install gradio'.")
         return 1
 
+    auth = _load_auth(args.auth_file)
+    if auth is None:
+        if not args.no_auth:
+            print(
+                "Error: authentication is required to run the GeneCAD web UI.\n"
+                "\n"
+                "  Option 1 — credentials file:\n"
+                "    genecad ui --auth-file /path/to/credentials.txt\n"
+                "    (one 'username:password' per line; # lines are comments)\n"
+                "\n"
+                "  Option 2 — environment variable:\n"
+                "    export GENECAD_AUTH='alice:secret,bob:other'\n"
+                "    genecad ui\n"
+                "\n"
+                "  Option 3 — disable auth (local/trusted networks only):\n"
+                "    genecad ui --no-auth",
+                file=sys.stderr,
+            )
+            return 1
+        print("Warning: running without authentication (--no-auth).", file=sys.stderr)
+
     # Importing dynamically so the headless CLI doesn't strictly depend on Gradio early on
     from src.ui import create_ui, UI_CSS
     demo = create_ui()
-    
+
     # We use server_name="0.0.0.0" to ensure it's accessible over network
     # We use queue() to enable streaming output
-    demo.queue().launch(
+    demo.queue(max_size=10, default_concurrency_limit=1).launch(
         share=args.share,
         server_name="0.0.0.0",
         server_port=args.port,
         allowed_paths=[os.getcwd()],
+        auth=auth,
+        auth_message="Enter your GeneCAD credentials to continue.",
         theme=gr.themes.Default(
             primary_hue=gr.themes.colors.blue,
             secondary_hue=gr.themes.colors.gray,
@@ -154,7 +255,7 @@ def main() -> None:
         description="GeneCAD: end-to-end genome annotation powered by PlantCAD2",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("command", choices=["predict", "ui"],
+    parser.add_argument("command", choices=["predict", "train", "evaluate", "summarize", "ui"],
                         help="Sub-command to run")
     parser.add_argument("args", nargs=argparse.REMAINDER,
                         help="Arguments forwarded to the sub-command")
@@ -167,6 +268,12 @@ def main() -> None:
 
     if top.command == "predict":
         sys.exit(cmd_predict(top.args))
+    elif top.command == "train":
+        sys.exit(cmd_train(top.args))
+    elif top.command == "evaluate":
+        sys.exit(cmd_evaluate(top.args))
+    elif top.command == "summarize":
+        sys.exit(cmd_summarize(top.args))
     elif top.command == "ui":
         sys.exit(cmd_ui(top.args))
 
