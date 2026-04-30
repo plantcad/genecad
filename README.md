@@ -10,6 +10,14 @@
 
 GeneCAD is an in silico genome annotation pipeline for plants built on top of the DNA foundation model [PlantCAD2 (Zhai et al. 2025)](https://doi.org/10.1101/2025.08.27.672609).
 
+> [!IMPORTANT]
+> **This README is currently outdated.** > We are significantly simplifying the model and prediction pipeline. For the latest updates and an easier experience, please switch to the [**`refine-CrossEntropyLoss`**](https://github.com/plantcad/genecad/tree/refine-CrossEntropyLoss) branch.
+>
+> **Development Updates:**
+> * **Model & Prediction:** We are making the model and inference process much easier to use with better recall.
+> * **Animal Models:** Support for animal models is currently under active development.
+
+
 ## Contents
 
 - [Setup](#setup)
