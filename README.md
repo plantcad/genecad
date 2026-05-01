@@ -6,8 +6,7 @@
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![CI](https://github.com/plantcad/genecad/actions/workflows/ci.yaml/badge.svg)](https://github.com/plantcad/genecad/actions/workflows/ci.yaml)
 [![DOI](https://zenodo.org/badge/DOI/10.1101/2025.10.31.685877.svg)](https://doi.org/10.1101/2025.10.31.685877)
-[![Web UI](https://img.shields.io/badge/Web%20UI-No--code-green)](#web-interface-no-code)
-[![Release Wheel](https://img.shields.io/badge/Install-GitHub%20Release%20Wheel-orange)](#using-github-release-wheel)
+[![Release Wheel](https://img.shields.io/badge/Install-GitHub%20Release%20Wheel-orange)](#step-1-download-and-install)
 [![Docker](https://img.shields.io/badge/Install-Docker-blue?logo=docker)](#using-docker)
 [![GeneCAD Downloads](https://img.shields.io/github/downloads/plantcad/genecad/total?label=GitHub%20downloads)](https://github.com/plantcad/genecad/releases)
 [![Hugging Face](https://img.shields.io/badge/🤗-Hugging%20Face-yellow.svg?style=flat)](https://huggingface.co/collections/plantcad/genecad-68c686ccf14312bf6de356de)
@@ -22,50 +21,41 @@ Unlike traditional annotation tools that rely on hand-crafted features or splice
 
 ## Contents
 
-- [🚀 Getting Started](#-getting-started)
-  - [Step 1: Download and Install](#step-1-download-and-install)
-  - [Step 2: Choose Your Interface](#step-2-choose-your-interface)
-- [Prerequisites](#prerequisites)
-- [Setup](#setup)
-  - [Using GitHub Release wheel](#using-github-release-wheel)
-  - [Using uv](#using-uv)
-  - [Using Docker](#using-docker)
-  - [Using SLURM](#using-slurm)
-  - [Using SkyPilot](#using-skypilot)
-- [Inference](#inference)
-  - [Available models](#available-models)
-  - [Running the pipeline](#running-the-pipeline)
+- [🚀 Quick Start](#-quick-start)
+- [Inference Guide](#inference-guide)
+  - [CLI Reference](#cli-reference)
   - [Common run recipes](#common-run-recipes)
   - [Multi-GPU acceleration](#multi-gpu-acceleration)
-  - [Pipeline steps](#pipeline-steps)
   - [Outputs](#outputs)
-  - [GFF3 format notes](#gff3-format-notes)
-  - [Resuming an interrupted run](#resuming-an-interrupted-run)
   - [Throughput](#throughput)
-- [Evaluation](#evaluation)
-- [Training](#training)
-- [Web UI Security](#web-ui-security)
-  - [Authentication](#authentication)
-  - [Input validation](#input-validation)
-  - [Resource limits](#resource-limits)
-  - [Public deployments](#public-deployments)
+- [Advanced Setup & Execution](#advanced-setup--execution)
+  - [Install from Source (Using uv)](#install-from-source-using-uv)
+  - [Containers (Docker)](#containers-docker)
+  - [HPC Clusters (SLURM)](#hpc-clusters-slurm)
+  - [Cloud Provisioning (SkyPilot)](#cloud-provisioning-skypilot)
+- [Model Weights & Data](#model-weights--data)
+- [Advanced Usage](#advanced-usage)
+  - [Evaluation](#evaluation)
+  - [Training](#training)
 - [Troubleshooting](#troubleshooting)
-  - [Installation](#installation)
-  - [GPU / CUDA Errors](#gpu--cuda-errors)
-  - [Import / Module Errors](#import--module-errors)
-  - [Inference](#inference-1)
-  - [HuggingFace / Network](#huggingface--network)
-  - [No GPU Available](#no-gpu-available)
 - [Citation](#citation)
 - [Development](#development)
-  - [Docker](#docker)
-  - [Reproduction](#reproduction)
 
 ---
 
-## 🚀 Getting Started
+## 🚀 Quick Start
 
-We provide two ways to use GeneCAD: a **No-Code Web Interface** (best for beginners) and a **Command Line Interface** (best for automated pipelines).
+We provide a **Command Line Interface (CLI)** for automated pipelines and local usage.
+
+### Prerequisites
+
+| Requirement | Minimum | Recommended | Notes |
+|-------------|---------|-------------|-------|
+| OS | Linux (x86-64) | — | macOS is not supported (no CUDA) |
+| GPU | NVIDIA ≥ 16 GB VRAM | A100 / H100 | e.g. RTX 3090/4090 for development |
+| CUDA | 12.4 | 12.8 | Must match PyTorch 2.7.1 build |
+| Python | 3.11 | 3.12 | Managed automatically by `uv` |
+| Disk | ~20 GB free | — | Model weights cached in `~/.cache/huggingface` |
 
 ### Step 1: Download and Install
 
@@ -89,57 +79,7 @@ bash scripts/install_release.sh
 > [!NOTE]
 > `source .venv/bin/activate` must be run **every time you open a new terminal** before using `genecad`. If you see `genecad: command not found`, this is almost always the cause. See [Troubleshooting](#troubleshooting) for a permanent fix.
 
-### Step 2: Choose Your Interface
-
-#### Option A: Web Interface (No-Code)
-
-If you are not comfortable with the command line or are working on a remote cluster, use our visual web interface. It runs directly in your web browser.
-
-1. **Set credentials and launch** — pick whichever option fits your setup:
-
-   **Option A — environment variable (quickest, no file needed):**
-   ```bash
-   # Local network only (recommended for shared clusters)
-   GENECAD_AUTH="myusername:mypassword" genecad ui
-
-   # Public Gradio tunnel (accessible from anywhere — ensure strong credentials)
-   GENECAD_AUTH="myusername:mypassword" genecad ui --share
-   ```
-
-   > [!TIP]
-   > To avoid retyping, add `export GENECAD_AUTH="myusername:mypassword"` to your `~/.bashrc` (or `~/.zshrc`) so it is set automatically every time you open a terminal.
-
-   **Option B — credentials file (recommended for shared servers or multiple users):**
-   ```bash
-   echo "myusername:mypassword" > ~/.genecad_credentials
-   chmod 600 ~/.genecad_credentials   # keep it private
-
-   # Local network only
-   genecad ui --auth-file ~/.genecad_credentials
-
-   # Public Gradio tunnel
-   genecad ui --auth-file ~/.genecad_credentials --share
-   ```
-
-   > [!TIP]
-   > Multiple users: separate with commas in the env var (`GENECAD_AUTH="user1:pass1,user2:pass2"`) or add one `username:password` per line in the credentials file.
-
-   **Option C — local development only (no authentication):**
-   ```bash
-   genecad ui --no-auth
-   ```
-
-2. **Open the link**: Look for a line like `Running on local URL: http://0.0.0.0:7860` in your terminal output. Open that address in your browser, then log in with the credentials you configured.
-
-3. **Run an annotation**: The web UI lets you easily configure your run:
-   - Upload your genome FASTA file or specify its path on the server
-   - Select your organism type (`plant` or `animal`)
-   - Configure GPUs and CPU workers
-4. Click **"Run GeneCAD Pipeline"** to start and monitor progress directly from the web page.
-
-#### Option B: Command Line (CLI)
-
-For users who prefer the terminal or want to process multiple genomes automatically.
+### Step 2: Run an annotation
 
 **Run a test example (Arabidopsis):**
 No configuration required — the example *Arabidopsis thaliana* TAIR12 sequence is downloaded automatically.
@@ -154,11 +94,13 @@ genecad predict \
   -i /path/to/my_genome.fa \
   -o /path/to/output_dir \
   -s MySpecies \
-  -m plant   # Use -m animal for vertebrate genomes
+  -m plant
 ```
 
 > [!NOTE]
-> **Want more control?** For all available options — multi-GPU, batch size, top-N contigs, custom checkpoints — see the [Inference](#inference) reference. To evaluate predictions against a reference annotation, see [Evaluation](#evaluation). To fine-tune on new species, see [Training](#training). Hit an error? See [Troubleshooting](#troubleshooting).
+> * **`-s MySpecies`**: Sets the prefix for your output files (e.g., `MySpecies_GeneCAD_final.gff`).
+> * **`-m plant`**: Sets the model to use. Use `-m animal` for vertebrates.
+
 
 **Use all available GPUs** to speed up processing (significantly faster on large genomes):
 ```bash
@@ -178,278 +120,9 @@ genecad predict --gpus all
 
 ---
 
-## Prerequisites
+## Inference Guide
 
-| Requirement | Minimum | Recommended | Notes |
-|-------------|---------|-------------|-------|
-| OS | Linux (x86-64) | — | macOS is not supported (no CUDA) |
-| GPU | NVIDIA ≥ 16 GB VRAM | A100 / H100 | e.g. RTX 3090/4090 for development |
-| CUDA | 12.4 | 12.8 | Must match PyTorch 2.7.1 build |
-| Python | 3.11 | 3.12 | Managed automatically by `uv` |
-| Disk | ~20 GB free | — | Model weights cached in `~/.cache/huggingface` |
-
-Model weights are downloaded automatically from Hugging Face on first run. Internet access is required unless weights are pre-cached.
-
----
-
-## Setup
-
-The **Getting Started** section above is the recommended path for most users because it is the simplest and it tracks GitHub downloads.
-
-If you need an advanced setup, use one of the sections below.
-
-### Using GitHub Release wheel
-
-Use the install commands provided in the **Getting Started** section above.
-
-That path is the recommended install and is the most reliable setup we currently support.
-
-If you need to install a specific historical version, you can override the default version during installation:
-
-```bash
-# Example: Install a specific older version instead of the default
-GENECAD_VERSION=0.1.0 bash scripts/install_release.sh
-```
-
-### Install from Source (Using uv)
-
-If you are a developer and want to install GeneCAD from the source code instead of using the pre-built wheel, use [uv](https://docs.astral.sh/uv/):
-
-```bash
-# Clone the repository
-git clone https://github.com/plantcad/genecad && cd genecad
-
-# Install uv
-curl -LsSf https://astral.sh/uv/install.sh | sh
-export PATH="$HOME/.local/bin:$PATH"
-
-# Install all dependencies
-# mamba and causal-conv1d build from source — this can take 3–30 minutes
-uv sync --extra torch --extra mamba
-
-# Activate the virtual environment
-source .venv/bin/activate
-
-# Run the pipeline
-genecad predict
-```
-
-PyTorch is pinned to 2.7.1 (CUDA 12.8) to ensure compatibility with `mamba` (2.2.4) and `causal-conv1d` (1.5.0.post8). Newer combinations may work but are not officially tested.
-
-`mamba` and `causal-conv1d` build from source without build isolation for reliability. To cache the built wheels and speed up future installs, add these entries to `pyproject.toml`:
-
-```toml
-[tool.uv.sources]
-mamba-ssm = { path = "path/to/mamba_ssm-2.2.4-*.whl" }
-causal-conv1d = { path = "path/to/causal_conv1d-1.5.0.post8-*.whl" }
-# Or use a remote URL:
-# mamba-ssm = { url = "https://.../mamba_ssm-2.2.4-*.whl" }
-```
-
-### Using Docker
-
-The Docker image at `ghcr.io/plantcad/genecad_v1` bundles the complete runtime. Source code is **mounted at run time**, so changes you make to the cloned repository take effect immediately — no rebuild needed.
-
-> [!IMPORTANT]
-> If your environment requires a specific Docker alias (e.g., `docker1`), replace `docker` with your local command in the examples below.
-
-```bash
-# Clone the repository
-git clone https://github.com/plantcad/genecad && cd genecad
-
-# Pull the image
-docker pull ghcr.io/plantcad/genecad_v1:latest
-
-# Run on the bundled Arabidopsis example (auto-downloads FASTA)
-docker run --rm --gpus all \
-  -v $(pwd):/workspace -w /workspace \
-  ghcr.io/plantcad/genecad_v1:latest \
-  bash predict.sh
-
-# Annotate a custom plant genome
-docker run --rm --gpus all \
-  -v $(pwd):/workspace -w /workspace \
-  ghcr.io/plantcad/genecad_v1:latest \
-  bash predict.sh \
-    -i /workspace/data/my_plant.fa \
-    -o /workspace/output \
-    -s Zmays \
-    -m plant
-
-# Annotate an animal genome
-docker run --rm --gpus all \
-  -v $(pwd):/workspace -w /workspace \
-  ghcr.io/plantcad/genecad_v1:latest \
-  bash predict.sh \
-    -i /workspace/data/my_animal.fa \
-    -o /workspace/output \
-    -s Hsapiens \
-    -m animal
-```
-
-### Using SLURM
-
-SLURM is a job scheduler, not an installation method — you still need to install GeneCAD first using one of the options below, then submit jobs with `sbatch` or `salloc`. The **release wheel** is the simplest path on most clusters.
-
-**Install on the login node (choose one):**
-
-```bash
-# Option 1 — Release wheel (recommended, fastest)
-curl -LsSf https://astral.sh/uv/install.sh | sh
-export PATH="$HOME/.local/bin:$PATH"
-git clone https://github.com/plantcad/genecad.git && cd genecad
-uv venv && source .venv/bin/activate
-bash scripts/install_release.sh
-
-# Option 2 — From source (if you need to modify the code)
-# See "Install from Source (Using uv)" above
-
-# Option 3 — Docker (if your cluster supports it)
-# See "Using Docker" above
-```
-
-Load the appropriate modules for your cluster before installing (e.g. CUDA 12.8, Python 3.12). The minimum tested combination is CUDA 12.4, Python 3.11, and PyTorch 2.5.1.
-
-**Interactive single-node job:**
-
-```bash
-salloc --partition=gpu-queue --nodes=1 --ntasks=1 --gres=gpu:1
-
-cd /path/to/genecad
-genecad predict \
-  -i /path/to/input.fa \
-  -o /path/to/output \
-  -s MySpecies \
-  -m plant
-```
-
-**Batch job (`sbatch`):**
-
-```bash
-cat << 'EOF' > run_genecad.slurm
-#!/bin/bash
-#SBATCH --partition=gpu-queue
-#SBATCH --nodes=1
-#SBATCH --ntasks=1
-#SBATCH --gres=gpu:1
-#SBATCH --job-name=genecad
-
-cd /path/to/genecad
-genecad predict \
-  -i /path/to/input.fa \
-  -o /path/to/output \
-  -s MySpecies \
-  -m plant
-EOF
-
-sbatch run_genecad.slurm
-```
-
-> [!TIP]
-> **Multi-GPU on a Single Node:** To use all GPUs on a node, request them with `--gres=gpu:4` (or however many are available) and pass `--gpus all` to `genecad predict`. If there are many chromosomes, they will be distributed across GPUs. If there are fewer chromosomes than GPUs, GeneCAD will automatically split the longest sequences into parallel windows across the GPUs.
-> 
-> **Multi-Node Distributed Inference (e.g., TACC):** GeneCAD natively detects multi-node SLURM topologies. If you allocate multiple nodes (e.g., `#SBATCH --nodes=4`), you can use `srun` to seamlessly process enormous single contigs across the entire cluster. `genecad predict` will automatically bypass local launchers and allow PyTorch Lightning to route the distributed process windows.
-> 
-> ```bash
-> # Request multiple nodes/GPUs and launch via srun
-> #SBATCH --nodes=2
-> #SBATCH --ntasks=8
-> #SBATCH --gres=gpu:4
-> srun genecad predict -i /path/to/genome.fa -s MySpecies --gpus all
-> ```
->
-> **Custom launcher:** If your cluster requires a non-standard Python entrypoint (e.g. `srun python` instead of `torchrun`), use `--launcher` or the `LAUNCHER` environment variable to override automatic detection:
->
-> ```bash
-> # Via flag
-> genecad predict -i genome.fa -s MySpecies --launcher 'srun python'
->
-> # Via environment variable
-> LAUNCHER='srun python' genecad predict -i genome.fa -s MySpecies
-> ```
-
-### Using SkyPilot
-
-[SkyPilot](https://docs.skypilot.co/en/latest/docs/index.html) lets you provision on-demand cloud GPUs across many providers (AWS, GCP, Lambda, RunPod, etc.) without managing infrastructure manually. This is useful if you do not have access to a local GPU or HPC cluster.
-
-```bash
-# Install SkyPilot (adjust the cloud extra as needed)
-pip install "skypilot[lambda]>=0.10.3"
-
-# Clear local SkyPilot state, if any
-sky api stop; [ -d ~/.sky ] && rm -rf ~/.sky
-
-# Deploy a single GPU node (no setup — we use Docker instead of uv sync)
-sky launch --num-nodes 1 --yes --no-setup \
-  --cluster genecad examples/configs/cluster.sky.yaml
-
-# SSH into the node, pull the pre-built image, and run
-ssh genecad
-docker pull ghcr.io/plantcad/genecad_v1:latest
-docker run --rm --gpus all \
-  -v $(pwd):/workspace -w /workspace \
-  ghcr.io/plantcad/genecad_v1:latest \
-  bash predict.sh
-
-# Terminate the node when done
-sky down genecad
-```
-
-> [!IMPORTANT]
-> **Why Docker instead of `uv sync`?**
-> `flash-attn`, `mamba-ssm`, and `causal-conv1d` must all compile from source, which can take **30–60 minutes** on a fresh cloud node and may fail if the CUDA/GCC versions mismatch. The pre-built Docker image includes all compiled packages, making cluster setup take seconds instead of hours.
-
-See the [Throughput](#throughput) section for GPU cost comparisons across providers.
-
-<details><summary>SkyPilot GPU rates</summary>
-
-```
-> sky show-gpus L4:1   # low-end development GPU
-GPU  CLOUD   INSTANCE_TYPE  DEVICE_MEM  HOURLY_PRICE  REGION
-L4   RunPod  1x_L4_SECURE   24GB        $ 0.440       CA
-L4   GCP     g2-standard-4  24GB        $ 0.705       us-east4
-L4   AWS     g6.xlarge      22GB        $ 0.805       us-east-2
-
-> sky show-gpus H100:1  # high-end production GPU
-GPU   CLOUD       INSTANCE_TYPE          DEVICE_MEM  HOURLY_PRICE  REGION
-H100  Hyperbolic  1x-H100-75-722         80GB        $ 1.290       default
-H100  Lambda      gpu_1x_h100_pcie       80GB        $ 2.490       europe-central-1
-H100  GCP         a3-highgpu-1g          80GB        $ 5.383       us-central1
-```
-
-</details>
-
----
-
-## Inference
-
-### Available models
-
-GeneCAD provides two pre-trained models for different taxonomic groups. Both are downloaded automatically from Hugging Face on first run and cached in `~/.cache/huggingface`.
-
-| Mode (`-m`) | Organism type | Base model | GeneCAD head |
-|-------------|--------------|------------|--------------|
-| `plant` *(default)* | Plants | [`emarro/pcad2-200M-cnet-baseline`](https://huggingface.co/emarro/pcad2-200M-cnet-baseline) | [`plantcad/genecad_plant`](https://huggingface.co/plantcad/genecad_plant) |
-| `animal` | Animals / vertebrates | [`emarro/pcad2_vert_small`](https://huggingface.co/emarro/pcad2_vert_small) | [`plantcad/genecad_vert`](https://huggingface.co/plantcad/genecad_vert) |
-
-**Pre-downloading models** (recommended for clusters without internet on compute nodes):
-
-```bash
-# Log in to Hugging Face once (required to access the models)
-huggingface-cli login
-
-# Download the plant model (~5 GB, cached in ~/.cache/huggingface)
-huggingface-cli download plantcad/genecad_plant
-huggingface-cli download emarro/pcad2-200M-cnet-baseline
-
-# Download the animal model (~3 GB)
-huggingface-cli download plantcad/genecad_vert
-huggingface-cli download emarro/pcad2_vert_small
-```
-
-Run these on the login node (which has internet access). When you then run `genecad predict` on a compute node, the weights are loaded from the local cache without any download.
-
-### Running the pipeline
+### CLI Reference
 
 The primary entry point is the command line tool `genecad predict`. It discovers all chromosomes in the input FASTA automatically and runs the complete pipeline on each one.
 
@@ -468,6 +141,8 @@ Options:
   -m, --mode MODE       Model to use: plant | animal  (default: plant)
   -n, --top-n-contigs N Predict only the N longest FASTA sequences
                         (default: all sequences)
+  -l, --min-transcript-length N  Minimum transcript length in bp (default: 3)
+  -c, --cpu-workers N   CPU worker processes for GFF export (default: 1)
   -b, --batch-size N    Inference batch size per GPU  (default: auto — scaled to GPU VRAM)
   -g, --gpus LIST       GPU IDs to use: comma-separated list or 'all'  (default: 0)
   --launcher CMD        Custom entrypoint to launch predict.py (e.g. 'srun python').
@@ -478,14 +153,6 @@ Options:
 
 > [!IMPORTANT]
 > `genecad predict` internally manages the pipeline. Files under `scripts/` (`scripts/predict.py`, `scripts/gff.py`, etc.) are internal pipeline modules called automatically — do not run them directly.
-
-**Default example (Arabidopsis TAIR12, auto-downloaded):**
-
-```bash
-genecad predict
-```
-
-For common real-world commands (custom genome, top-N contigs, multi-GPU), see [Common run recipes](#common-run-recipes).
 
 ### Common run recipes
 
@@ -521,12 +188,6 @@ genecad predict \
 ```
 
 When `--top-n-contigs` is used, GeneCAD selects the N longest sequences by length, then processes them in the same order they appear in the input FASTA headers. This keeps output ordering stable and easier to compare with the source assembly.
-
-**Use all GPUs with automatic per-GPU batch sizing:**
-
-```bash
-genecad predict -i /path/to/genome.fa -s MySpecies --gpus all
-```
 
 **Pin a known-safe batch size for reproducibility:**
 
@@ -633,141 +294,238 @@ Estimated cost for common reference plant genomes (using Lambda A100 at $0.0202/
 
 ---
 
-## Training
+## Advanced Setup & Execution
 
-This section is for researchers who want to **fine-tune GeneCAD on new species** or reproduce the published models. If you only want to annotate a genome, skip to [Inference](#inference) — no training is needed.
+### Install from Source (Using uv)
 
-### Prerequisites
-
-| Requirement | Notes |
-|-------------|-------|
-| ≥ 2 × NVIDIA GPUs | Training uses PyTorch DDP. Single-GPU works but is very slow. |
-| HuggingFace account | Run `huggingface-cli login` to download training data. |
-| WandB (optional) | Metrics are logged to WandB. Disable with `WANDB_MODE=disabled`. |
-
-### Quick start
+If you are a developer and want to install GeneCAD from the source code instead of using the pre-built wheel, use [uv](https://docs.astral.sh/uv/):
 
 ```bash
-# Login to HuggingFace (one-time)
-huggingface-cli login
+# Clone the repository
+git clone https://github.com/plantcad/genecad && cd genecad
 
-# Fine-tune on the 5-species plant dataset (downloads data automatically)
-genecad train --domain plant
+# Install uv
+curl -LsSf https://astral.sh/uv/install.sh | sh
+export PATH="$HOME/.local/bin:$PATH"
 
-# Fine-tune on the vertebrate animal dataset (downloads data automatically)
-genecad train --domain animal
+# Install all dependencies
+# mamba and causal-conv1d build from source — this can take 3–30 minutes
+uv sync --extra torch --extra mamba
 
-# Use all detected GPUs
-genecad train --domain animal -g all
+# Activate the virtual environment
+source .venv/bin/activate
 
-# Use a specific subset of GPUs
-genecad train --domain animal -g 0,2,3
-
-# Fine-tune with custom settings
-genecad train \
-  --domain plant \
-  -g 4 \              # number of GPUs
-  -b 4 \              # per-GPU batch size
-  --epochs 3 \        # training epochs
-  -l 1e-4 \           # learning rate
-  -o results/my_run \ # output directory
-  -r my-run-name      # WandB run name
+# Run the pipeline
+genecad predict
 ```
 
-### Options
+PyTorch is pinned to 2.7.1 (CUDA 12.8) to ensure compatibility with `mamba` (2.2.4) and `causal-conv1d` (1.5.0.post8). Newer combinations may work but are not officially tested.
 
-```
-Options:
-  -m, --domain MODE     Training domain: plant | animal (default: plant)
-  -o, --output DIR      Output directory for checkpoints and logs
-                        (default: genecad_result/training)
-  -r, --run-name NAME   WandB run name  (default: genecad-plant-multispecies)
-  -p, --project NAME    WandB project   (default: genecad)
-  -g, --gpus SPEC       GPU selection: count, comma list, or 'all' (default: 1)
-                         examples: 2, 0,1,3, all
-  -b, --batch-size N    Per-GPU batch size (default: 4)
-  --epochs N            Number of training epochs (default: 1)
-  -e, --effective N     Effective batch size (default: 384)
-  -l, --lr RATE         Learning rate   (default: 2e-4)
-  --base-model ID       Override base encoder model ID
-  --animal-input-dir DIR  Override animal FASTA source directory
-  --animal-gff-dir DIR    Override animal GFF source directory
-  -h, --help            Show this message
+`mamba` and `causal-conv1d` build from source without build isolation for reliability. To cache the built wheels and speed up future installs, add these entries to `pyproject.toml`:
+
+```toml
+[tool.uv.sources]
+mamba-ssm = { path = "path/to/mamba_ssm-2.2.4-*.whl" }
+causal-conv1d = { path = "path/to/causal_conv1d-1.5.0.post8-*.whl" }
+# Or use a remote URL:
+# mamba-ssm = { url = "https://.../mamba_ssm-2.2.4-*.whl" }
 ```
 
-Notes:
-- `-g all` requires `nvidia-smi` to auto-detect GPU IDs.
-- When using a list (for example `-g 0,2,3`), training is restricted to that subset via `CUDA_VISIBLE_DEVICES`.
+### Containers (Docker)
 
-### Pipeline steps
+The Docker image at `ghcr.io/plantcad/genecad_v1` bundles the complete runtime. Source code is **mounted at run time**, so changes you make to the cloned repository take effect immediately — no rebuild needed.
 
-`genecad train` is fully resumable — each step checks for its output and skips if already done.
-
-| Step | Description |
-|------|-------------|
-| 0. Download | Fetch training GFF3 and FASTA files from HuggingFace (plant and animal) |
-| 1. Link | Create symlinks with naming conventions expected by the config |
-| 2. Extract GFF | Parse gene annotations into a flat feature table (Parquet) |
-| 3. Tokenize | Tokenize genome sequences into Zarr format |
-| 4. Filter | Remove incomplete or invalid gene features |
-| 5. Stack | Convert features into genomic interval windows |
-| 6. Labels | Assign per-token class labels from the filtered intervals |
-| 7. Splits | Sample training windows and split into train/validation sets |
-| 8. Train | Fine-tune GeneCAD with PyTorch DDP + PyTorch Lightning |
-
-### Outputs
-
-```
-<OUTPUT_DIR>/
-├── training.log                        ← full training log (tee'd to stdout)
-├── checkpoints/
-│   └── *.ckpt                          ← Lightning checkpoints
-└── pipeline/                           ← intermediate files (can be large)
-    ├── extract/
-    │   ├── raw_features.parquet        ← parsed gene annotations
-    │   └── tokens.zarr                 ← tokenized genome sequences
-    ├── transform/
-    │   ├── features.parquet            ← filtered features
-    │   ├── intervals.parquet           ← stacked genomic intervals
-    │   ├── labels.zarr                 ← per-token class labels
-    │   ├── sequences.zarr              ← sequence + label dataset
-    │   └── windows.zarr                ← sampled training windows
-    └── prep/
-        └── splits/
-            ├── train.zarr              ← training split
-            └── valid.zarr              ← validation split
-```
-
-> [!WARNING]
-> The `pipeline/` directory can be **several hundred GB** depending on genome sizes and number of species. It is safe to delete after training — checkpoints are self-contained. The pipeline is resumable, so intermediate files are preserved by default to avoid recomputation.
-
-To use a trained checkpoint for inference, pass it to `genecad predict`:
+> [!IMPORTANT]
+> If your environment requires a specific Docker alias (e.g., `docker1`), replace `docker` with your local command in the examples below.
 
 ```bash
+# Clone the repository
+git clone https://github.com/plantcad/genecad && cd genecad
+
+# Pull the image
+docker pull ghcr.io/plantcad/genecad_v1:latest
+
+# Run on the bundled Arabidopsis example (auto-downloads FASTA)
+docker run --rm --gpus all \
+  -v $(pwd):/workspace -w /workspace \
+  ghcr.io/plantcad/genecad_v1:latest \
+  bash predict.sh
+
+# Annotate a custom plant genome
+docker run --rm --gpus all \
+  -v $(pwd):/workspace -w /workspace \
+  ghcr.io/plantcad/genecad_v1:latest \
+  bash predict.sh \
+    -i /workspace/data/my_plant.fa \
+    -o /workspace/output \
+    -s Zmays \
+    -m plant
+
+# Annotate an animal genome
+docker run --rm --gpus all \
+  -v $(pwd):/workspace -w /workspace \
+  ghcr.io/plantcad/genecad_v1:latest \
+  bash predict.sh \
+    -i /workspace/data/my_animal.fa \
+    -o /workspace/output \
+    -s Hsapiens \
+    -m animal
+```
+
+### HPC Clusters (SLURM)
+
+SLURM is a job scheduler — you still need to install GeneCAD first using the [Quick Start](#step-1-download-and-install) or [from source](#install-from-source-using-uv) on your login node, then submit jobs with `sbatch` or `salloc`.
+
+Load the appropriate modules for your cluster before installing (e.g. CUDA 12.8, Python 3.12). The minimum tested combination is CUDA 12.4, Python 3.11, and PyTorch 2.5.1.
+
+**Interactive single-node job:**
+
+```bash
+salloc --partition=gpu-queue --nodes=1 --ntasks=1 --gres=gpu:1
+
+cd /path/to/genecad
 genecad predict \
-  -i genome.fa \
+  -i /path/to/input.fa \
+  -o /path/to/output \
   -s MySpecies \
-  -m plant \
-  --model-checkpoint results/my_run/checkpoints/epoch=0-step=5000.ckpt
+  -m plant
 ```
 
-### Summarizing training data
-
-To inspect the class balances, masking rates, and terminal codon frequencies of your training or validation splits, you can use the built-in summary tool on your compiled `zarr` datasets:
+**Batch job (`sbatch`):**
 
 ```bash
-genecad summarize summarize_training_dataset \
-  --input genecad_result/training/plant/pipeline/prep/splits/train.zarr
+cat << 'EOF' > run_genecad.slurm
+#!/bin/bash
+#SBATCH --partition=gpu-queue
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --gres=gpu:1
+#SBATCH --job-name=genecad
+
+cd /path/to/genecad
+genecad predict \
+  -i /path/to/input.fa \
+  -o /path/to/output \
+  -s MySpecies \
+  -m plant
+EOF
+
+sbatch run_genecad.slurm
 ```
-This utility provides key statistics to ensure your model gradients remain stable across custom datasets and species variations.
+
+> [!TIP]
+> **Multi-GPU on a Single Node:** To use all GPUs on a node, request them with `--gres=gpu:4` (or however many are available) and pass `--gpus all` to `genecad predict`. If there are many chromosomes, they will be distributed across GPUs. If there are fewer chromosomes than GPUs, GeneCAD will automatically split the longest sequences into parallel windows across the GPUs.
+> 
+> **Multi-Node Distributed Inference (e.g., TACC):** GeneCAD natively detects multi-node SLURM topologies. If you allocate multiple nodes (e.g., `#SBATCH --nodes=4`), you can use `srun` to seamlessly process enormous single contigs across the entire cluster. `genecad predict` will automatically bypass local launchers and allow PyTorch Lightning to route the distributed process windows.
+> 
+> ```bash
+> # Request multiple nodes/GPUs and launch via srun
+> #SBATCH --nodes=2
+> #SBATCH --ntasks=8
+> #SBATCH --gres=gpu:4
+> srun genecad predict -i /path/to/genome.fa -s MySpecies --gpus all
+> ```
+>
+> **Custom launcher:** If your cluster requires a non-standard Python entrypoint (e.g. `srun python` instead of `torchrun`), use `--launcher` or the `LAUNCHER` environment variable to override automatic detection:
+>
+> ```bash
+> # Via flag
+> genecad predict -i genome.fa -s MySpecies --launcher 'srun python'
+>
+> # Via environment variable
+> LAUNCHER='srun python' genecad predict -i genome.fa -s MySpecies
+> ```
+
+### Cloud Provisioning (SkyPilot)
+
+[SkyPilot](https://docs.skypilot.co/en/latest/docs/index.html) lets you provision on-demand cloud GPUs across many providers (AWS, GCP, Lambda, RunPod, etc.) without managing infrastructure manually. This is useful if you do not have access to a local GPU or HPC cluster.
+
+```bash
+# Install SkyPilot (adjust the cloud extra as needed)
+pip install "skypilot[lambda]>=0.10.3"
+
+# Clear local SkyPilot state, if any
+sky api stop; [ -d ~/.sky ] && rm -rf ~/.sky
+
+# Deploy a single GPU node (no setup — we use Docker instead of uv sync)
+sky launch --num-nodes 1 --yes --no-setup \
+  --cluster genecad examples/configs/cluster.sky.yaml
+
+# SSH into the node, pull the pre-built image, and run
+ssh genecad
+docker pull ghcr.io/plantcad/genecad_v1:latest
+docker run --rm --gpus all \
+  -v $(pwd):/workspace -w /workspace \
+  ghcr.io/plantcad/genecad_v1:latest \
+  bash predict.sh
+
+# Terminate the node when done
+sky down genecad
+```
+
+> [!IMPORTANT]
+> **Why Docker instead of `uv sync`?**
+> `flash-attn`, `mamba-ssm`, and `causal-conv1d` must all compile from source, which can take **30–60 minutes** on a fresh cloud node and may fail if the CUDA/GCC versions mismatch. The pre-built Docker image includes all compiled packages, making cluster setup take seconds instead of hours.
+
+See the [Throughput](#throughput) section for GPU cost comparisons across providers.
+
+<details><summary>SkyPilot GPU rates</summary>
+
+```
+> sky show-gpus L4:1   # low-end development GPU
+GPU  CLOUD   INSTANCE_TYPE  DEVICE_MEM  HOURLY_PRICE  REGION
+L4   RunPod  1x_L4_SECURE   24GB        $ 0.440       CA
+L4   GCP     g2-standard-4  24GB        $ 0.705       us-east4
+L4   AWS     g6.xlarge      22GB        $ 0.805       us-east-2
+
+> sky show-gpus H100:1  # high-end production GPU
+GPU   CLOUD       INSTANCE_TYPE          DEVICE_MEM  HOURLY_PRICE  REGION
+H100  Hyperbolic  1x-H100-75-722         80GB        $ 1.290       default
+H100  Lambda      gpu_1x_h100_pcie       80GB        $ 2.490       europe-central-1
+H100  GCP         a3-highgpu-1g          80GB        $ 5.383       us-central1
+```
+
+</details>
 
 ---
 
-## Evaluation
+## Model Weights & Data
+
+### Available models
+
+GeneCAD provides two pre-trained models for different taxonomic groups. Both are downloaded automatically from Hugging Face on first run and cached in `~/.cache/huggingface`. Internet access is required on the first run.
+
+| Mode (`-m`) | Organism type | Base model | GeneCAD head |
+|-------------|--------------|------------|--------------|
+| `plant` *(default)* | Plants | [`emarro/pcad2-200M-cnet-baseline`](https://huggingface.co/emarro/pcad2-200M-cnet-baseline) | [`plantcad/genecad_plant`](https://huggingface.co/plantcad/genecad_plant) |
+| `animal` | Animals / vertebrates | [`emarro/pcad2_vert_small`](https://huggingface.co/emarro/pcad2_vert_small) | [`plantcad/genecad_vert`](https://huggingface.co/plantcad/genecad_vert) |
+
+**Pre-downloading models** (recommended for clusters without internet on compute nodes):
+
+```bash
+# Log in to Hugging Face once (required to access the models)
+huggingface-cli login
+
+# Download the plant model (~5 GB, cached in ~/.cache/huggingface)
+huggingface-cli download plantcad/genecad_plant
+huggingface-cli download emarro/pcad2-200M-cnet-baseline
+
+# Download the animal model (~3 GB)
+huggingface-cli download plantcad/genecad_vert
+huggingface-cli download emarro/pcad2_vert_small
+```
+
+Run these on the login node (which has internet access). When you then run `genecad predict` on a compute node, the weights are loaded from the local cache without any download.
+
+---
+
+## Advanced Usage
+
+### Evaluation
 
 GeneCAD includes a built-in evaluation tool that produces a structured five-section report comparing predicted annotations against a reference. It is self-contained for Sections 1, 2, 3, and 5. Section 4 uses BUSCO if you enable it, but BUSCO is optional.
 
-### Usage
+**Usage**
 
 ```bash
 genecad evaluate \
@@ -786,8 +544,10 @@ Most users only need these arguments:
 | `--fasta` | Genome FASTA; enables Sections 3 and 4 |
 | `--output` | Write the report to a file instead of stdout |
 | `--skip-busco` | Skip Section 4 for a faster, fully portable run |
+| `--busco-out` | BUSCO output directory name (default: `busco_eval`) |
+| `--fix-busco-env` | Auto-repair a broken conda env and retry once |
 
-### BUSCO setup
+**BUSCO setup**
 
 If BUSCO is available on your system, GeneCAD can pick it up automatically. If not, choose the option that matches your environment:
 
@@ -850,7 +610,7 @@ Other evaluation options:
 - `--busco-cmd` for an explicit BUSCO launcher
 - `--busco-activate-script` for cluster-specific activation scripts
 
-### Example output (*Arabidopsis thaliana*)
+**Example output (*Arabidopsis thaliana*)**
 
 ```
 ==============================================================
@@ -919,7 +679,7 @@ SECTION 5 – Site-Level Error Breakdown
   Junc.Acc.     126788  112475  106654   5821  20134  0.9482  0.8412  0.8915
 ```
 
-### Metric guide
+**Metric guide**
 
 | Section | Metric | Description |
 |---------|--------|-------------|
@@ -937,77 +697,144 @@ SECTION 5 – Site-Level Error Breakdown
 > [!NOTE]
 > Sections 3 and 4 require `--fasta`. For BUSCO, prefer `--busco-cmd` for reproducibility, or use `--auto-install-busco` for first-run setup.
 
----
+### Training
 
-## Web UI Security
+This section is for researchers who want to **fine-tune GeneCAD on new species** or reproduce the published models. If you only want to annotate a genome, skip to [Inference Guide](#inference-guide) — no training is needed.
 
-This section applies only when you run `genecad ui`. The CLI (`genecad predict`) is unaffected.
+**Prerequisites**
 
-### Authentication
+| Requirement | Notes |
+|-------------|-------|
+| ≥ 2 × NVIDIA GPUs | Training uses PyTorch DDP. Single-GPU works but is very slow. |
+| HuggingFace account | Run `huggingface-cli login` to download training data. |
+| WandB (optional) | Metrics are logged to WandB. Disable with `WANDB_MODE=disabled`. |
 
-Authentication is **required** by default. The server refuses to start without credentials unless `--no-auth` is passed explicitly.
+**Quick start**
 
-| Method | How to use |
-|--------|-----------|
-| Environment variable (quickest) | `GENECAD_AUTH="user:pass" genecad ui` |
-| Credentials file (multiple users) | `genecad ui --auth-file /path/to/creds.txt` |
-| Disable (local/trusted only) | `genecad ui --no-auth` |
-
-**Environment variable** — supports multiple users via comma separation:
 ```bash
-GENECAD_AUTH="alice:strongpassword,bob:anotherpassword" genecad ui
-```
-Add `export GENECAD_AUTH="..."` to `~/.bashrc` to set it permanently.
+# Login to HuggingFace (one-time)
+huggingface-cli login
 
-**Credentials file format** — one `username:password` per line; lines starting with `#` are ignored:
+# Fine-tune on the 5-species plant dataset (downloads data automatically)
+genecad train --domain plant
+
+# Fine-tune on the vertebrate animal dataset (downloads data automatically)
+genecad train --domain animal
+
+# Use all detected GPUs
+genecad train --domain animal -g all
+
+# Use a specific subset of GPUs
+genecad train --domain animal -g 0,2,3
+
+# Fine-tune with custom settings
+genecad train \
+  --domain plant \
+  -g 4 \              # number of GPUs
+  -b 4 \              # per-GPU batch size
+  --epochs 3 \        # training epochs
+  -l 1e-4 \           # learning rate
+  -o results/my_run \ # output directory
+  -r my-run-name      # WandB run name
 ```
-# ~/.genecad_credentials
-alice:strongpassword
-bob:anotherpassword
+
+**Options**
+
 ```
+Options:
+  -m, --domain MODE     Training domain: plant | animal (default: plant)
+  -o, --output DIR      Output directory for checkpoints and logs
+                        (default: genecad_result/training)
+  -r, --run-name NAME   WandB run name  (default: genecad-plant-multispecies)
+  -p, --project NAME    WandB project   (default: genecad)
+  -g, --gpus SPEC       GPU selection: count, comma list, or 'all' (default: 1)
+                         examples: 2, 0,1,3, all
+  -b, --batch-size N    Per-GPU batch size (default: 4)
+  --epochs N            Number of training epochs (default: 1)
+  -e, --effective N     Effective batch size (default: 384)
+  -l, --lr RATE         Learning rate   (default: 2e-4)
+  --base-model ID       Override base encoder model ID
+  --animal-input-dir DIR  Override animal FASTA source directory
+  --animal-gff-dir DIR    Override animal GFF source directory
+  --gff-parallel N        Parallel workers for Step 2 GFF extraction (default: 1)
+  --window-size N         Training window size for sample generation (default: 8192)
+  --intergenic-proportion P  Intergenic window ratio in [0,1] for sample generation (default: 0.15)
+  --base-frozen yes|no    Freeze base encoder during training (default: domain preset)
+  --auto-class-weights yes|no Compute class weights from train set before training (default: yes)
+  --label-qc yes|no       Run split/label QC before training (default: yes)
+  --min-non-intergenic-ratio P  Fail if train non-intergenic token ratio < P (default: 0.01)
+  --min-core-class-tokens N  Fail if core classes have too few tokens (default: 100)
+  --hf-upload-repo ID     Upload artifacts to Hugging Face repo (optional)
+  --hf-upload-type TYPE   Model or dataset repo type (default: model)
+  --hf-upload-path PATH   Path inside HF repo (default: run name)
+  -h, --help            Show this message
+```
+
+Notes:
+- `-g all` requires `nvidia-smi` to auto-detect GPU IDs.
+- When using a list (for example `-g 0,2,3`), training is restricted to that subset via `CUDA_VISIBLE_DEVICES`.
+
+**Pipeline steps**
+
+`genecad train` is fully resumable — each step checks for its output and skips if already done.
+
+| Step | Description |
+|------|-------------|
+| 0. Download | Fetch training GFF3 and FASTA files from HuggingFace (plant and animal) |
+| 1. Link | Create symlinks with naming conventions expected by the config |
+| 2. Extract GFF | Parse gene annotations into a flat feature table (Parquet) |
+| 3. Tokenize | Tokenize genome sequences into Zarr format |
+| 4. Filter | Remove incomplete or invalid gene features |
+| 5. Stack | Convert features into genomic interval windows |
+| 6. Labels | Assign per-token class labels from the filtered intervals |
+| 7. Splits | Sample training windows and split into train/validation sets |
+| 8. Train | Fine-tune GeneCAD with PyTorch DDP + PyTorch Lightning |
+
+**Outputs**
+
+```
+<OUTPUT_DIR>/
+├── training.log                        ← full training log (tee'd to stdout)
+├── checkpoints/
+│   └── *.ckpt                          ← Lightning checkpoints
+└── pipeline/                           ← intermediate files (can be large)
+    ├── extract/
+    │   ├── raw_features.parquet        ← parsed gene annotations
+    │   └── tokens.zarr                 ← tokenized genome sequences
+    ├── transform/
+    │   ├── features.parquet            ← filtered features
+    │   ├── intervals.parquet           ← stacked genomic intervals
+    │   ├── labels.zarr                 ← per-token class labels
+    │   ├── sequences.zarr              ← sequence + label dataset
+    │   └── windows.zarr                ← sampled training windows
+    └── prep/
+        └── splits/
+            ├── train.zarr              ← training split
+            └── valid.zarr              ← validation split
+```
+
+> [!WARNING]
+> The `pipeline/` directory can be **several hundred GB** depending on genome sizes and number of species. It is safe to delete after training — checkpoints are self-contained. The pipeline is resumable, so intermediate files are preserved by default to avoid recomputation.
+
+To use a trained checkpoint for inference, pass it to `genecad predict`:
+
 ```bash
-chmod 600 ~/.genecad_credentials   # keep it private
-genecad ui --auth-file ~/.genecad_credentials
+genecad predict \
+  -i genome.fa \
+  -s MySpecies \
+  -m plant \
+  --model-checkpoint results/my_run/checkpoints/epoch=0-step=5000.ckpt
 ```
 
-### Input validation
+**Summarizing training data**
 
-The web UI enforces the following on every uploaded or path-specified file **before the pipeline runs**:
+To inspect the class balances, masking rates, and terminal codon frequencies of your training or validation splits, you can use the built-in summary tool on your compiled `zarr` datasets:
 
-| Check | Limit |
-|-------|-------|
-| File extension | `.fa`, `.fasta`, `.fna`, `.ffn`, `.fa.gz`, `.fasta.gz`, `.fna.gz` |
-| File size (on disk) | 10 GB |
-| Decompressed size (`.gz`) | 50 GB — rejects gzip bombs before they expand |
-| Sequence characters | A, C, G, T, N only (upper or lowercase) — anything else is rejected immediately |
-| Sequence count | 100,000 contigs |
-| Per-contig length | 500 Mbp |
-
-Invalid files are deleted from the server immediately on rejection — they are never passed to the pipeline.
-
-### Resource limits
-
-Each job runs inside a kernel-enforced sandbox:
-
-| Limit | Value | Purpose |
-|-------|-------|---------|
-| Max output file size | 50 GB | Prevents disk fill-up |
-| Max child processes | 512 | Prevents fork bombs |
-| Max open file descriptors | 4,096 | Prevents FD exhaustion |
-| GPU count | Capped to hardware present | Prevents requesting non-existent GPUs |
-| CPU workers | Capped to `os.cpu_count()` | Prevents over-subscription |
-| Job timeout | 2 h minimum, ~1 min/MB, no upper cap | Scales with genome size |
-| Concurrent jobs | 1 | Full hardware per job, no contention |
-| Queue size | 10 | Limits waiting jobs |
-| Rate limit | 3 jobs / IP / hour | Limits repeated submissions |
-
-### Public deployments
-
-If you use `--share` (Gradio public tunnel) or expose the port to the internet:
-
-- Always use `--auth-file` with strong, unique passwords — never `--no-auth`
-- Use HTTPS (put the server behind an nginx/Caddy reverse proxy with TLS)
-- Consider firewall rules to restrict access to known IP ranges if your user base is fixed
+```bash
+genecad summarize summarize_training_dataset \
+  --input genecad_result/training/plant/pipeline/prep/splits/train.zarr
+```
+This utility provides key statistics to ensure your model gradients remain stable across custom datasets and species variations.
 
 ---
 
@@ -1207,13 +1034,13 @@ genecad train --domain plant   # re-run; completed steps are skipped
 
 If you do not have access to a local GPU, you have two options:
 
-**Option 1 — Cloud GPU via SkyPilot** (see [Using SkyPilot](#using-skypilot)):
+**Option 1 — Cloud GPU via SkyPilot** (see [Cloud Provisioning](#cloud-provisioning-skypilot)):
 
 ```bash
 sky launch --cluster genecad examples/configs/cluster.sky.yaml
 ```
 
-**Option 2 — HPC cluster via SLURM** (see [Using SLURM](#using-slurm)):
+**Option 2 — HPC cluster via SLURM** (see [HPC Clusters](#hpc-clusters-slurm)):
 
 ```bash
 salloc --partition=gpu-queue --nodes=1 --gres=gpu:1
