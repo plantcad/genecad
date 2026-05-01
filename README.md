@@ -11,9 +11,9 @@
 GeneCAD is an in silico genome annotation pipeline for plants built on top of the DNA foundation model [PlantCAD2 (Zhai et al. 2025)](https://doi.org/10.1101/2025.08.27.672609).
 
 > [!CAUTION]
-> **Scientific Update:** We’ve identified a significant issue in the current `main` branch regarding missing BUSCO genes. While we’re working on making GeneCAD easier to use, our first priority is scientific integrity. We believe it’s an ethical necessity to report these gaps and fix them. 
+> **Scientific Update**: We’ve identified a significant problem in the current `main` branch regarding missing BUSCO genes (Thank you [MaizeGDB](https://www.maizegdb.org/) team!). The model was failing because of inconsistencies in the model's training data and limitations in the previous architecture.
 > 
-> All active development, including the move to new branch to solve the BUSCO gene issue, is now happening on the [**`refine-CrossEntropyLoss`**](https://github.com/plantcad/genecad/tree/refine-CrossEntropyLoss). That branch also includes our upcoming support for animal models and a much-simplified prediction pipeline. We suggest heading over there for the most accurate results.
+> At the current moment, we **do not** recommend using the `main` branch. All active development, including the move to a new branch to solve the BUSCO gene issue, is now happening on [**refine-CrossEntropyLoss**](https://github.com/plantcad/genecad/tree/refine-CrossEntropyLoss). That branch also includes our upcoming support for animal models and a much-simplified prediction pipeline. We suggest heading over there for the most accurate results.
 
 ## Contents
 
