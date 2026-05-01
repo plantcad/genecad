@@ -1,3 +1,5 @@
+"""GeneCAD Quality Control (QC) utilities for validating feature tables and label datasets."""
+
 import argparse
 import ast
 import glob
@@ -15,6 +17,7 @@ logger = logging.getLogger(__name__)
 
 
 def _parse_label_classes(attrs: dict) -> dict[int, str]:
+    """Standardizes label_classes metadata into a dictionary mapping IDs to class names."""
     value = attrs.get("label_classes")
     if value is None:
         return {}
@@ -22,8 +25,10 @@ def _parse_label_classes(attrs: dict) -> dict[int, str]:
     if isinstance(value, dict):
         parsed = value
     elif isinstance(value, str):
+        # Handle stringified dictionary (common in some storage formats)
         parsed = ast.literal_eval(value)
     else:
+        # Fallback for other iterable types
         parsed = dict(value)
 
     out: dict[int, str] = {}
@@ -33,6 +38,7 @@ def _parse_label_classes(attrs: dict) -> dict[int, str]:
 
 
 def _sample_dataset_stats(ds_path: str, batch_size: int = 2048) -> dict:
+    """Computes basic statistics for a Zarr label dataset by iterating in batches."""
     ds = xr.open_zarr(ds_path)
     required = {"tag_labels", "label_mask", "species"}
     missing = required.difference(set(ds.data_vars.keys()))
@@ -51,6 +57,7 @@ def _sample_dataset_stats(ds_path: str, batch_size: int = 2048) -> dict:
     masked_token_count = 0
     unmasked_token_count = 0
 
+    # Process dataset in batches to minimize memory usage
     for start in range(0, n_samples, batch_size):
         end = min(start + batch_size, n_samples)
         batch = ds.isel(sample=slice(start, end)).compute()
@@ -59,16 +66,20 @@ def _sample_dataset_stats(ds_path: str, batch_size: int = 2048) -> dict:
         masks = batch["label_mask"].values.astype(bool)
         species = batch["species"].values
 
+        # Update species counts (stored as strings)
         species_counts.update(str(s) for s in species)
 
+        # Count masked/unmasked tokens
         valid_labels = labels[masks]
         masked_token_count += int((~masks).sum())
         unmasked_token_count += int(masks.sum())
 
         if valid_labels.size > 0:
+            # Check for out-of-bounds labels
             invalid = (valid_labels < 0) | (valid_labels >= n_classes)
             invalid_label_count += int(invalid.sum())
             if invalid_label_count == 0:
+                # Accumulate counts for each class
                 token_counts += np.bincount(valid_labels, minlength=n_classes)
 
     ds.close()
@@ -105,6 +116,7 @@ def _sample_dataset_stats(ds_path: str, batch_size: int = 2048) -> dict:
 
 
 def run_label_qc(args: argparse.Namespace) -> None:
+    """Runs quality control on training and validation label datasets."""
     logger.info("Running label QC")
 
     train_stats = _sample_dataset_stats(args.train_dataset, batch_size=args.batch_size)
@@ -112,6 +124,7 @@ def run_label_qc(args: argparse.Namespace) -> None:
 
     issues: list[str] = []
 
+    # Check basic constraints for both splits
     for split_name, stats in [("train", train_stats), ("valid", valid_stats)]:
         if stats["n_samples"] < args.min_samples_per_split:
             issues.append(
@@ -122,12 +135,14 @@ def run_label_qc(args: argparse.Namespace) -> None:
                 f"{split_name} has invalid labels: {stats['invalid_label_count']} labels outside [0, n_classes)"
             )
 
+    # Check for sequence diversity (non-intergenic tokens)
     if train_stats["non_intergenic_ratio"] < args.min_non_intergenic_ratio:
         issues.append(
             "train non-intergenic ratio is too low: "
             f"{train_stats['non_intergenic_ratio']:.4f} < {args.min_non_intergenic_ratio:.4f}"
         )
 
+    # Check species representation
     train_species = set(train_stats["species_counts"].keys())
     valid_species = set(valid_stats["species_counts"].keys())
     if len(train_species) < args.min_species_in_train:
@@ -135,12 +150,14 @@ def run_label_qc(args: argparse.Namespace) -> None:
             f"train has too few species: {len(train_species)} < {args.min_species_in_train}"
         )
 
+    # Ensure validation set has the same species as training (if requested)
     missing_in_valid = sorted(train_species.difference(valid_species))
     if missing_in_valid and not args.allow_missing_species_in_valid:
         issues.append(
             "some train species are missing in valid split: " + ", ".join(missing_in_valid)
         )
 
+    # Check for presence of core biological classes
     required_core = [
         "intergenic",
         "I-intron",
@@ -155,6 +172,7 @@ def run_label_qc(args: argparse.Namespace) -> None:
                 f"core class '{cname}' has too few train tokens: {count} < {args.min_core_class_tokens}"
             )
 
+    # Save summary and handle errors
     summary = {
         "train": train_stats,
         "valid": valid_stats,
@@ -187,6 +205,7 @@ def run_label_qc(args: argparse.Namespace) -> None:
 
 @dataclass
 class CheckpointSelection:
+    """Stores metadata about a selected model checkpoint and why it was chosen."""
     metric_name: str
     best_metric: float
     epoch: int
@@ -196,6 +215,7 @@ class CheckpointSelection:
 
 
 def _find_metrics_csv(output_dir: str) -> str:
+    """Locates the most recent metrics.csv in the training output directory."""
     pattern = os.path.join(output_dir, "logs", "csv", "lightning_logs", "version_*", "metrics.csv")
     matches = sorted(glob.glob(pattern))
     if not matches:
@@ -204,6 +224,7 @@ def _find_metrics_csv(output_dir: str) -> str:
 
 
 def _closest_checkpoint(checkpoint_dir: str, target_epoch: int, target_step: int) -> tuple[str, str]:
+    """Finds the checkpoint file that most closely matches the requested epoch and step."""
     candidates = sorted(glob.glob(os.path.join(checkpoint_dir, "epoch_*-step_*.ckpt")))
     if not candidates:
         last_ckpt = os.path.join(checkpoint_dir, "last.ckpt")
@@ -213,7 +234,7 @@ def _closest_checkpoint(checkpoint_dir: str, target_epoch: int, target_step: int
 
     def parse_ckpt(path: str) -> tuple[int, int]:
         name = os.path.basename(path)
-        # epoch_00-step_001234.ckpt
+        # e.g., epoch_00-step_001234.ckpt
         ep = int(name.split("epoch_")[1].split("-")[0])
         st = int(name.split("step_")[1].split(".")[0])
         return ep, st
@@ -222,6 +243,7 @@ def _closest_checkpoint(checkpoint_dir: str, target_epoch: int, target_step: int
     best_dist = float("inf")
     for path in candidates:
         ep, st = parse_ckpt(path)
+        # Weight epoch heavily then step
         dist = abs(ep - target_epoch) * 1_000_000 + abs(st - target_step)
         if dist < best_dist:
             best_dist = dist
@@ -231,6 +253,7 @@ def _closest_checkpoint(checkpoint_dir: str, target_epoch: int, target_step: int
 
 
 def run_select_best_checkpoint(args: argparse.Namespace) -> None:
+    """Identifies the best checkpoint from metrics and symlinks it for easy access."""
     metrics_csv = _find_metrics_csv(args.output_dir)
     logger.info("Selecting best checkpoint using metrics from %s", metrics_csv)
 
@@ -256,12 +279,14 @@ def run_select_best_checkpoint(args: argparse.Namespace) -> None:
     preferred_name = f"epoch_{epoch:02d}-step_{step:06d}.ckpt"
     preferred_path = os.path.join(checkpoint_dir, preferred_name)
 
+    # Try exact match first, then fall back to closest
     if os.path.exists(preferred_path):
         chosen = preferred_path
         reason = "exact_epoch_step_match"
     else:
         chosen, reason = _closest_checkpoint(checkpoint_dir, epoch, step)
 
+    # Create/update the 'best.ckpt' symlink
     best_link = os.path.join(checkpoint_dir, "best.ckpt")
     if os.path.lexists(best_link):
         os.remove(best_link)
@@ -287,24 +312,20 @@ def run_select_best_checkpoint(args: argparse.Namespace) -> None:
 
 
 def run_feature_qc(args: argparse.Namespace) -> None:
+    """Checks the integrity and coordinate consistency of genomic feature parquet files."""
     logger.info("Running feature-table QC")
     features = pd.read_parquet(args.features_parquet)
 
     issues: list[str] = []
     required_columns = [
-        "species_id",
-        "chromosome_id",
-        "gene_id",
-        "strand",
-        "gene_start",
-        "gene_stop",
-        "feature_start",
-        "feature_stop",
+        "species_id", "chromosome_id", "gene_id", "strand",
+        "gene_start", "gene_stop", "feature_start", "feature_stop",
     ]
     missing = [c for c in required_columns if c not in features.columns]
     if missing:
         raise ValueError(f"Missing required columns in features parquet: {missing}")
 
+    # Check for basic coordinate validity
     bad_feature_bounds = features[features["feature_start"] > features["feature_stop"]]
     if len(bad_feature_bounds) > 0:
         issues.append(f"feature_start > feature_stop rows: {len(bad_feature_bounds)}")
@@ -313,6 +334,7 @@ def run_feature_qc(args: argparse.Namespace) -> None:
     if len(bad_gene_bounds) > 0:
         issues.append(f"gene_start > gene_stop rows: {len(bad_gene_bounds)}")
 
+    # Features should be contained within their parent genes
     out_of_gene = features[
         (features["feature_start"] < features["gene_start"])
         | (features["feature_stop"] > features["gene_stop"])
@@ -345,6 +367,7 @@ def run_feature_qc(args: argparse.Namespace) -> None:
 
 
 def main() -> None:
+    """Main entry point for GeneCAD QC utilities."""
     parser = argparse.ArgumentParser(description="GeneCAD quality-control utilities")
     sub = parser.add_subparsers(dest="command", required=True)
 
