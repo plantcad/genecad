@@ -440,26 +440,60 @@ sbatch run_genecad.slurm
 
 [SkyPilot](https://docs.skypilot.co/en/latest/docs/index.html) lets you provision on-demand cloud GPUs across many providers (AWS, GCP, Lambda, RunPod, etc.) without managing infrastructure manually. This is useful if you do not have access to a local GPU or HPC cluster.
 
+> [!IMPORTANT]
+> Run these commands from your **local machine or a login node with internet access** — not from an HPC compute node, which typically has no outbound internet and cannot reach cloud provider APIs.
+
+**Step 1 — Install SkyPilot** (in a dedicated environment, separate from the GeneCAD venv to avoid dependency conflicts):
+
 ```bash
-# Install SkyPilot (adjust the cloud extra as needed)
+python3 -m venv ~/.venvs/skypilot
+source ~/.venvs/skypilot/bin/activate
 pip install "skypilot[lambda]>=0.10.3"
+```
 
-# Clear local SkyPilot state, if any
-sky api stop; [ -d ~/.sky ] && rm -rf ~/.sky
+**Step 2 — Start the API server and configure credentials:**
 
-# Deploy a single GPU node (no setup — we use Docker instead of uv sync)
+```bash
+# Start the SkyPilot API server (runs as a background process)
+sky api start
+
+# Verify credentials for your cloud provider
+sky check lambda
+```
+
+If `sky check lambda` shows `Lambda: disabled`, configure your API key:
+1. Generate a key at [https://cloud.lambdalabs.com/api-keys](https://cloud.lambdalabs.com/api-keys)
+2. Add it to `~/.lambda_cloud/lambda_keys`:
+
+```bash
+mkdir -p ~/.lambda_cloud
+echo "api_key = YOUR_API_KEY_HERE" > ~/.lambda_cloud/lambda_keys
+sky check lambda   # should now show: Lambda: enabled ✓
+```
+
+**Step 3 — Launch a GPU node and run:**
+
+```bash
+# From the cloned genecad repo directory (SkyPilot rsyncs it to the cloud node)
+cd /path/to/genecad
+
+# Deploy a single GPU node (--no-setup: Docker replaces uv sync)
 sky launch --num-nodes 1 --yes --no-setup \
   --cluster genecad examples/configs/cluster.sky.yaml
 
-# SSH into the node, pull the pre-built image, and run
+# SSH in — the repo is synced to ~/sky_workdir/, not the home directory
 ssh genecad
+cd ~/sky_workdir                                    # ← required: repo is here
+
+# Pull the pre-built image and run
 docker pull ghcr.io/plantcad/genecad_v1:latest
 docker run --rm --gpus all \
   -v $(pwd):/workspace -w /workspace \
   ghcr.io/plantcad/genecad_v1:latest \
   bash predict.sh
 
-# Terminate the node when done
+# Exit the node and terminate when done (stops billing)
+exit
 sky down genecad
 ```
 
@@ -1030,6 +1064,63 @@ genecad train --domain plant   # re-run; completed steps are skipped
 
 ---
 
+### SkyPilot
+
+**`sky api start` fails with `RuntimeError: Failed to start SkyPilot API server`**
+
+The SkyPilot API server starts in the background and `sky api start` may time out on its own health check even though the server is running fine. Check if it actually started:
+
+```bash
+curl http://127.0.0.1:46580/api/health
+```
+
+If you see `{"status": "ok"}`, the server is up — ignore the error and proceed normally. If the server is not running:
+
+```bash
+sky api stop
+sleep 2
+sky api start
+```
+
+**`sky check lambda` shows `Lambda: disabled`**
+
+You need to configure your Lambda API key. Generate one at [https://cloud.lambdalabs.com/api-keys](https://cloud.lambdalabs.com/api-keys), then:
+
+```bash
+mkdir -p ~/.lambda_cloud
+echo "api_key = YOUR_API_KEY_HERE" > ~/.lambda_cloud/lambda_keys
+sky check lambda   # should now show: Lambda: enabled ✓
+```
+
+**`sky launch` fails with connection errors on an HPC compute node**
+
+HPC compute nodes typically have no outbound internet access and cannot reach cloud provider APIs. SkyPilot must be run from your **local machine** or the cluster's **login node** (which usually has internet). Check with your sysadmin if you are unsure.
+
+**`bash predict.sh: No such file or directory` after SSH into the cloud node**
+
+When you `ssh genecad`, you land in the home directory (`~`). SkyPilot syncs your local repo to `~/sky_workdir/` — you must `cd` there before running Docker:
+
+```bash
+ssh genecad
+cd ~/sky_workdir   # ← the repo and predict.sh are here
+docker run --rm --gpus all \
+  -v $(pwd):/workspace -w /workspace \
+  ghcr.io/plantcad/genecad_v1:latest \
+  bash predict.sh
+```
+
+**SkyPilot conflicts with GeneCAD dependencies**
+
+Install SkyPilot in a separate virtual environment, not inside the GeneCAD `.venv`:
+
+```bash
+python3 -m venv ~/.venvs/skypilot
+source ~/.venvs/skypilot/bin/activate
+pip install "skypilot[lambda]>=0.10.3"
+```
+
+---
+
 ### No GPU Available
 
 If you do not have access to a local GPU, you have two options:
@@ -1037,7 +1128,8 @@ If you do not have access to a local GPU, you have two options:
 **Option 1 — Cloud GPU via SkyPilot** (see [Cloud Provisioning](#cloud-provisioning-skypilot)):
 
 ```bash
-sky launch --cluster genecad examples/configs/cluster.sky.yaml
+sky launch --num-nodes 1 --yes --no-setup \
+  --cluster genecad examples/configs/cluster.sky.yaml
 ```
 
 **Option 2 — HPC cluster via SLURM** (see [HPC Clusters](#hpc-clusters-slurm)):
