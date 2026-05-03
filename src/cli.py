@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import importlib
 import os
 import subprocess
 import sys
@@ -44,27 +45,68 @@ Examples:
   genecad predict --gpus all   # runs on bundled Arabidopsis example
 """,
     )
-    p.add_argument("-i", "--input", default=None,
-                   help="Input genome FASTA (default: downloads Arabidopsis TAIR12 example)")
-    p.add_argument("-o", "--output", default=None,
-                   help="Output directory (default: ./genecad_result/<species>_predictions)")
-    p.add_argument("-s", "--species", default="Athaliana",
-                   help="Species label on output filenames (default: Athaliana)")
-    p.add_argument("-m", "--mode", default="plant", choices=["plant", "animal"],
-                   help="Model to use (default: plant)")
-    p.add_argument("-n", "--top-n-contigs", default="all", dest="top_n_contigs",
-                   help="Process only the N longest contigs (default: all)")
-    p.add_argument("-l", "--min-transcript-length", default="3",
-                   dest="min_transcript_length",
-                   help="Minimum transcript length in bp (default: 3)")
-    p.add_argument("-c", "--cpu-workers", default="1", dest="cpu_workers",
-                   help="CPU worker processes for GFF export (default: 1)")
-    p.add_argument("-b", "--batch-size", default="auto", dest="batch_size",
-                   help="Inference batch size per GPU (default: auto)")
-    p.add_argument("-g", "--gpus", default="0",
-                   help="GPU IDs: comma-separated list or 'all' (default: 0)")
-    p.add_argument("--launcher", default="",
-                   help="Custom launcher command (e.g. 'srun python')")
+    p.add_argument(
+        "-i",
+        "--input",
+        default=None,
+        help="Input genome FASTA (default: downloads Arabidopsis TAIR12 example)",
+    )
+    p.add_argument(
+        "-o",
+        "--output",
+        default=None,
+        help="Output directory (default: ./genecad_result/<species>_predictions)",
+    )
+    p.add_argument(
+        "-s",
+        "--species",
+        default="Athaliana",
+        help="Species label on output filenames (default: Athaliana)",
+    )
+    p.add_argument(
+        "-m",
+        "--mode",
+        default="plant",
+        choices=["plant", "animal"],
+        help="Model to use (default: plant)",
+    )
+    p.add_argument(
+        "-n",
+        "--top-n-contigs",
+        default="all",
+        dest="top_n_contigs",
+        help="Process only the N longest contigs (default: all)",
+    )
+    p.add_argument(
+        "-l",
+        "--min-transcript-length",
+        default="3",
+        dest="min_transcript_length",
+        help="Minimum transcript length in bp (default: 3)",
+    )
+    p.add_argument(
+        "-c",
+        "--cpu-workers",
+        default="1",
+        dest="cpu_workers",
+        help="CPU worker processes for GFF export (default: 1)",
+    )
+    p.add_argument(
+        "-b",
+        "--batch-size",
+        default="auto",
+        dest="batch_size",
+        help="Inference batch size per GPU (default: auto)",
+    )
+    p.add_argument(
+        "-g",
+        "--gpus",
+        default="0",
+        help="GPU IDs: comma-separated list or 'all' (default: 0)",
+    )
+    p.add_argument(
+        "--launcher", default="", help="Custom launcher command (e.g. 'srun python')"
+    )
     return p
 
 
@@ -84,16 +126,26 @@ def cmd_predict(argv: list[str]) -> int:
         output_dir = str(Path.cwd() / "genecad_result" / f"{args.species}_predictions")
 
     cmd = [
-        "bash", str(script_dir / "predict.sh"),
-        "-i", input_file,
-        "-o", output_dir,
-        "-s", args.species,
-        "-m", args.mode,
-        "-n", args.top_n_contigs,
-        "-l", args.min_transcript_length,
-        "-c", args.cpu_workers,
-        "-b", args.batch_size,
-        "-g", args.gpus,
+        "bash",
+        str(script_dir / "predict.sh"),
+        "-i",
+        input_file,
+        "-o",
+        output_dir,
+        "-s",
+        args.species,
+        "-m",
+        args.mode,
+        "-n",
+        args.top_n_contigs,
+        "-l",
+        args.min_transcript_length,
+        "-c",
+        args.cpu_workers,
+        "-b",
+        args.batch_size,
+        "-g",
+        args.gpus,
     ]
     if args.launcher:
         cmd += ["--launcher", args.launcher]
@@ -147,7 +199,11 @@ def _load_auth(auth_file: str | None) -> list[tuple[str, str]] | None:
     if auth_file:
         try:
             with open(auth_file) as f:
-                sources = [l.strip() for l in f if l.strip() and not l.startswith("#")]
+                sources = [
+                    line.strip()
+                    for line in f
+                    if line.strip() and not line.startswith("#")
+                ]
         except OSError as e:
             print(f"Error: cannot read auth file '{auth_file}': {e}", file=sys.stderr)
             sys.exit(1)
@@ -162,8 +218,10 @@ def _load_auth(auth_file: str | None) -> list[tuple[str, str]] | None:
     pairs: list[tuple[str, str]] = []
     for entry in sources:
         if ":" not in entry:
-            print(f"Warning: ignoring malformed auth entry (expected user:password): {entry!r}",
-                  file=sys.stderr)
+            print(
+                f"Warning: ignoring malformed auth entry (expected user:password): {entry!r}",
+                file=sys.stderr,
+            )
             continue
         user, _, password = entry.partition(":")
         pairs.append((user, password))
@@ -176,8 +234,12 @@ def cmd_ui(argv: list[str]) -> int:
         prog="genecad ui",
         description="Launch the interactive Web UI.",
     )
-    parser.add_argument("--share", action="store_true", help="Create a public Gradio tunnel link")
-    parser.add_argument("--port", type=int, default=7860, help="Port to run the UI on (default: 7860)")
+    parser.add_argument(
+        "--share", action="store_true", help="Create a public Gradio tunnel link"
+    )
+    parser.add_argument(
+        "--port", type=int, default=7860, help="Port to run the UI on (default: 7860)"
+    )
     parser.add_argument(
         "--auth-file",
         default=None,
@@ -197,7 +259,9 @@ def cmd_ui(argv: list[str]) -> int:
     try:
         import gradio as gr
     except ImportError:
-        print("Error: gradio is not installed. Please install it using 'uv pip install gradio'.")
+        print(
+            "Error: gradio is not installed. Please install it using 'uv pip install gradio'."
+        )
         return 1
 
     auth = _load_auth(args.auth_file)
@@ -221,8 +285,11 @@ def cmd_ui(argv: list[str]) -> int:
             return 1
         print("Warning: running without authentication (--no-auth).", file=sys.stderr)
 
-    # Importing dynamically so the headless CLI doesn't strictly depend on Gradio early on
-    from src.ui import create_ui, UI_CSS
+    # Import dynamically so the headless CLI doesn't strictly depend on Gradio early on.
+    ui_module = importlib.import_module("src.ui")
+    create_ui = getattr(ui_module, "create_ui")
+    ui_css = getattr(ui_module, "UI_CSS")
+
     demo = create_ui()
 
     # We use server_name="0.0.0.0" to ensure it's accessible over network
@@ -242,9 +309,9 @@ def cmd_ui(argv: list[str]) -> int:
             panel_border_width="0px",
             button_border_width="0px",
             input_border_width="0px",
-            checkbox_border_width="0px"
+            checkbox_border_width="0px",
         ),
-        css=UI_CSS,
+        css=ui_css,
     )
     return 0
 
@@ -255,10 +322,14 @@ def main() -> None:
         description="GeneCAD: end-to-end genome annotation powered by PlantCAD2",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("command", choices=["predict", "train", "evaluate", "summarize", "ui"],
-                        help="Sub-command to run")
-    parser.add_argument("args", nargs=argparse.REMAINDER,
-                        help="Arguments forwarded to the sub-command")
+    parser.add_argument(
+        "command",
+        choices=["predict", "train", "evaluate", "summarize", "ui"],
+        help="Sub-command to run",
+    )
+    parser.add_argument(
+        "args", nargs=argparse.REMAINDER, help="Arguments forwarded to the sub-command"
+    )
 
     if len(sys.argv) == 1:
         parser.print_help()

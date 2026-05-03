@@ -721,7 +721,7 @@ def _detect_intervals(
     ) -> np.ndarray:
         transition_probs = token_transition_probs(
             remove_incomplete_features=remove_incomplete_features,
-            domain=getattr(args, "domain", "plant")
+            domain=getattr(args, "domain", "plant"),
         )
         if (
             transition_probs.columns.tolist()
@@ -1035,8 +1035,9 @@ def group_intervals_by_transcript(
             initializer=_init_transcript_worker,
             initargs=(feature_intervals,),
         ) as pool:
-            results = list(
-                tqdm.tqdm(
+            results = [
+                result
+                for result in tqdm.tqdm(
                     pool.imap(_process_single_transcript_worker, transcript_rows),
                     total=len(transcript_rows),
                     desc=tqdm_desc,
@@ -1045,7 +1046,7 @@ def group_intervals_by_transcript(
                     leave=False,
                     mininterval=0.1,
                 )
-            )
+            ]
 
     genes = [group for group in results if group is not None]
 
