@@ -266,10 +266,10 @@ To **force a step to re-run**, delete its output:
 
 ```bash
 # Re-run predictions for one chromosome from scratch
-rm -rf genecad_result/<OUTPUT_DIR>/<CHR_ID>/
+rm -rf genecad_result/MySpecies_predictions/Chr1/
 
 # Re-run only the token prediction step (Step 2)
-rm -rf genecad_result/<OUTPUT_DIR>/<CHR_ID>/pipeline/predictions.zarr
+rm -rf genecad_result/MySpecies_predictions/Chr1/pipeline/predictions.zarr
 ```
 
 ### Throughput
@@ -446,8 +446,8 @@ sbatch run_genecad.slurm
 **Step 1 — Install SkyPilot** (in a dedicated environment, separate from the GeneCAD venv to avoid dependency conflicts):
 
 ```bash
-python3 -m venv ~/.venvs/skypilot
-source ~/.venvs/skypilot/bin/activate
+python3 -m venv ~/skypilot-env
+source ~/skypilot-env/bin/activate
 pip install "skypilot[lambda]>=0.10.3"
 ```
 
@@ -473,28 +473,28 @@ sky check lambda   # should now show: Lambda: enabled ✓
 
 **Step 3 — Launch a GPU node and run:**
 
-```bash
-# From the cloned genecad repo directory (SkyPilot rsyncs it to the cloud node)
-cd /path/to/genecad
+*(Make sure your terminal is currently in the root of the cloned `genecad` repository)*
 
-# Deploy a single GPU node (--no-setup: Docker replaces uv sync)
+> [!NOTE]
+> **Annotating your own genome:** When you are ready to annotate your own data, place your FASTA file inside the `genecad` directory (e.g., `genecad/my_genome.fa`) before running `sky launch`. This ensures SkyPilot automatically uploads it to the cloud. You would then append `-i my_genome.fa -s MySpecies` to the `bash predict.sh` command below.
+
+```bash
+# 1. Deploy the GPU node (--no-setup: Docker replaces uv sync)
 sky launch --num-nodes 1 --yes --no-setup \
   --cluster genecad examples/configs/cluster.sky.yaml
 
-# SSH in — the repo is synced to ~/sky_workdir/, not the home directory
-ssh genecad
-cd ~/sky_workdir                                    # ← required: repo is here
+# 2. Run the workload (this example runs the built-in Arabidopsis test)
+sky exec genecad 'docker pull ghcr.io/plantcad/genecad_v1:latest && \
+                  docker run --rm --gpus all \
+                  -v $(pwd):/workspace -w /workspace \
+                  ghcr.io/plantcad/genecad_v1:latest \
+                  bash predict.sh'
 
-# Pull the pre-built image and run
-docker pull ghcr.io/plantcad/genecad_v1:latest
-docker run --rm --gpus all \
-  -v $(pwd):/workspace -w /workspace \
-  ghcr.io/plantcad/genecad_v1:latest \
-  bash predict.sh
+# 3. Download the results back to your local machine
+rsync -avz genecad:~/sky_workdir/genecad_result/ ./genecad_result/
 
-# Exit the node and terminate when done (stops billing)
-exit
-sky down genecad
+# 4. Terminate the node to stop billing
+sky down genecad --yes
 ```
 
 > [!IMPORTANT]
@@ -762,14 +762,20 @@ genecad train --domain animal -g all
 genecad train --domain animal -g 0,2,3
 
 # Fine-tune with custom settings
+#   -g 4                number of GPUs
+#   -b 4                per-GPU batch size
+#   --epochs 3          training epochs
+#   -l 1e-4             learning rate
+#   -o results/my_run   output directory
+#   -r my-run-name      WandB run name
 genecad train \
   --domain plant \
-  -g 4 \              # number of GPUs
-  -b 4 \              # per-GPU batch size
-  --epochs 3 \        # training epochs
-  -l 1e-4 \           # learning rate
-  -o results/my_run \ # output directory
-  -r my-run-name      # WandB run name
+  -g 4 \
+  -b 4 \
+  --epochs 3 \
+  -l 1e-4 \
+  -o results/my_run \
+  -r my-run-name
 ```
 
 **Options**
@@ -1096,9 +1102,9 @@ sky check lambda   # should now show: Lambda: enabled ✓
 
 HPC compute nodes typically have no outbound internet access and cannot reach cloud provider APIs. SkyPilot must be run from your **local machine** or the cluster's **login node** (which usually has internet). Check with your sysadmin if you are unsure.
 
-**`bash predict.sh: No such file or directory` after SSH into the cloud node**
+**`bash predict.sh: No such file or directory` during manual debugging**
 
-When you `ssh genecad`, you land in the home directory (`~`). SkyPilot syncs your local repo to `~/sky_workdir/` — you must `cd` there before running Docker:
+If you use `ssh genecad` to manually interact with the node, you will land in the home directory (`~`). SkyPilot syncs your local repo to `~/sky_workdir/` — you must `cd` there before running Docker or local scripts:
 
 ```bash
 ssh genecad
@@ -1109,13 +1115,19 @@ docker run --rm --gpus all \
   bash predict.sh
 ```
 
+**Custom input FASTA is "not found" during `sky exec`**
+
+If you placed your custom FASTA inside the `genecad/data/` directory, SkyPilot did not upload it. SkyPilot automatically respects the repository's `.gitignore` file, which excludes the `data/` folder to prevent uploading massive files.
+
+**Fix:** Move your FASTA to the root of the repository (e.g., `genecad/my_genome.fa`) so it isn't ignored, and re-run `sky launch`.
+
 **SkyPilot conflicts with GeneCAD dependencies**
 
 Install SkyPilot in a separate virtual environment, not inside the GeneCAD `.venv`:
 
 ```bash
-python3 -m venv ~/.venvs/skypilot
-source ~/.venvs/skypilot/bin/activate
+python3 -m venv ~/skypilot-env
+source ~/skypilot-env/bin/activate
 pip install "skypilot[lambda]>=0.10.3"
 ```
 
@@ -1125,12 +1137,8 @@ pip install "skypilot[lambda]>=0.10.3"
 
 If you do not have access to a local GPU, you have two options:
 
-**Option 1 — Cloud GPU via SkyPilot** (see [Cloud Provisioning](#cloud-provisioning-skypilot)):
-
-```bash
-sky launch --num-nodes 1 --yes --no-setup \
-  --cluster genecad examples/configs/cluster.sky.yaml
-```
+**Option 1 — Cloud GPU via SkyPilot**:
+Follow the complete end-to-end instructions in the [Cloud Provisioning](#cloud-provisioning-skypilot) section to deploy a node, run the workload, and securely download your results.
 
 **Option 2 — HPC cluster via SLURM** (see [HPC Clusters](#hpc-clusters-slurm)):
 
@@ -1177,7 +1185,7 @@ docker run --rm --gpus all -v $(pwd):/workspace -w /workspace genecad:v0.1.0 \
 IMAGE=ghcr.io/plantcad/genecad_v1
 docker tag genecad:v0.1.0 $IMAGE:v0.1.0
 docker tag genecad:v0.1.0 $IMAGE:latest
-echo $GHCR_TOKEN | docker login ghcr.io -u <github-username> --password-stdin
+echo $GHCR_TOKEN | docker login ghcr.io -u YOUR_GITHUB_USERNAME --password-stdin
 docker push $IMAGE:v0.1.0
 docker push $IMAGE:latest
 ```

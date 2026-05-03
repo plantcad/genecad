@@ -838,7 +838,7 @@ ANIMAL_TOKEN_TRANSITION_PROBS_1 = [
     [0.00000000000e+00, 9.99752475248e-01, 9.9009900e-06, 2.351485150e-04, 2.4752480e-06],  # intron
     [0.00000000000e+00, 9.604519770e-04, 9.94350282486e-01, 4.689265537e-03, 0.00000000000e+00],  # five_prime_utr
     [0.00000000000e+00, 4.705882353e-03, 0.00000000000e+00, 9.94117647059e-01, 1.176470588e-03],  # cds
-    [7.890365450e-04, 4.1528239e-05, 0.00000000000e+00, 0.00000000000e+00, 9.91694352159e-01],  # three_prime_utr
+    [7.890365450e-04, 4.1528239e-05, 0.00000000000e+00, 0.00000000000e+00, 9.991694352159e-01],  # three_prime_utr
 ]
 
 # Transition probabilities for animal genomes, allowing partial transcript annotations
@@ -848,7 +848,7 @@ ANIMAL_TOKEN_TRANSITION_PROBS_2 = [
     [0.00000000000e+00, 9.99752475248e-01, 9.9009900e-06, 2.351485150e-04, 2.4752480e-06],  # intron
     [0.00000000000e+00, 9.604519770e-04, 9.94350282486e-01, 4.689265537e-03, 0.00000000000e+00],  # five_prime_utr
     [2.941176470e-04, 4.705882353e-03, 0.00000000000e+00, 9.94117647059e-01, 8.823529410e-04],  # cds
-    [7.890365450e-04, 4.1528239e-05, 0.00000000000e+00, 0.00000000000e+00, 9.91694352159e-01],  # three_prime_utr
+    [7.890365450e-04, 4.1528239e-05, 0.00000000000e+00, 0.00000000000e+00, 9.991694352159e-01],  # three_prime_utr
 ]
 # fmt: on
 
@@ -860,12 +860,15 @@ def token_transition_probs(remove_incomplete_features: bool = True, domain: str 
             if remove_incomplete_features
             else ANIMAL_TOKEN_TRANSITION_PROBS_2
         )
-    else:
+    elif domain == "plant":
         probs = (
             TOKEN_TRANSITION_PROBS_1
             if remove_incomplete_features
             else TOKEN_TRANSITION_PROBS_2
         )
+    else:
+        raise ValueError(f"Unsupported domain {domain!r}. Expected 'plant' or 'animal'.")
+
     return pd.DataFrame(
         data=probs,
         # pyrefly: ignore  # bad-argument-type
