@@ -853,7 +853,9 @@ ANIMAL_TOKEN_TRANSITION_PROBS_2 = [
 # fmt: on
 
 
-def token_transition_probs(remove_incomplete_features: bool = True, domain: str = "plant") -> pd.DataFrame:
+def token_transition_probs(
+    remove_incomplete_features: bool = True, domain: str = "plant"
+) -> pd.DataFrame:
     if domain == "animal":
         probs = (
             ANIMAL_TOKEN_TRANSITION_PROBS_1
@@ -867,7 +869,9 @@ def token_transition_probs(remove_incomplete_features: bool = True, domain: str 
             else TOKEN_TRANSITION_PROBS_2
         )
     else:
-        raise ValueError(f"Unsupported domain {domain!r}. Expected 'plant' or 'animal'.")
+        raise ValueError(
+            f"Unsupported domain {domain!r}. Expected 'plant' or 'animal'."
+        )
 
     return pd.DataFrame(
         data=probs,
@@ -876,4 +880,3 @@ def token_transition_probs(remove_incomplete_features: bool = True, domain: str 
         # pyrefly: ignore  # bad-argument-type
         columns=SEQUENCE_MODELING_FEATURES,
     )
-

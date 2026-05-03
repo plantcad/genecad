@@ -450,7 +450,7 @@ def eval_splice_sites(pred_exon_genes, genome):
             if not exons or len(exons) < 2:
                 continue
             for i in range(len(exons) - 1):
-                intr_s = exons[i][1] + 1      # 1-based inclusive intron start
+                intr_s = exons[i][1] + 1  # 1-based inclusive intron start
                 intr_e = exons[i + 1][0] - 1  # 1-based inclusive intron end
                 if intr_e < intr_s:
                     continue

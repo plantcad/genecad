@@ -4,7 +4,7 @@ import glob
 import json
 import logging
 import os
-from collections import Counter, defaultdict
+from collections import Counter
 from dataclasses import dataclass
 
 import numpy as np
@@ -37,7 +37,9 @@ def _sample_dataset_stats(ds_path: str, batch_size: int = 2048) -> dict:
     required = {"tag_labels", "label_mask", "species"}
     missing = required.difference(set(ds.data_vars.keys()))
     if missing:
-        raise ValueError(f"Dataset {ds_path} missing required variables: {sorted(missing)}")
+        raise ValueError(
+            f"Dataset {ds_path} missing required variables: {sorted(missing)}"
+        )
 
     label_classes = _parse_label_classes(ds.attrs)
     n_classes = len(label_classes)
@@ -80,7 +82,9 @@ def _sample_dataset_stats(ds_path: str, batch_size: int = 2048) -> dict:
             intergenic_idx = idx
             break
 
-    intergenic_tokens = int(token_counts[intergenic_idx]) if intergenic_idx is not None else 0
+    intergenic_tokens = (
+        int(token_counts[intergenic_idx]) if intergenic_idx is not None else 0
+    )
     non_intergenic_ratio = (
         float((total_tokens - intergenic_tokens) / total_tokens)
         if total_tokens > 0
@@ -88,7 +92,8 @@ def _sample_dataset_stats(ds_path: str, batch_size: int = 2048) -> dict:
     )
 
     class_counts = {
-        label_classes[idx]: int(token_counts[idx]) for idx in sorted(label_classes.keys())
+        label_classes[idx]: int(token_counts[idx])
+        for idx in sorted(label_classes.keys())
     }
 
     return {
@@ -138,7 +143,8 @@ def run_label_qc(args: argparse.Namespace) -> None:
     missing_in_valid = sorted(train_species.difference(valid_species))
     if missing_in_valid and not args.allow_missing_species_in_valid:
         issues.append(
-            "some train species are missing in valid split: " + ", ".join(missing_in_valid)
+            "some train species are missing in valid split: "
+            + ", ".join(missing_in_valid)
         )
 
     required_core = [
@@ -196,14 +202,18 @@ class CheckpointSelection:
 
 
 def _find_metrics_csv(output_dir: str) -> str:
-    pattern = os.path.join(output_dir, "logs", "csv", "lightning_logs", "version_*", "metrics.csv")
+    pattern = os.path.join(
+        output_dir, "logs", "csv", "lightning_logs", "version_*", "metrics.csv"
+    )
     matches = sorted(glob.glob(pattern))
     if not matches:
         raise FileNotFoundError(f"Could not find metrics.csv with pattern: {pattern}")
     return matches[-1]
 
 
-def _closest_checkpoint(checkpoint_dir: str, target_epoch: int, target_step: int) -> tuple[str, str]:
+def _closest_checkpoint(
+    checkpoint_dir: str, target_epoch: int, target_step: int
+) -> tuple[str, str]:
     candidates = sorted(glob.glob(os.path.join(checkpoint_dir, "epoch_*-step_*.ckpt")))
     if not candidates:
         last_ckpt = os.path.join(checkpoint_dir, "last.ckpt")
@@ -241,7 +251,9 @@ def run_select_best_checkpoint(args: argparse.Namespace) -> None:
 
     scored = df[["epoch", "step", metric_name]].dropna()
     if scored.empty:
-        raise ValueError(f"Metric '{metric_name}' has no non-null rows in {metrics_csv}")
+        raise ValueError(
+            f"Metric '{metric_name}' has no non-null rows in {metrics_csv}"
+        )
 
     if args.mode == "max":
         best_row = scored.loc[scored[metric_name].idxmax()]
@@ -352,7 +364,9 @@ def main() -> None:
     p_feature.add_argument("--features-parquet", required=True)
     p_feature.add_argument("--summary-json", required=True)
 
-    p_label = sub.add_parser("label_qc", help="Validate generated train/valid label datasets")
+    p_label = sub.add_parser(
+        "label_qc", help="Validate generated train/valid label datasets"
+    )
     p_label.add_argument("--train-dataset", required=True)
     p_label.add_argument("--valid-dataset", required=True)
     p_label.add_argument("--summary-json", required=True)
@@ -360,10 +374,14 @@ def main() -> None:
     p_label.add_argument("--min-samples-per-split", type=int, default=128)
     p_label.add_argument("--min-non-intergenic-ratio", type=float, default=0.01)
     p_label.add_argument("--min-species-in-train", type=int, default=2)
-    p_label.add_argument("--allow-missing-species-in-valid", choices=["yes", "no"], default="yes")
+    p_label.add_argument(
+        "--allow-missing-species-in-valid", choices=["yes", "no"], default="yes"
+    )
     p_label.add_argument("--min-core-class-tokens", type=int, default=100)
 
-    p_best = sub.add_parser("select_best_checkpoint", help="Pick best checkpoint from validation metric")
+    p_best = sub.add_parser(
+        "select_best_checkpoint", help="Pick best checkpoint from validation metric"
+    )
     p_best.add_argument("--output-dir", required=True)
     p_best.add_argument("--metric", default="valid__entity__overall/f1")
     p_best.add_argument("--mode", choices=["max", "min"], default="max")
@@ -371,12 +389,16 @@ def main() -> None:
 
     args = parser.parse_args()
 
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+    logging.basicConfig(
+        level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
+    )
 
     if args.command == "feature_qc":
         run_feature_qc(args)
     elif args.command == "label_qc":
-        args.allow_missing_species_in_valid = args.allow_missing_species_in_valid == "yes"
+        args.allow_missing_species_in_valid = (
+            args.allow_missing_species_in_valid == "yes"
+        )
         run_label_qc(args)
     elif args.command == "select_best_checkpoint":
         run_select_best_checkpoint(args)

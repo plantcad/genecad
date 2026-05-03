@@ -415,9 +415,9 @@ sbatch run_genecad.slurm
 
 > [!TIP]
 > **Multi-GPU on a Single Node:** To use all GPUs on a node, request them with `--gres=gpu:4` (or however many are available) and pass `--gpus all` to `genecad predict`. If there are many chromosomes, they will be distributed across GPUs. If there are fewer chromosomes than GPUs, GeneCAD will automatically split the longest sequences into parallel windows across the GPUs.
-> 
+>
 > **Multi-Node Distributed Inference (e.g., TACC):** GeneCAD natively detects multi-node SLURM topologies. If you allocate multiple nodes (e.g., `#SBATCH --nodes=4`), you can use `srun` to seamlessly process enormous single contigs across the entire cluster. `genecad predict` will automatically bypass local launchers and allow PyTorch Lightning to route the distributed process windows.
-> 
+>
 > ```bash
 > # Request multiple nodes/GPUs and launch via srun
 > #SBATCH --nodes=2

@@ -999,8 +999,10 @@ def _validate_decode_inputs(
     row_sums = transition_matrix.sum(axis=1)
     if not np.allclose(row_sums, 1.0):
         # Allow tiny floating point drift; if rows are close to 1, normalize with a warning.
-        if np.all(np.isfinite(row_sums)) and np.all(row_sums > 0) and np.allclose(
-            row_sums, 1.0, atol=1e-6
+        if (
+            np.all(np.isfinite(row_sums))
+            and np.all(row_sums > 0)
+            and np.allclose(row_sums, 1.0, atol=1e-6)
         ):
             logger.warning(
                 "Transition matrix rows do not exactly sum to 1; normalizing rows"

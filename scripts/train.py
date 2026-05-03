@@ -370,13 +370,17 @@ def train(args: Args) -> None:
                 "(overrides checkpoint's stored bias and loss criterion)"
             )
             freqs = np.clip(
-                np.array([token_class_frequencies[c] for c in config.token_class_names]),
+                np.array(
+                    [token_class_frequencies[c] for c in config.token_class_names]
+                ),
                 a_min=1e-6,
                 a_max=1,
             )
             # Reset bias to log10 of actual training-data frequencies
             model.bias = torch.nn.Parameter(
-                torch.tensor(np.log10(freqs), dtype=model.bias.dtype).to(model.bias.device)
+                torch.tensor(np.log10(freqs), dtype=model.bias.dtype).to(
+                    model.bias.device
+                )
             )
             # Recompute inverse-sqrt class weights for CrossEntropyLoss
             inv_sqrt_freqs = 1.0 / np.sqrt(freqs)

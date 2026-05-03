@@ -486,8 +486,12 @@ def filter_to_min_feature_length(
     transcripts_updated = 0
 
     if {"id", "parent"}.issubset(features_filtered.columns):
-        genes = features_filtered[features_filtered["type"] == GffFeatureType.GENE.value]
-        mrnas = features_filtered[features_filtered["type"] == GffFeatureType.MRNA.value]
+        genes = features_filtered[
+            features_filtered["type"] == GffFeatureType.GENE.value
+        ]
+        mrnas = features_filtered[
+            features_filtered["type"] == GffFeatureType.MRNA.value
+        ]
 
         # Track statistics for boundary updates
         total_genes = len(genes)
@@ -506,7 +510,9 @@ def filter_to_min_feature_length(
 
             # First, update mRNA boundaries for this gene
             for mrna_id in gene_mrna_ids:
-                mrna_features = features_filtered[features_filtered["parent"] == mrna_id]
+                mrna_features = features_filtered[
+                    features_filtered["parent"] == mrna_id
+                ]
                 if not mrna_features.empty:
                     original_mrna = features_filtered[
                         features_filtered["id"] == mrna_id
@@ -518,7 +524,10 @@ def filter_to_min_feature_length(
                     mrna_end = mrna_features["end"].max()
 
                     # Update mRNA boundaries and track if changed
-                    if mrna_start != original_mrna_start or mrna_end != original_mrna_end:
+                    if (
+                        mrna_start != original_mrna_start
+                        or mrna_end != original_mrna_end
+                    ):
                         transcripts_updated += 1
                         features_filtered.loc[
                             features_filtered["id"] == mrna_id, "start"
