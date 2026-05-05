@@ -10,6 +10,7 @@
 [![Docker](https://img.shields.io/badge/Install-Docker-blue?logo=docker)](#using-docker)
 [![GeneCAD Downloads](https://img.shields.io/github/downloads/plantcad/genecad/total?label=GitHub%20downloads)](https://github.com/plantcad/genecad/releases)
 [![Hugging Face](https://img.shields.io/badge/🤗-Hugging%20Face-yellow.svg?style=flat)](https://huggingface.co/collections/plantcad/genecad-68c686ccf14312bf6de356de)
+[![HF Downloads](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fhuggingface.co%2Fapi%2Fmodels%2Fplantcad%2Fgenecad_plant&query=%24.downloads&label=HF%20downloads&color=yellow&logo=huggingface)](https://huggingface.co/plantcad/genecad_plant)
 
 GeneCAD is an end-to-end genome annotation pipeline for plants and animals, powered by the DNA foundation model [PlantCAD2](https://doi.org/10.1101/2025.10.31.685877). Give it a genome FASTA and it returns a publication-ready GFF3 annotation — no species-specific training data, no external alignments, no configuration required.
 
@@ -577,6 +578,8 @@ Most users only need these arguments:
 | `--pred` | Predicted GFF3 annotation (required) |
 | `--fasta` | Genome FASTA; enables Sections 3 and 4 |
 | `--output` | Write the report to a file instead of stdout |
+| `--lineage` | BUSCO lineage dataset (default: `embryophyta_odb10`) |
+| `--cpu` | Number of CPU threads for BUSCO (default: `32`) |
 | `--skip-busco` | Skip Section 4 for a faster, fully portable run |
 | `--busco-out` | BUSCO output directory name (default: `busco_eval`) |
 | `--fix-busco-env` | Auto-repair a broken conda env and retry once |
@@ -591,6 +594,14 @@ If BUSCO is available on your system, GeneCAD can pick it up automatically. If n
 | HPC with a site activate script | `export BUSCO_ACTIVATE_SCRIPT=/programs/miniconda3/bin/activate` |
 | Already activated BUSCO env | Run `busco --version` first, then invoke evaluation normally |
 | No BUSCO required | Add `--skip-busco` |
+
+For finer control, the following flags can be passed directly to `genecad evaluate`:
+
+| Option | Description |
+|--------|-------------|
+| `--busco-env` | Conda environment name for BUSCO (default: `busco-5.5.0`) |
+| `--busco-cmd` | Explicit BUSCO launcher command (overrides environment detection) |
+| `--busco-activate-script` | Path to a cluster-specific conda activation script |
 
 ```bash
 # Portable full evaluation with an explicit BUSCO command
@@ -636,13 +647,6 @@ mkdir -p "$HOME/augustus_config"
 cp -r /programs/miniconda3/envs/busco-5.5.0/config "$HOME/augustus_config"
 export AUGUSTUS_CONFIG_PATH="$HOME/augustus_config/config"
 ```
-
-Other evaluation options:
-- `--lineage` (default: `embryophyta_odb10`)
-- `--cpu` (default: `32`)
-- `--busco-env` (default: `busco-5.5.0`)
-- `--busco-cmd` for an explicit BUSCO launcher
-- `--busco-activate-script` for cluster-specific activation scripts
 
 **Example output (*Arabidopsis thaliana*)**
 

@@ -32,6 +32,7 @@ Usage:
 """
 
 import argparse
+import gzip
 import os
 import shlex
 import subprocess
@@ -57,7 +58,8 @@ def parse_attributes(attr_str):
 def parse_gff(path, ftypes):
     """Parse a GFF3 file, returning records whose feature type is in ftypes."""
     records = []
-    with open(path) as fh:
+    opener = gzip.open if path.endswith(".gz") else open
+    with opener(path, "rt") as fh:
         for line in fh:
             if line.startswith("#"):
                 continue
@@ -409,7 +411,8 @@ def load_fasta(fasta_path):
     print(f"[INFO] Loading genome FASTA: {fasta_path}", file=sys.stderr)
     genome = {}
     chrom, seq = None, []
-    with open(fasta_path) as fh:
+    opener = gzip.open if fasta_path.endswith(".gz") else open
+    with opener(fasta_path, "rt") as fh:
         for line in fh:
             line = line.strip()
             if line.startswith(">"):

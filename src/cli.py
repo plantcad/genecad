@@ -319,16 +319,59 @@ def cmd_ui(argv: list[str]) -> int:
 def main() -> None:
     parser = argparse.ArgumentParser(
         prog="genecad",
-        description="GeneCAD: end-to-end genome annotation powered by PlantCAD2",
+        description=(
+            "GeneCAD predicts gene annotations from genome FASTA files using "
+            "PlantCAD2-based models."
+        ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Quick start:
+  genecad predict --gpus all
+      Run the built-in Arabidopsis example and write results to ./genecad_result/.
+
+  genecad predict -i genome.fa -s Zmays -m plant -o maize_genecad/
+      Annotate your own plant genome FASTA and save GFF predictions.
+
+  genecad predict -i genome.fa -s Hsapiens -m animal --gpus 0,1
+      Annotate an animal genome using two selected GPUs.
+
+Commands:
+  predict     Predict genes from a genome FASTA and export annotation files.
+  train       Train or fine-tune GeneCAD models from prepared datasets.
+  evaluate    Compare predicted annotations with a reference GFF/GTF file.
+  summarize   Summarize datasets, labels, or prediction outputs.
+  ui          Launch the browser-based GeneCAD interface.
+
+Useful tips:
+  - FASTA input can be plain text (.fa/.fasta) or compressed (.fa.gz).
+  - Species names are used in output file names, so choose short labels
+    such as Athaliana, Zmays, Hsapiens, or Callithrix_jacchus.
+  - Output folders are created automatically when possible.
+  - Use --gpus all on a GPU server, or --gpus 0 to use only GPU 0.
+
+Need more detail?
+  genecad predict --help
+  genecad ui --help
+
+Typical output:
+  A prediction run writes files under the output directory, including GFF
+  annotation files that can be opened in genome browsers or used in downstream
+  evaluation pipelines.
+""",
     )
     parser.add_argument(
         "command",
+        metavar="command",
         choices=["predict", "train", "evaluate", "summarize", "ui"],
-        help="Sub-command to run",
+        help=(
+            "What you want GeneCAD to do: predict, train, evaluate, summarize, or ui"
+        ),
     )
     parser.add_argument(
-        "args", nargs=argparse.REMAINDER, help="Arguments forwarded to the sub-command"
+        "args",
+        nargs=argparse.REMAINDER,
+        metavar="...",
+        help="Options for the selected command, for example: -i genome.fa --gpus all",
     )
 
     if len(sys.argv) == 1:
