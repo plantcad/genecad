@@ -3,9 +3,9 @@ import transformers
 import transformers.generation
 
 # ── Generation output compat shim ────────────────────────────────────────────
-# transformers 4.x renamed/removed the legacy GreedySearchDecoderOnlyOutput and
-# SampleDecoderOnlyOutput classes.  We patch them back so that old remote model
-# code can still reference them without crashing on import.
+# transformers 4.x renamed/removed GreedySearchDecoderOnlyOutput and
+# SampleDecoderOnlyOutput.  Patch them back so old remote model code doesn't
+# crash on import.
 try:
     from transformers.generation import (  # pyrefly: ignore[missing-module-attribute]
         GreedySearchDecoderOnlyOutput,  # noqa: F401
@@ -30,20 +30,20 @@ except ImportError:
         transformers.generation.SampleDecoderOnlyOutput = DummyDecoderOnlyOutput
 
 # ── Patch 1 & 2: PreTrainedModel compatibility ────────────────────────────────
-# These patches require PyTorch.  In CPU-only CI environments, accessing
-# transformers.PreTrainedModel raises ImportError ("requires the PyTorch
-# library"), so we guard the entire block with try/except.
+# transformers uses lazy backend proxies: the ImportError ("PreTrainedModel
+# requires the PyTorch library") is NOT raised when you import the class name,
+# but only when you call hasattr/getattr on it.  The only reliable guard is to
+# wrap the entire patch block in try/except ImportError.
 try:
-    _PTM = transformers.PreTrainedModel  # triggers the PyTorch backend check
+    _has_all_tied = hasattr(transformers.PreTrainedModel, "all_tied_weights_keys")
+    _has_finalize = hasattr(transformers.PreTrainedModel, "_finalize_model_loading")
 except ImportError:
-    _PTM = None  # type: ignore[assignment]
+    # PyTorch not available (e.g., CPU-only CI runner) — skip all patches.
+    _has_all_tied = False
+    _has_finalize = False
 
-if _PTM is not None:
-    # Patch 1: transformers >= 4.51 renamed `_tied_weights_keys`
-    # → `all_tied_weights_keys` and changed it from a list to a dict.
-    # Old remote models (HNetForCausalLM) still use the old attribute, so we
-    # bridge the two.
-    if not hasattr(_PTM, "all_tied_weights_keys"):
+if not _has_all_tied:
+    try:
 
         def _get_all_tied(self):
             if hasattr(self, "_all_tied_storage"):
@@ -59,18 +59,19 @@ if _PTM is not None:
             self._all_tied_storage = value
 
         setattr(
-            _PTM,
+            transformers.PreTrainedModel,
             "all_tied_weights_keys",
             property(fget=_get_all_tied, fset=_set_all_tied),
         )
+    except ImportError:
+        pass
 
-    # Patch 2: transformers >= 4.51 calls
-    # tie_weights(missing_keys=..., recompute_mapping=False) but old remote
-    # model classes define tie_weights() with NO keyword arguments.  We patch
-    # _finalize_model_loading to filter kwargs for old model classes.
-    if hasattr(_PTM, "_finalize_model_loading"):
+if _has_finalize:
+    try:
         _orig_finalize = getattr(
-            _PTM._finalize_model_loading, "__func__", _PTM._finalize_model_loading
+            transformers.PreTrainedModel._finalize_model_loading,
+            "__func__",
+            transformers.PreTrainedModel._finalize_model_loading,
         )
 
         def _safe_finalize_model_loading(cls, model, load_config, loading_info):
@@ -94,6 +95,8 @@ if _PTM is not None:
             except TypeError:
                 return _orig_finalize(model, load_config, loading_info)
 
-        _PTM._finalize_model_loading = classmethod(  # pyrefly: ignore[bad-assignment]
-            _safe_finalize_model_loading
+        transformers.PreTrainedModel._finalize_model_loading = (  # pyrefly: ignore[bad-assignment]
+            classmethod(_safe_finalize_model_loading)
         )
+    except ImportError:
+        pass
