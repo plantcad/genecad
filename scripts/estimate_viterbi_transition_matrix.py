@@ -51,6 +51,7 @@ import numpy as np
 try:
     from tqdm import tqdm
 except ImportError:
+
     def tqdm(iterable, *args, **kwargs):
         return iterable
 
@@ -126,29 +127,42 @@ def parse_gff(gff_path: Path) -> dict[str, list[Gene]]:
             strand = parts[6]
             _phase = parts[7]
             attrs = "\t".join(parts[8:]) if len(parts) > 9 else parts[8]
-            
+
             start = int(start_s) - 1
             end = int(end_s)
             attr_map = parse_attributes(attrs)
 
             if feature_type == "gene":
-                gene_id = attr_map.get("ID") or attr_map.get("gene_id") or attr_map.get("Name")
+                gene_id = (
+                    attr_map.get("ID")
+                    or attr_map.get("gene_id")
+                    or attr_map.get("Name")
+                )
                 if gene_id is None:
                     continue
-                gene = Gene(gene_id=gene_id, contig=contig, start=start, end=end, strand=strand)
+                gene = Gene(
+                    gene_id=gene_id, contig=contig, start=start, end=end, strand=strand
+                )
                 contig_genes.setdefault(contig, []).append(gene)
                 gene_by_id[gene_id] = gene
                 continue
 
             if feature_type == "mRNA":
-                transcript_id = attr_map.get("ID") or attr_map.get("transcript_id") or attr_map.get("Name")
+                transcript_id = (
+                    attr_map.get("ID")
+                    or attr_map.get("transcript_id")
+                    or attr_map.get("Name")
+                )
                 parent_id = attr_map.get("Parent")
                 if transcript_id is None or parent_id is None:
                     continue
                 gene = gene_by_id.get(parent_id)
                 if gene is None:
                     continue
-                is_canonical = attr_map.get("canonical_transcript") == "1" or attr_map.get("tag") == "Ensembl_canonical"
+                is_canonical = (
+                    attr_map.get("canonical_transcript") == "1"
+                    or attr_map.get("tag") == "Ensembl_canonical"
+                )
                 transcript = Transcript(
                     transcript_id=transcript_id,
                     strand=strand,
@@ -235,7 +249,9 @@ def transcript_to_segments(transcript: Transcript) -> list[tuple[int, int, int]]
     return merged
 
 
-def transcript_to_labels(transcript: Transcript, require_complete: bool) -> np.ndarray | None:
+def transcript_to_labels(
+    transcript: Transcript, require_complete: bool
+) -> np.ndarray | None:
     segments = transcript_to_segments(transcript)
     if not segments:
         return None
@@ -254,16 +270,18 @@ def transcript_to_labels(transcript: Transcript, require_complete: bool) -> np.n
     return np.asarray(labels, dtype=np.int16)
 
 
-def _process_gff_file(gff_path: Path, require_complete: bool) -> tuple[np.ndarray, int, int, str]:
+def _process_gff_file(
+    gff_path: Path, require_complete: bool
+) -> tuple[np.ndarray, int, int, str]:
     """Process a single GFF file and return transition counts.
-    
+
     Used by multiprocessing to parallelize GFF parsing across multiple cores.
     Returns counts matrix, total transcripts, kept transcripts, and source file name.
     """
     counts = np.zeros((len(STATE_NAMES), len(STATE_NAMES)), dtype=np.float64)
     total_transcripts = 0
     kept_transcripts = 0
-    
+
     contig_genes = parse_gff(gff_path)
     for genes in contig_genes.values():
         for gene in genes:
@@ -281,13 +299,15 @@ def _process_gff_file(gff_path: Path, require_complete: bool) -> tuple[np.ndarra
             kept_transcripts += 1
             for left, right in zip(labels[:-1], labels[1:]):
                 counts[left, right] += 1
-    
+
     return counts, total_transcripts, kept_transcripts, gff_path.name
 
 
-def estimate_transition_counts(gff_paths: list[Path], require_complete: bool, num_workers: int = 1) -> tuple[np.ndarray, int, int]:
+def estimate_transition_counts(
+    gff_paths: list[Path], require_complete: bool, num_workers: int = 1
+) -> tuple[np.ndarray, int, int]:
     """Estimate transition counts from one or more GFF files.
-    
+
     Parameters
     ----------
     gff_paths : list[Path]
@@ -297,7 +317,7 @@ def estimate_transition_counts(gff_paths: list[Path], require_complete: bool, nu
     num_workers : int
         Number of parallel workers for GFF parsing (default: 1, serial processing).
         Set to -1 to use all available cores, or specify a number > 1 for parallel processing.
-    
+
     Returns
     -------
     tuple[np.ndarray, int, int]
@@ -310,7 +330,9 @@ def estimate_transition_counts(gff_paths: list[Path], require_complete: bool, nu
     if num_workers == 1 or len(gff_paths) == 1:
         # Serial processing with progress bar
         for gff_path in tqdm(gff_paths, desc="Processing GFF files", unit="file"):
-            gff_counts, gff_total, gff_kept, fname = _process_gff_file(gff_path, require_complete)
+            gff_counts, gff_total, gff_kept, fname = _process_gff_file(
+                gff_path, require_complete
+            )
             counts += gff_counts
             total_transcripts += gff_total
             kept_transcripts += gff_kept
@@ -319,7 +341,7 @@ def estimate_transition_counts(gff_paths: list[Path], require_complete: bool, nu
         # Parallel processing
         actual_workers = num_workers if num_workers > 1 else mp.cpu_count()
         print(f"Parallel GFF processing with {actual_workers} workers...")
-        
+
         with mp.Pool(actual_workers) as pool:
             worker_fn = partial(_process_gff_file, require_complete=require_complete)
             results = [
@@ -331,7 +353,7 @@ def estimate_transition_counts(gff_paths: list[Path], require_complete: bool, nu
                     unit="file",
                 )
             ]
-        
+
         for gff_counts, gff_total, gff_kept, fname in results:
             counts += gff_counts
             total_transcripts += gff_total
@@ -359,7 +381,9 @@ def stationary_distribution(transition_matrix: np.ndarray) -> np.ndarray:
     return dist
 
 
-def write_matrix_csv(path: Path, matrix: np.ndarray, row_names: list[str], col_names: list[str]) -> None:
+def write_matrix_csv(
+    path: Path, matrix: np.ndarray, row_names: list[str], col_names: list[str]
+) -> None:
     with path.open("w", newline="") as handle:
         writer = csv.writer(handle)
         writer.writerow([""] + col_names)
@@ -368,14 +392,17 @@ def write_matrix_csv(path: Path, matrix: np.ndarray, row_names: list[str], col_n
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Estimate GeneCAD Viterbi transition priors from GFF3")
+    parser = argparse.ArgumentParser(
+        description="Estimate GeneCAD Viterbi transition priors from GFF3"
+    )
     parser.add_argument(
         "--gff",
         required=False,
         help=(
             "Comma-separated list of GFF3 or GFF3.GZ files, directories, or globs. "
             "If omitted, the script will try to discover GFFs under "
-            "fine-tuning/input_file/ and fine-tuning/ directories."),
+            "fine-tuning/input_file/ and fine-tuning/ directories."
+        ),
     )
     parser.add_argument(
         "--output-csv",
@@ -435,7 +462,10 @@ def main() -> None:
     # If no explicit input was provided, try repo-default locations
     if not explicit_input_provided:
         repo_root = Path.cwd()
-        search_dirs = [repo_root / "fine-tuning" / "input_file", repo_root / "fine-tuning"]
+        search_dirs = [
+            repo_root / "fine-tuning" / "input_file",
+            repo_root / "fine-tuning",
+        ]
         for d in search_dirs:
             if not d.exists():
                 continue
@@ -453,7 +483,10 @@ def main() -> None:
             )
 
         sample_search = []
-        for d in (Path.cwd() / "fine-tuning" / "input_file", Path.cwd() / "fine-tuning"):
+        for d in (
+            Path.cwd() / "fine-tuning" / "input_file",
+            Path.cwd() / "fine-tuning",
+        ):
             if d.exists():
                 for ext in ("**/*.gff", "**/*.gff3", "**/*.gff.gz", "**/*.gff3.gz"):
                     sample_search.extend(sorted(d.glob(ext)))
@@ -467,9 +500,7 @@ def main() -> None:
     print(f"Resolved {len(gff_paths)} GFF files via {mode_desc}")
 
     counts, total, kept = estimate_transition_counts(
-        gff_paths,
-        require_complete=args.require_complete,
-        num_workers=args.num_workers
+        gff_paths, require_complete=args.require_complete, num_workers=args.num_workers
     )
     transition_matrix = normalize_rows(counts, args.alpha)
     stationary = stationary_distribution(transition_matrix)
@@ -486,17 +517,19 @@ def main() -> None:
             writer.writerow([""] + STATE_NAMES)
             writer.writerow(["pi"] + [f"{value:.12g}" for value in stationary])
 
-    print(f"\n{'='*70}")
-    print(f"Summary:")
+    print(f"\n{'=' * 70}")
+    print("Summary:")
     print(f"  Total GFF files processed: {len(gff_paths)}")
     print(f"  Total transcripts examined: {total:,}")
-    print(f"  Transcripts kept after filtering: {kept:,} ({100*kept/max(total,1):.1f}%)")
+    print(
+        f"  Transcripts kept after filtering: {kept:,} ({100 * kept / max(total, 1):.1f}%)"
+    )
     print(f"  Transition matrix written to: {output_csv}")
     if args.output_stationary_csv is not None:
         print(f"  Stationary distribution written to: {args.output_stationary_csv}")
     print(f"  Alpha (smoothing): {args.alpha}")
     print(f"  Require complete transcripts: {args.require_complete}")
-    print(f"{'='*70}")
+    print(f"{'=' * 70}")
 
 
 if __name__ == "__main__":

@@ -304,8 +304,8 @@ For HPC environments where Docker is not available, you can use Singularity (or 
 
 > [!NOTE]
 > **Understanding File Paths in Containers**
-> The argument `--bind $(pwd):/workspace` connects your current folder on the host machine to the `/workspace` folder inside the container. 
-> 
+> The argument `--bind $(pwd):/workspace` connects your current folder on the host machine to the `/workspace` folder inside the container.
+>
 > If you run the command from `/home/user/my_project`, then inside the container, `/workspace` actually points to `/home/user/my_project`. Always place your input FASTA files inside your current directory so the container can see them!
 
 ```bash

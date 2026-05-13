@@ -253,7 +253,6 @@ Commands:
   train       Train or fine-tune GeneCAD models from prepared datasets.
   evaluate    Compare predicted annotations with a reference GFF/GTF file.
   summarize   Summarize datasets, labels, or prediction outputs.
-  ui          Launch the browser-based GeneCAD interface.
 
 Useful tips:
   - FASTA input can be plain text (.fa/.fasta) or compressed (.fa.gz).
@@ -264,7 +263,6 @@ Useful tips:
 
 Need more detail?
   genecad predict --help
-  genecad ui --help
 
 Typical output:
   A prediction run writes files under the output directory, including GFF
@@ -275,10 +273,8 @@ Typical output:
     parser.add_argument(
         "command",
         metavar="command",
-        choices=["predict", "train", "evaluate", "summarize", "ui"],
-        help=(
-            "What you want GeneCAD to do: predict, train, evaluate, summarize, or ui"
-        ),
+        choices=["predict", "train", "evaluate", "summarize"],
+        help=("What you want GeneCAD to do: predict, train, evaluate, or summarize"),
     )
     parser.add_argument(
         "args",
@@ -301,8 +297,6 @@ Typical output:
         sys.exit(cmd_evaluate(top.args))
     elif top.command == "summarize":
         sys.exit(cmd_summarize(top.args))
-    elif top.command == "ui":
-        sys.exit(cmd_ui(top.args))
 
 
 if __name__ == "__main__":
