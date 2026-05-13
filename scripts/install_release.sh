@@ -27,12 +27,10 @@ uv pip install \
   "mamba-ssm @ git+https://github.com/state-spaces/mamba@v2.2.4" \
   "causal-conv1d @ git+https://github.com/Dao-AILab/causal-conv1d@v1.5.0.post8"
 
-if ! command -v genecad >/dev/null 2>&1; then
-  if [ ! -x ".venv/bin/genecad" ]; then
-    echo "'genecad' command not found after wheel install; installing local editable package as fallback..."
-    echo "(The release wheel download has already been counted.)"
-    uv pip install -e .
-  fi
+if [ -f "pyproject.toml" ]; then
+  echo "Installing local package in editable mode to synchronize CLI with source code..."
+  echo "(The release wheel download has already been counted.)"
+  uv pip install -e .
 fi
 
 if [ -x ".venv/bin/genecad" ] && ! command -v genecad >/dev/null 2>&1; then
