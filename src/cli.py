@@ -106,6 +106,15 @@ Examples:
     p.add_argument(
         "--launcher", default="", help="Custom launcher command (e.g. 'srun python')"
     )
+    p.add_argument(
+        "--model-checkpoint",
+        default="",
+        dest="model_checkpoint",
+        help=(
+            "Override the GeneCAD head checkpoint. May be a local .ckpt path "
+            "or a Hugging Face model repo ID."
+        ),
+    )
     return p
 
 
@@ -148,6 +157,8 @@ def cmd_predict(argv: list[str]) -> int:
     ]
     if args.launcher:
         cmd += ["--launcher", args.launcher]
+    if args.model_checkpoint:
+        cmd += ["--model-checkpoint", args.model_checkpoint]
 
     env = os.environ.copy()
     # Ensure src/ is importable when called from the installed wheel

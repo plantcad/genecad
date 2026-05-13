@@ -34,10 +34,13 @@ Options:
   --launcher CMD        Custom entrypoint command to launch predict.py (e.g. 'srun python').
                         If set, overrides automatic DDP/SLURM detection.
                         Can also be set via LAUNCHER environment variable.
+  --model-checkpoint PATH_OR_REPO
+                        Override the GeneCAD head checkpoint selected by --mode.
+                        Accepts a local .ckpt path or a Hugging Face model repo ID.
   -h, --help            Show this help message
 
 Batch size auto-detection:
-  Starting guess = max(8, floor(free_gb × 0.80))
+  Starting guess = max(8, floor(free_gb × 0.90))
   nvidia-smi reports free memory *before* Python/model load, so the guess may overshoot.
   On failure the batch size is reduced by 20% and retried (up to 20 times). This finds
   a near-optimal size rather than jumping to half. The final working value is printed
@@ -77,6 +80,7 @@ TOP_N_CONTIGS="all"
 MIN_TRANSCRIPT_LENGTH="3"
 CPU_WORKERS="1"
 LAUNCHER_ARG="${LAUNCHER:-}"
+MODEL_CHECKPOINT_ARG=""
 
 while [[ $# -gt 0 ]]; do
   case $1 in
@@ -90,6 +94,7 @@ while [[ $# -gt 0 ]]; do
     -b|--batch-size) BATCH_SIZE_ARG="$2"; shift 2 ;;
     -g|--gpus)       GPUS_ARG="$2";       shift 2 ;;
     --launcher)      LAUNCHER_ARG="$2";   shift 2 ;;
+    --model-checkpoint) MODEL_CHECKPOINT_ARG="$2"; shift 2 ;;
     -h|--help) usage ;;
     *) echo "Unknown option: $1"; usage ;;
   esac
@@ -143,6 +148,10 @@ case "$MODE" in
     exit 1
     ;;
 esac
+
+if [[ -n "$MODEL_CHECKPOINT_ARG" ]]; then
+    HEAD_MODEL="$MODEL_CHECKPOINT_ARG"
+fi
 
 # =================================================================
 # GPU Resolution

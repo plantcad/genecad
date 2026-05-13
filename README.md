@@ -6,15 +6,15 @@
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![CI](https://github.com/plantcad/genecad/actions/workflows/ci.yaml/badge.svg)](https://github.com/plantcad/genecad/actions/workflows/ci.yaml)
 [![bioRxiv](https://img.shields.io/badge/bioRxiv-10.1101/2025.10.31.685877-b31b1b.svg)](https://doi.org/10.1101/2025.10.31.685877)
-[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg?logo=python&logoColor=white)](https://www.python.org)
+[![Python 3.12](https://img.shields.io/badge/python-3.12-blue.svg?logo=python&logoColor=white)](https://www.python.org)
 [![Release Wheel](https://img.shields.io/badge/Install-GitHub%20Release%20Wheel-orange)](#step-1-download-and-install)
 [![Docker](https://img.shields.io/badge/Install-Docker-blue?logo=docker)](#using-docker)
 [![GeneCAD Downloads](https://img.shields.io/github/downloads/plantcad/genecad/total?label=GitHub%20downloads)](https://github.com/plantcad/genecad/releases)
 [![HF Downloads](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fhuggingface.co%2Fapi%2Fmodels%2Fplantcad%2Fgenecad_plant&query=%24.downloads&label=HF%20downloads&color=yellow&logo=huggingface)](https://huggingface.co/plantcad/genecad_plant)
 
-GeneCAD is an end-to-end genome annotation pipeline for plants, powered by the DNA foundation model [PlantCAD2](https://doi.org/10.1101/2025.10.31.685877). Give it a genome FASTA and it returns a publication-ready GFF3 annotation. No species-specific training data, no external alignments, no configuration required.
+GeneCAD is an end-to-end genome annotation pipeline for plants, powered by the DNA foundation model [PlantCAD2](https://doi.org/10.1101/2025.10.31.685877). Give it a genome FASTA and it returns a protein-refined GFF3 annotation. No species-specific training data, no external alignments, and no model configuration required.
 
-*Any species. Any genome size. Out-of-the-box multi-GPU scalability.*
+*Plant-first genome annotation. Vertebrate support. Out-of-the-box multi-GPU scalability.*
 
 </div>
 
@@ -56,8 +56,9 @@ We provide a **Command Line Interface (CLI)** for automated pipelines and local 
 | OS | Linux (x86-64) | — | macOS is not supported (no CUDA) |
 | GPU | NVIDIA ≥ 16 GB VRAM | A100 / H100 | e.g. RTX 3090/4090 for development |
 | CUDA | 12.4 | 12.8 | Must match PyTorch 2.7.1 build |
-| Python | 3.11 | 3.12 | Managed automatically by `uv` |
+| Python | 3.12 | 3.12 | Managed automatically by `uv` |
 | Disk | ~20 GB free | — | Model weights cached in `~/.cache/huggingface` |
+| Hugging Face | Account login | — | Required once to download model weights |
 
 ### Step 1: Download and Install
 
@@ -76,15 +77,20 @@ cd genecad
 uv venv
 source .venv/bin/activate   # run this every time you open a new terminal
 bash scripts/install_release.sh
+
+# 4. Log in once so GeneCAD can download model weights on first run
+huggingface-cli login
 ```
 
 > [!NOTE]
 > `source .venv/bin/activate` must be run **every time you open a new terminal** before using `genecad`. If you see `genecad: command not found`, this is almost always the cause. See [Troubleshooting](#troubleshooting) for a permanent fix.
+>
+> Model weights are downloaded from Hugging Face the first time you run GeneCAD and then reused from `~/.cache/huggingface`.
 
 ### Step 2: Run an annotation
 
 **Run a test example (Arabidopsis):**
-No configuration required — the example *Arabidopsis thaliana* TAIR12 sequence is downloaded automatically.
+After installation and Hugging Face login, the example *Arabidopsis thaliana* TAIR12 sequence is downloaded automatically.
 ```bash
 genecad predict
 ```
@@ -116,7 +122,7 @@ genecad predict --gpus all
 > | File | Description |
 > |------|-------------|
 > | `[Species]_GeneCAD_raw.gff` | Raw model predictions (all chromosomes merged) |
-> | `[Species]_GeneCAD_final.gff` | Protein-refined, publication-ready annotations — **use this one** |
+> | `[Species]_GeneCAD_final.gff` | Protein-refined annotations — **use this one** |
 >
 > Both files follow the standard GFF3 format and can be loaded directly into **IGV**, **JBrowse2**, or **Apollo** alongside your genome FASTA.
 
@@ -150,6 +156,9 @@ Options:
   --launcher CMD        Custom entrypoint to launch predict.py (e.g. 'srun python').
                         Overrides automatic DDP/SLURM detection.
                         Can also be set via the LAUNCHER environment variable.
+  --model-checkpoint PATH_OR_REPO
+                        Override the GeneCAD head selected by --mode.
+                        Accepts a local .ckpt path or a Hugging Face model repo ID.
   -h, --help            Show this help message
 ```
 
@@ -364,6 +373,9 @@ uv sync --extra torch --extra mamba
 # Activate the virtual environment
 source .venv/bin/activate
 
+# Log in once so models can be downloaded on first run
+huggingface-cli login
+
 # Run the pipeline
 genecad predict
 ```
@@ -429,7 +441,7 @@ docker run --rm --gpus all \
 
 SLURM is a job scheduler — you still need to install GeneCAD first using the [Quick Start](#step-1-download-and-install) or [from source](#install-from-source-using-uv) on your login node, then submit jobs with `sbatch` or `salloc`.
 
-Load the appropriate modules for your cluster before installing (e.g. CUDA 12.8, Python 3.12). The minimum tested combination is CUDA 12.4, Python 3.11, and PyTorch 2.5.1.
+Load the appropriate modules for your cluster before installing (e.g. CUDA 12.8 and Python 3.12). GeneCAD pins PyTorch 2.7.1 with CUDA 12.8 wheels; CUDA 12.4+ drivers are expected to work with the packaged runtime, but CUDA 12.8 is the tested/recommended setup.
 
 **Interactive single-node job:**
 
@@ -591,7 +603,7 @@ GeneCAD provides two pre-trained models for different taxonomic groups. Both are
 | Mode (`-m`) | Organism type | Base model | GeneCAD head |
 |-------------|--------------|------------|--------------|
 | `plant` *(default)* | Plants | [`emarro/pcad2-200M-cnet-baseline`](https://huggingface.co/emarro/pcad2-200M-cnet-baseline) | [`plantcad/genecad_plant`](https://huggingface.co/plantcad/genecad_plant) |
-| `animal` | Animals / vertebrates | [`emarro/pcad2_vert_small`](https://huggingface.co/emarro/pcad2_vert_small) | [`plantcad/genecad_vert`](https://huggingface.co/plantcad/genecad_vert) |
+| `animal` | Animals / vertebrates | [`emarro/pcad2_vert_small`](https://huggingface.co/emarro/pcad2_vert_small) | [`plantcad/genecad_animal`](https://huggingface.co/plantcad/genecad_animal) |
 
 **Pre-downloading models** (recommended for clusters without internet on compute nodes):
 
@@ -604,7 +616,7 @@ huggingface-cli download plantcad/genecad_plant
 huggingface-cli download emarro/pcad2-200M-cnet-baseline
 
 # Download the animal model (~3 GB)
-huggingface-cli download plantcad/genecad_vert
+huggingface-cli download plantcad/genecad_animal
 huggingface-cli download emarro/pcad2_vert_small
 ```
 
@@ -832,13 +844,13 @@ This section is for researchers who want to **fine-tune GeneCAD on new species**
 | Requirement | Notes |
 |-------------|-------|
 | ≥ 2 × NVIDIA GPUs | Training uses PyTorch DDP. Single-GPU works but is very slow. |
-| HuggingFace account | Run `huggingface-cli login` to download training data. |
+| Hugging Face account | Run `huggingface-cli login` to download training data. |
 | WandB (optional) | Metrics are logged to WandB. Disable with `WANDB_MODE=disabled`. |
 
 **Native installation (uv / pip)**
 
 ```bash
-# Login to HuggingFace (one-time)
+# Log in to Hugging Face (one-time)
 huggingface-cli login
 
 # Fine-tune on the 5-species plant dataset (downloads data automatically)
@@ -930,7 +942,7 @@ Notes:
 
 | Step | Description |
 |------|-------------|
-| 0. Download | Fetch training GFF3 and FASTA files from HuggingFace (plant and animal) |
+| 0. Download | Fetch training GFF3 and FASTA files from Hugging Face (plant and animal) |
 | 1. Link | Create symlinks with naming conventions expected by the config |
 | 2. Extract GFF | Parse gene annotations into a flat feature table (Parquet) |
 | 3. Tokenize | Tokenize genome sequences into Zarr format |
@@ -1157,11 +1169,11 @@ genecad predict -i genome.fa -s MySpecies --top-n-contigs 50
 
 ---
 
-### HuggingFace / Network
+### Hugging Face / Network
 
 **`GatedRepoError` or `401 Unauthorized` when downloading models**
 
-The model weights require a HuggingFace account. Log in once:
+The model weights require a Hugging Face account. Log in once:
 
 ```bash
 huggingface-cli login
