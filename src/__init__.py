@@ -8,10 +8,20 @@ try:
         SampleDecoderOnlyOutput,  # noqa: F401
     )
 except ImportError:
-    from transformers.generation import GenerateDecoderOnlyOutput
+    try:
+        from transformers.generation import GenerateDecoderOnlyOutput
 
-    transformers.generation.GreedySearchDecoderOnlyOutput = GenerateDecoderOnlyOutput
-    transformers.generation.SampleDecoderOnlyOutput = GenerateDecoderOnlyOutput
+        transformers.generation.GreedySearchDecoderOnlyOutput = GenerateDecoderOnlyOutput
+        transformers.generation.SampleDecoderOnlyOutput = GenerateDecoderOnlyOutput
+    except ImportError:
+        from dataclasses import dataclass
+
+        @dataclass
+        class DummyDecoderOnlyOutput:
+            pass
+
+        transformers.generation.GreedySearchDecoderOnlyOutput = DummyDecoderOnlyOutput
+        transformers.generation.SampleDecoderOnlyOutput = DummyDecoderOnlyOutput
 
 # ── Patch 1 ──────────────────────────────────────────────────────────────────
 # transformers >= 4.51 renamed `_tied_weights_keys` → `all_tied_weights_keys`
