@@ -124,6 +124,7 @@ def load_classifier(args: Args) -> GeneClassifier:
             config = GeneClassifierConfig(**config_kwargs)
         if config.max_sequence_length is None:
             config.max_sequence_length = args.window_size
+        config.base_encoder_path = args.model_path
         model = GeneClassifier.load_from_checkpoint(
             model_checkpoint,
             map_location=args.device,
@@ -136,6 +137,7 @@ def load_classifier(args: Args) -> GeneClassifier:
             "was added). Inferring GeneClassifierConfig from state dict shapes."
         )
         config = _infer_config_from_checkpoint(ckpt, window_size=args.window_size)
+        config.base_encoder_path = args.model_path
         model = GeneClassifier.load_from_checkpoint(
             model_checkpoint,
             map_location=args.device,

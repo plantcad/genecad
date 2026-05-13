@@ -136,7 +136,7 @@ case "$MODE" in
     ;;
   animal)
     BASE_MODEL="emarro/pcad2_vert_small"
-    HEAD_MODEL="/workdir/zl843/GeneCAD/genecad_april23/genecad_result/training/animal_v2_pcad2vert/checkpoints/last.ckpt"
+    HEAD_MODEL="plantcad/genecad_animal"
     ;;
   *)
     echo "Error: Unknown mode '$MODE'. Valid options are: plant, animal"

@@ -1,18 +1,18 @@
 <div align="center">
 
-# GeneCAD: Foundation Model Genome Annotation
+# GeneCAD: Plant Genome Annotation with a DNA Foundation Model
 
 ![](https://img.shields.io/badge/version-0.1.0-blue)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![CI](https://github.com/plantcad/genecad/actions/workflows/ci.yaml/badge.svg)](https://github.com/plantcad/genecad/actions/workflows/ci.yaml)
-[![DOI](https://zenodo.org/badge/DOI/10.1101/2025.10.31.685877.svg)](https://doi.org/10.1101/2025.10.31.685877)
+[![bioRxiv](https://img.shields.io/badge/bioRxiv-10.1101/2025.10.31.685877-b31b1b.svg)](https://doi.org/10.1101/2025.10.31.685877)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg?logo=python&logoColor=white)](https://www.python.org)
 [![Release Wheel](https://img.shields.io/badge/Install-GitHub%20Release%20Wheel-orange)](#step-1-download-and-install)
 [![Docker](https://img.shields.io/badge/Install-Docker-blue?logo=docker)](#using-docker)
 [![GeneCAD Downloads](https://img.shields.io/github/downloads/plantcad/genecad/total?label=GitHub%20downloads)](https://github.com/plantcad/genecad/releases)
-[![Hugging Face](https://img.shields.io/badge/🤗-Hugging%20Face-yellow.svg?style=flat)](https://huggingface.co/collections/plantcad/genecad-68c686ccf14312bf6de356de)
 [![HF Downloads](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fhuggingface.co%2Fapi%2Fmodels%2Fplantcad%2Fgenecad_plant&query=%24.downloads&label=HF%20downloads&color=yellow&logo=huggingface)](https://huggingface.co/plantcad/genecad_plant)
 
-GeneCAD is an end-to-end genome annotation pipeline for plants and animals, powered by the DNA foundation model [PlantCAD2](https://doi.org/10.1101/2025.10.31.685877). Give it a genome FASTA and it returns a publication-ready GFF3 annotation — no species-specific training data, no external alignments, no configuration required.
+GeneCAD is an end-to-end genome annotation pipeline for plants, powered by the DNA foundation model [PlantCAD2](https://doi.org/10.1101/2025.10.31.685877). Give it a genome FASTA and it returns a publication-ready GFF3 annotation. No species-specific training data, no external alignments, no configuration required.
 
 *Any species. Any genome size. Out-of-the-box multi-GPU scalability.*
 
@@ -30,6 +30,7 @@ Unlike traditional annotation tools that rely on hand-crafted features or splice
   - [Outputs](#outputs)
   - [Throughput](#throughput)
 - [Advanced Setup & Execution](#advanced-setup--execution)
+  - [Containers (Singularity / Apptainer)](#containers-singularity--apptainer)
   - [Install from Source (Using uv)](#install-from-source-using-uv)
   - [Containers (Docker)](#containers-docker)
   - [HPC Clusters (SLURM)](#hpc-clusters-slurm)
@@ -297,6 +298,53 @@ Estimated cost for common reference plant genomes (using Lambda A100 at $0.0202/
 
 ## Advanced Setup & Execution
 
+### Containers (Singularity / Apptainer)
+
+For HPC environments where Docker is not available, you can use Singularity (or Apptainer) to pull and run the Docker image directly. The `--nv` flag is required to enable GPU support.
+
+> [!NOTE]
+> **Understanding File Paths in Containers**
+> The argument `--bind $(pwd):/workspace` connects your current folder on the host machine to the `/workspace` folder inside the container. 
+> 
+> If you run the command from `/home/user/my_project`, then inside the container, `/workspace` actually points to `/home/user/my_project`. Always place your input FASTA files inside your current directory so the container can see them!
+
+```bash
+# Clone the repository
+git clone https://github.com/plantcad/genecad && cd genecad
+
+# Pull the Docker image and convert it to a Singularity image
+singularity pull genecad.sif docker://ghcr.io/plantcad/genecad_v1:latest
+
+# Run on the bundled Arabidopsis example (auto-downloads FASTA)
+singularity exec --nv \
+  --bind $(pwd):/workspace \
+  --pwd /workspace \
+  genecad.sif \
+  /usr/local/bin/genecad bash predict.sh
+
+# Annotate a custom plant genome
+singularity exec --nv \
+  --bind $(pwd):/workspace \
+  --pwd /workspace \
+  genecad.sif \
+  /usr/local/bin/genecad bash predict.sh \
+    -i /workspace/data/my_plant.fa \
+    -o /workspace/output \
+    -s Zmays \
+    -m plant
+
+# Annotate an animal genome
+singularity exec --nv \
+  --bind $(pwd):/workspace \
+  --pwd /workspace \
+  genecad.sif \
+  /usr/local/bin/genecad bash predict.sh \
+    -i /workspace/data/my_animal.fa \
+    -o /workspace/output \
+    -s Hsapiens \
+    -m animal
+```
+
 ### Install from Source (Using uv)
 
 If you are a developer and want to install GeneCAD from the source code instead of using the pre-built wheel, use [uv](https://docs.astral.sh/uv/):
@@ -335,6 +383,10 @@ causal-conv1d = { path = "path/to/causal_conv1d-1.5.0.post8-*.whl" }
 ### Containers (Docker)
 
 The Docker image at `ghcr.io/plantcad/genecad_v1` bundles the complete runtime. Source code is **mounted at run time**, so changes you make to the cloned repository take effect immediately — no rebuild needed.
+
+> [!NOTE]
+> **Understanding File Paths in Containers**
+> The argument `-v $(pwd):/workspace` connects your current folder on the host machine to the `/workspace` folder inside the container. Always place your input FASTA files inside your current directory so the container can see them!
 
 > [!IMPORTANT]
 > If your environment requires a specific Docker alias (e.g., `docker1`), replace `docker` with your local command in the examples below.
@@ -385,6 +437,9 @@ Load the appropriate modules for your cluster before installing (e.g. CUDA 12.8,
 salloc --partition=gpu-queue --nodes=1 --ntasks=1 --gres=gpu:1
 
 cd /path/to/genecad
+# Activate your environment if you installed via uv or venv
+source .venv/bin/activate
+
 genecad predict \
   -i /path/to/input.fa \
   -o /path/to/output \
@@ -404,6 +459,9 @@ cat << 'EOF' > run_genecad.slurm
 #SBATCH --job-name=genecad
 
 cd /path/to/genecad
+# Activate your environment if you installed via uv or venv
+source .venv/bin/activate
+
 genecad predict \
   -i /path/to/input.fa \
   -o /path/to/output \
@@ -560,7 +618,7 @@ Run these on the login node (which has internet access). When you then run `gene
 
 GeneCAD includes a built-in evaluation tool that produces a structured five-section report comparing predicted annotations against a reference. It is self-contained for Sections 1, 2, 3, and 5. Section 4 uses BUSCO if you enable it, but BUSCO is optional.
 
-**Usage**
+**Native installation (uv / pip)**
 
 ```bash
 genecad evaluate \
@@ -568,6 +626,36 @@ genecad evaluate \
   --pred  /path/to/Athaliana_GeneCAD_final.gff \
   --fasta /path/to/genome.fa \
   --output report.txt
+```
+
+**Using Docker**
+
+Docker automatically uses the environment wrapper. Since the `genecad` command might not be pre-installed in the container's path, call the Python script directly. Note how the paths use `/workspace`, which is mapped to your current directory:
+
+```bash
+docker run --rm \
+  -v $(pwd):/workspace -w /workspace \
+  ghcr.io/plantcad/genecad_v1:latest \
+  python src/cli.py evaluate \
+    --ref /workspace/reference.gff3 \
+    --pred /workspace/Athaliana_GeneCAD_final.gff \
+    --fasta /workspace/genome.fa \
+    --output report.txt
+```
+
+**Using Singularity**
+
+Singularity requires you to invoke the wrapper `/usr/local/bin/genecad` first. Since the `genecad` command might not be pre-installed in the container's path, call the Python script directly. Note how the paths use `/workspace`, which is mapped to your current directory:
+
+```bash
+singularity exec \
+  --bind $(pwd):/workspace --pwd /workspace \
+  genecad.sif \
+  /usr/local/bin/genecad python src/cli.py evaluate \
+    --ref /workspace/reference.gff3 \
+    --pred /workspace/Athaliana_GeneCAD_final.gff \
+    --fasta /workspace/genome.fa \
+    --output report.txt
 ```
 
 Most users only need these arguments:
@@ -747,7 +835,7 @@ This section is for researchers who want to **fine-tune GeneCAD on new species**
 | HuggingFace account | Run `huggingface-cli login` to download training data. |
 | WandB (optional) | Metrics are logged to WandB. Disable with `WANDB_MODE=disabled`. |
 
-**Quick start**
+**Native installation (uv / pip)**
 
 ```bash
 # Login to HuggingFace (one-time)
@@ -780,6 +868,24 @@ genecad train \
   -l 1e-4 \
   -o results/my_run \
   -r my-run-name
+```
+
+**Using Docker**
+
+```bash
+docker run --rm --gpus all \
+  -v $(pwd):/workspace -w /workspace \
+  ghcr.io/plantcad/genecad_v1:latest \
+  bash train.sh --domain plant -g all
+```
+
+**Using Singularity**
+
+```bash
+singularity exec --nv \
+  --bind $(pwd):/workspace --pwd /workspace \
+  genecad.sif \
+  /usr/local/bin/genecad bash train.sh --domain plant -g all
 ```
 
 **Options**
