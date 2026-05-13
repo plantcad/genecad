@@ -3,7 +3,7 @@ name: Build and Publish Docker Image
 on:
   # Triggers the workflow when you push to the main branch
   push:
-    branches: [ "main", "master" ]
+    branches: [ "main", "master" , "refine-CrossEntropyLoss"]
     # Also trigger when you create a version tag (e.g., v1.0.0)
     tags: [ 'v*.*.*' ]
   # Allows you to run this workflow manually from the GitHub website
