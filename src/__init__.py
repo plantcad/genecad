@@ -2,6 +2,10 @@ import inspect
 import transformers
 import transformers.generation
 
+# ── Generation output compat shim ────────────────────────────────────────────
+# transformers 4.x renamed/removed the legacy GreedySearchDecoderOnlyOutput and
+# SampleDecoderOnlyOutput classes.  We patch them back so that old remote model
+# code can still reference them without crashing on import.
 try:
     from transformers.generation import (  # pyrefly: ignore[missing-module-attribute]
         GreedySearchDecoderOnlyOutput,  # noqa: F401
@@ -25,71 +29,71 @@ except ImportError:
         transformers.generation.GreedySearchDecoderOnlyOutput = DummyDecoderOnlyOutput
         transformers.generation.SampleDecoderOnlyOutput = DummyDecoderOnlyOutput
 
-# ── Patch 1 ──────────────────────────────────────────────────────────────────
-# transformers >= 4.51 renamed `_tied_weights_keys` → `all_tied_weights_keys`
-# and changed it from a list to a dict.  Old remote models (HNetForCausalLM)
-# still use the old attribute, so we bridge the two.
-if not hasattr(transformers.PreTrainedModel, "all_tied_weights_keys"):
+# ── Patch 1 & 2: PreTrainedModel compatibility ────────────────────────────────
+# These patches require PyTorch.  In CPU-only CI environments, accessing
+# transformers.PreTrainedModel raises ImportError ("requires the PyTorch
+# library"), so we guard the entire block with try/except.
+try:
+    _PTM = transformers.PreTrainedModel  # triggers the PyTorch backend check
+except ImportError:
+    _PTM = None  # type: ignore[assignment]
 
-    def _get_all_tied(self):
-        if hasattr(self, "_all_tied_storage"):
-            return self._all_tied_storage
-        val = getattr(self, "_tied_weights_keys", None)
-        if val is None:
-            return {}
-        if isinstance(val, list):
-            return {k: None for k in val}
-        return val
+if _PTM is not None:
+    # Patch 1: transformers >= 4.51 renamed `_tied_weights_keys`
+    # → `all_tied_weights_keys` and changed it from a list to a dict.
+    # Old remote models (HNetForCausalLM) still use the old attribute, so we
+    # bridge the two.
+    if not hasattr(_PTM, "all_tied_weights_keys"):
 
-    def _set_all_tied(self, value):
-        self._all_tied_storage = value
+        def _get_all_tied(self):
+            if hasattr(self, "_all_tied_storage"):
+                return self._all_tied_storage
+            val = getattr(self, "_tied_weights_keys", None)
+            if val is None:
+                return {}
+            if isinstance(val, list):
+                return {k: None for k in val}
+            return val
 
-    setattr(
-        transformers.PreTrainedModel,
-        "all_tied_weights_keys",
-        property(fget=_get_all_tied, fset=_set_all_tied),
-    )
+        def _set_all_tied(self, value):
+            self._all_tied_storage = value
 
-# ── Patch 2 ──────────────────────────────────────────────────────────────────
-# transformers >= 4.51 calls tie_weights(missing_keys=..., recompute_mapping=False)
-# but old remote model classes (e.g. HNetForCausalLM from pcad2) define
-# tie_weights() with NO keyword arguments.
-#
-# Patching PreTrainedModel.tie_weights doesn't work because HNetForCausalLM
-# overrides it — Python's MRO finds the subclass method first, bypassing us.
-#
-# Instead we patch _finalize_model_loading (the call site inside transformers)
-# to shadow the model's tie_weights via an instance attribute *before* the call
-# is made, so kwargs are silently filtered out for old model classes.
-if hasattr(transformers.PreTrainedModel, "_finalize_model_loading"):
-    _orig = transformers.PreTrainedModel._finalize_model_loading
-    _orig_finalize = getattr(_orig, "__func__", _orig)
-
-    def _safe_finalize_model_loading(cls, model, load_config, loading_info):
-        # Resolve tie_weights through the real class hierarchy
-        orig_tw = model.tie_weights  # bound method (from HNetForCausalLM or wherever)
-        sig = inspect.signature(type(model).tie_weights)
-        has_var_kw = any(
-            p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
+        setattr(
+            _PTM,
+            "all_tied_weights_keys",
+            property(fget=_get_all_tied, fset=_set_all_tied),
         )
-        if not has_var_kw:
-            # Old model: shadow via instance attribute with a kwargs-filtering wrapper
-            accepted = {k for k in sig.parameters if k != "self"}
 
-            def _safe_tw(**kwargs):
-                return orig_tw(**{k: v for k, v in kwargs.items() if k in accepted})
+    # Patch 2: transformers >= 4.51 calls
+    # tie_weights(missing_keys=..., recompute_mapping=False) but old remote
+    # model classes define tie_weights() with NO keyword arguments.  We patch
+    # _finalize_model_loading to filter kwargs for old model classes.
+    if hasattr(_PTM, "_finalize_model_loading"):
+        _orig_finalize = getattr(
+            _PTM._finalize_model_loading, "__func__", _PTM._finalize_model_loading
+        )
 
-            model.tie_weights = _safe_tw  # instance attribute shadows the class method
+        def _safe_finalize_model_loading(cls, model, load_config, loading_info):
+            orig_tw = model.tie_weights
+            sig = inspect.signature(type(model).tie_weights)
+            has_var_kw = any(
+                p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
+            )
+            if not has_var_kw:
+                accepted = {k for k in sig.parameters if k != "self"}
 
-        try:
-            return _orig_finalize(
-                cls, model, load_config, loading_info
-            )  # pyrefly: ignore[bad-argument-count]
-        except TypeError:
-            return _orig_finalize(model, load_config, loading_info)
+                def _safe_tw(**kwargs):
+                    return orig_tw(**{k: v for k, v in kwargs.items() if k in accepted})
 
-    transformers.PreTrainedModel._finalize_model_loading = (
-        classmethod(  # pyrefly: ignore[bad-assignment]
+                model.tie_weights = _safe_tw
+
+            try:
+                return _orig_finalize(  # pyrefly: ignore[bad-argument-count]
+                    cls, model, load_config, loading_info
+                )
+            except TypeError:
+                return _orig_finalize(model, load_config, loading_info)
+
+        _PTM._finalize_model_loading = classmethod(  # pyrefly: ignore[bad-assignment]
             _safe_finalize_model_loading
         )
-    )
