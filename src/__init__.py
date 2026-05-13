@@ -11,7 +11,9 @@ except ImportError:
     try:
         from transformers.generation import GenerateDecoderOnlyOutput
 
-        transformers.generation.GreedySearchDecoderOnlyOutput = GenerateDecoderOnlyOutput
+        transformers.generation.GreedySearchDecoderOnlyOutput = (
+            GenerateDecoderOnlyOutput
+        )
         transformers.generation.SampleDecoderOnlyOutput = GenerateDecoderOnlyOutput
     except ImportError:
         from dataclasses import dataclass
