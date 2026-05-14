@@ -368,6 +368,8 @@ class GeneClassifier(L.LightningModule):
                 max_position_embeddings=config.max_sequence_length,
                 attention_dropout=self.config.dropout,
                 mlp_dropout=self.config.dropout,
+                dtype=torch.bfloat16,
+                attn_implementation="flash_attention_2",
             )
             self.head_encoder = ModernBertModel(self.head_config)
 
