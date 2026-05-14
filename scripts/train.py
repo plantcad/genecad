@@ -384,7 +384,9 @@ def train(args: Args) -> None:
             )
             model.criterion = torch.nn.CrossEntropyLoss()
             config.token_class_frequencies = token_class_frequencies
-            logger.info("Bias updated from auto class frequencies; criterion is unweighted CrossEntropyLoss.")
+            logger.info(
+                "Bias updated from auto class frequencies; criterion is unweighted CrossEntropyLoss."
+            )
     else:
         logger.info(
             f"Creating new model (architecture={args.architecture}, base_encoder_path={args.base_encoder_path})"

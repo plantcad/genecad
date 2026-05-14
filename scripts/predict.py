@@ -1370,7 +1370,7 @@ def main():
     inference_parser.add_argument(
         "--dtype",
         type=str,
-        default="float32",
+        default="bfloat16",
         choices=["float32", "float16", "bfloat16", "float64", "double", "half"],
         help="Data type for model inference (default: bfloat16)",
     )
