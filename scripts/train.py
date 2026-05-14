@@ -382,16 +382,9 @@ def train(args: Args) -> None:
                     model.bias.device
                 )
             )
-            # Recompute inverse-sqrt class weights for CrossEntropyLoss
-            inv_sqrt_freqs = 1.0 / np.sqrt(freqs)
-            max_weight = inv_sqrt_freqs.min() * 100.0
-            weights = np.clip(inv_sqrt_freqs, a_min=0, a_max=max_weight)
-            weights = weights / weights.sum() * config.num_labels
-            model.criterion = torch.nn.CrossEntropyLoss(
-                weight=torch.tensor(weights, dtype=torch.float32)
-            )
+            model.criterion = torch.nn.CrossEntropyLoss()
             config.token_class_frequencies = token_class_frequencies
-            logger.info("Bias and criterion updated from auto class weights.")
+            logger.info("Bias updated from auto class frequencies; criterion is unweighted CrossEntropyLoss.")
     else:
         logger.info(
             f"Creating new model (architecture={args.architecture}, base_encoder_path={args.base_encoder_path})"

@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 
 
 def _parse_label_classes(attrs: dict) -> dict[int, str]:
+    # Parse the label_classes attribute from dataset metadata into a int→name mapping.
     value = attrs.get("label_classes")
     if value is None:
         return {}
@@ -33,6 +34,7 @@ def _parse_label_classes(attrs: dict) -> dict[int, str]:
 
 
 def _sample_dataset_stats(ds_path: str, batch_size: int = 2048) -> dict:
+    # Compute per-class token counts, species counts, and validity stats for a Zarr dataset in batches.
     ds = xr.open_zarr(ds_path)
     required = {"tag_labels", "label_mask", "species"}
     missing = required.difference(set(ds.data_vars.keys()))
@@ -110,6 +112,7 @@ def _sample_dataset_stats(ds_path: str, batch_size: int = 2048) -> dict:
 
 
 def run_label_qc(args: argparse.Namespace) -> None:
+    # Validate train/valid label datasets against sample count, species, class balance, and label range thresholds.
     logger.info("Running label QC")
 
     train_stats = _sample_dataset_stats(args.train_dataset, batch_size=args.batch_size)
@@ -202,6 +205,7 @@ class CheckpointSelection:
 
 
 def _find_metrics_csv(output_dir: str) -> str:
+    # Locate the most recent Lightning CSV metrics file under the given output directory.
     pattern = os.path.join(
         output_dir, "logs", "csv", "lightning_logs", "version_*", "metrics.csv"
     )
@@ -214,6 +218,7 @@ def _find_metrics_csv(output_dir: str) -> str:
 def _closest_checkpoint(
     checkpoint_dir: str, target_epoch: int, target_step: int
 ) -> tuple[str, str]:
+    # Return the checkpoint file whose epoch/step is closest to the target, falling back to last.ckpt.
     candidates = sorted(glob.glob(os.path.join(checkpoint_dir, "epoch_*-step_*.ckpt")))
     if not candidates:
         last_ckpt = os.path.join(checkpoint_dir, "last.ckpt")
@@ -241,6 +246,7 @@ def _closest_checkpoint(
 
 
 def run_select_best_checkpoint(args: argparse.Namespace) -> None:
+    # Select the best training checkpoint by a validation metric and create a best.ckpt symlink.
     metrics_csv = _find_metrics_csv(args.output_dir)
     logger.info("Selecting best checkpoint using metrics from %s", metrics_csv)
 
@@ -299,6 +305,7 @@ def run_select_best_checkpoint(args: argparse.Namespace) -> None:
 
 
 def run_feature_qc(args: argparse.Namespace) -> None:
+    # Validate a feature-table parquet for required columns, coordinate ordering, and strand values.
     logger.info("Running feature-table QC")
     features = pd.read_parquet(args.features_parquet)
 
@@ -357,6 +364,7 @@ def run_feature_qc(args: argparse.Namespace) -> None:
 
 
 def main() -> None:
+    # Parse CLI arguments and dispatch to the appropriate QC subcommand.
     parser = argparse.ArgumentParser(description="GeneCAD quality-control utilities")
     sub = parser.add_subparsers(dest="command", required=True)
 

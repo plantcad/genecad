@@ -430,20 +430,10 @@ class GeneClassifier(L.LightningModule):
                 a_max=1,
             )
             self.bias = nn.Parameter(torch.tensor(np.log10(freqs), dtype=self.dtype))
-
-            # Compute smoothed inverse square-root class weights to amplify gradients for rare classes
-            inv_sqrt_freqs = 1.0 / np.sqrt(freqs)
-            # Clip to a maximum of 100x the minimum weight to avoid exploding gradients
-            max_weight = inv_sqrt_freqs.min() * 100.0
-            weights = np.clip(inv_sqrt_freqs, a_min=0, a_max=max_weight)
-            # Normalize the weights
-            weights = weights / weights.sum() * self.num_labels
-            self.criterion = torch.nn.CrossEntropyLoss(
-                weight=torch.tensor(weights, dtype=torch.float32)
-            )
         else:
             self.bias = nn.Parameter(torch.zeros(self.num_labels))
-            self.criterion = torch.nn.CrossEntropyLoss()
+
+        self.criterion = torch.nn.CrossEntropyLoss()
 
         if self.torch_compile:
             # Avoid base model compilation due to https://github.com/pytorch/pytorch/issues/146129
@@ -481,7 +471,24 @@ class GeneClassifier(L.LightningModule):
             batch, source=Source(split="train", index=batch_idx)
         )
         loss = self._compute_loss(batch)
-        self.log("train/loss", loss)
+        valid_tokens = max(int(batch.masks.sum().detach().item()), 1)
+        self.log(
+            "train/loss_step",
+            loss,
+            on_step=True,
+            on_epoch=False,
+            prog_bar=True,
+            sync_dist=True,
+            batch_size=valid_tokens,
+        )
+        self.log(
+            "train/loss_epoch",
+            loss,
+            on_step=False,
+            on_epoch=True,
+            sync_dist=True,
+            batch_size=valid_tokens,
+        )
         # Log bias terms periodically to track if token classes are balancing
         if hasattr(self, "bias") and self.bias is not None:
             for i in range(self.bias.shape[0]):
@@ -502,7 +509,24 @@ class GeneClassifier(L.LightningModule):
             batch, source=Source(split="valid", index=batch_idx)
         )
         loss = self._compute_loss(batch)
-        self.log("valid/loss", loss, sync_dist=False)
+        valid_tokens = max(int(batch.masks.sum().detach().item()), 1)
+        self.log(
+            "valid/loss_step",
+            loss,
+            on_step=True,
+            on_epoch=False,
+            sync_dist=True,
+            batch_size=valid_tokens,
+        )
+        self.log(
+            "valid/loss_epoch",
+            loss,
+            on_step=False,
+            on_epoch=True,
+            prog_bar=True,
+            sync_dist=True,
+            batch_size=valid_tokens,
+        )
         visualize = (
             self.config.enable_visualization
             and self.global_step > 0
@@ -573,7 +597,13 @@ class GeneClassifier(L.LightningModule):
         logits = self._token_logits(hidden_states)
 
         if self.training:
-            self.log("train/logit_mean", float(logits.mean()))
+            self.log(
+                "train/logit_mean",
+                logits.detach().mean(),
+                on_step=True,
+                on_epoch=False,
+                sync_dist=True,
+            )
 
         return logits
 
