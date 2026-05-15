@@ -58,7 +58,7 @@ We provide a **Command Line Interface (CLI)** for automated pipelines and local 
 | CUDA | 12.4 | 12.8 | Must match PyTorch 2.7.1 build |
 | Python | 3.12 | 3.12 | Managed automatically by `uv` |
 | Disk | ~20 GB free | — | Model weights cached in `~/.cache/huggingface` |
-| Hugging Face | Account login | — | Required once to download model weights |
+| Hugging Face | Internet access | Account login | Login only needed for rate limits, gated repos, or private checkpoints |
 
 ### Step 1: Download and Install
 
@@ -77,15 +77,13 @@ cd genecad
 uv venv
 source .venv/bin/activate   # run this every time you open a new terminal
 bash scripts/install_release.sh
-
-# 4. Log in once so GeneCAD can download model weights on first run
-huggingface-cli login
 ```
 
 > [!NOTE]
 > `source .venv/bin/activate` must be run **every time you open a new terminal** before using `genecad`. If you see `genecad: command not found`, this is almost always the cause. See [Troubleshooting](#troubleshooting) for a permanent fix.
 >
 > Model weights are downloaded from Hugging Face the first time you run GeneCAD and then reused from `~/.cache/huggingface`.
+> The default GeneCAD models are public. If Hugging Face returns an authentication or rate-limit error, run `huggingface-cli login` once and retry.
 
 ### Step 2: Run an annotation
 
@@ -373,9 +371,6 @@ uv sync --extra torch --extra mamba
 # Activate the virtual environment
 source .venv/bin/activate
 
-# Log in once so models can be downloaded on first run
-huggingface-cli login
-
 # Run the pipeline
 genecad predict
 ```
@@ -608,7 +603,7 @@ GeneCAD provides two pre-trained models for different taxonomic groups. Both are
 **Pre-downloading models** (recommended for clusters without internet on compute nodes):
 
 ```bash
-# Log in to Hugging Face once (required to access the models)
+# Optional: log in if Hugging Face rate-limits anonymous downloads
 huggingface-cli login
 
 # Download the plant model (~5 GB, cached in ~/.cache/huggingface)
@@ -1173,7 +1168,7 @@ genecad predict -i genome.fa -s MySpecies --top-n-contigs 50
 
 **`GatedRepoError` or `401 Unauthorized` when downloading models**
 
-The model weights require a Hugging Face account. Log in once:
+The default GeneCAD models are public, so login is usually not required. If you use a private or gated checkpoint, or Hugging Face rate-limits anonymous downloads, log in once:
 
 ```bash
 huggingface-cli login
