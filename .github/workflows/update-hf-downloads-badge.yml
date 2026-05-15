@@ -1,0 +1,69 @@
+name: Update Hugging Face Downloads Badge
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 3 * * *"
+
+permissions:
+  contents: write
+
+jobs:
+  update-badge:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Update badge JSON
+        run: |
+          python - <<'PY'
+          import json
+          import pathlib
+          import urllib.request
+
+          models = [
+              "plantcad/genecad_plant",
+              "plantcad/genecad_animal",
+          ]
+
+          total = 0
+          details = {}
+          for model in models:
+              url = f"https://huggingface.co/api/models/{model}"
+              with urllib.request.urlopen(url, timeout=30) as response:
+                  payload = json.load(response)
+              downloads = int(payload.get("downloads") or 0)
+              details[model] = downloads
+              total += downloads
+
+          badge = {
+              "schemaVersion": 1,
+              "label": "HF downloads",
+              "message": f"{total:,}",
+              "color": "yellow",
+              "namedLogo": "huggingface",
+              "cacheSeconds": 21600,
+          }
+
+          path = pathlib.Path(".github/badges/hf-downloads.json")
+          path.parent.mkdir(parents=True, exist_ok=True)
+          path.write_text(json.dumps(badge, indent=2) + "\n")
+
+          print("Combined Hugging Face downloads:")
+          for model, downloads in details.items():
+              print(f"- {model}: {downloads:,}")
+          print(f"Total: {total:,}")
+          PY
+
+      - name: Commit badge update
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .github/badges/hf-downloads.json
+          if git diff --cached --quiet; then
+            echo "Badge already up to date."
+          else
+            git commit -m "Update Hugging Face downloads badge"
+            git push
+          fi

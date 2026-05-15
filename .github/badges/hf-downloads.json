@@ -1,0 +1,7 @@
+{
+  "schemaVersion": 1,
+  "label": "HF downloads",
+  "message": "refreshing",
+  "color": "yellow",
+  "namedLogo": "huggingface"
+}
