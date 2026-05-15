@@ -30,6 +30,17 @@ Tokenizer = Callable[[npt.NDArray[np.str_]], npt.NDArray[np.int_]]
 # -------------------------------------------------------------------------------------------------
 
 
+def _resolve_file_path(path: str) -> str:
+    """Resolve file path by falling back to gzip/un-gzipped versions if needed."""
+    if os.path.exists(path):
+        return path
+    if path.endswith(".gz") and os.path.exists(path[:-3]):
+        return path[:-3]
+    if not path.endswith(".gz") and os.path.exists(path + ".gz"):
+        return path + ".gz"
+    return path
+
+
 def get_feature_name(feature: SeqFeature) -> str | None:
     """Extract name from a SeqFeature object."""
     if not hasattr(feature, "qualifiers"):
@@ -102,6 +113,7 @@ def extract_gff_features(
     dfs = []
     for config in species_configs:
         input_path = os.path.join(input_dir, config.gff.filename)
+        input_path = _resolve_file_path(input_path)
         logger.info(f"Processing file for {config.name} ({config.id}): {input_path}")
         df = _extract_gff_features(input_path, config, skip_exon_features)
         dfs.append(df)
@@ -133,9 +145,10 @@ def _extract_gff_features(
     """Extract data from a single GFF file into a structured DataFrame."""
     logger.info(f"Parsing GFF file: {path}")
 
-    # Determine file opening method based on extension
-    open_func = gzip.open if path.endswith(".gz") else open
-    mode = "rt" if path.endswith(".gz") else "r"
+    # Determine file opening method based on extension of the real file
+    real_path = os.path.realpath(path)
+    open_func = gzip.open if real_path.endswith(".gz") else open
+    mode = "rt" if real_path.endswith(".gz") else "r"
 
     # Parse GFF file
     with open_func(path, mode) as in_handle:
@@ -506,6 +519,7 @@ def extract_fasta_sequences(
     # Extract sequences for each species
     for species_config in species_configs:
         fasta_file = os.path.join(input_dir, species_config.fasta.filename)
+        fasta_file = _resolve_file_path(fasta_file)
         chrom_map = species_config.chromosome_map
         _extract_fasta_sequences(
             species_id=species_config.id,
@@ -549,9 +563,10 @@ def _extract_fasta_sequences(
 
     logger.info(f"[species={species_id}] Processing FASTA file: {fasta_file}")
 
-    # Determine file opening method based on extension
-    open_func = gzip.open if fasta_file.endswith(".gz") else open
-    mode = "rt" if fasta_file.endswith(".gz") else "r"
+    # Determine file opening method based on extension of the real file
+    real_path = os.path.realpath(fasta_file)
+    open_func = gzip.open if real_path.endswith(".gz") else open
+    mode = "rt" if real_path.endswith(".gz") else "r"
 
     # Dictionary to collect sequences by species/chromosome
     sequence_records = {}
@@ -718,6 +733,7 @@ def validate_configs(data_dir: str) -> None:
 
         # Get GFF file path and extract sequence IDs
         gff_path = os.path.join(data_dir, species_data_dir, "gff", config.gff.filename)
+        gff_path = _resolve_file_path(gff_path)
         if not os.path.exists(gff_path):
             raise ValueError(f"[species={species_id}] GFF file not found: {gff_path}")
 
@@ -728,6 +744,7 @@ def validate_configs(data_dir: str) -> None:
         fasta_path = os.path.join(
             data_dir, species_data_dir, "fasta", config.fasta.filename
         )
+        fasta_path = _resolve_file_path(fasta_path)
         if not os.path.exists(fasta_path):
             raise ValueError(
                 f"[species={species_id}] FASTA file not found: {fasta_path}"
@@ -846,9 +863,10 @@ def _extract_fasta_seq_ids(path: str) -> list[str]:
     list[str]
         List of sequence IDs
     """
-    # Determine file opening method based on extension
-    open_func = gzip.open if path.endswith(".gz") else open
-    mode = "rt" if path.endswith(".gz") else "r"
+    # Determine file opening method based on extension of the real file
+    real_path = os.path.realpath(path)
+    open_func = gzip.open if real_path.endswith(".gz") else open
+    mode = "rt" if real_path.endswith(".gz") else "r"
 
     # Parse FASTA file and extract sequence IDs
     seq_ids = []

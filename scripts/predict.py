@@ -1,5 +1,7 @@
 import argparse
+import dataclasses
 import logging
+import multiprocessing as mp
 import os
 import tqdm
 from typing import Literal, Any
@@ -22,7 +24,14 @@ from src.prediction import merge_prediction_datasets
 from src.modeling import GeneClassifier, GeneClassifierConfig, token_transition_probs
 from src.schema import GffFeatureType
 import pandas as pd
-from src.dist import process_group
+from src.dist import (
+    barrier,
+    destroy_process_group,
+    init_process_group,
+    is_main_process,
+    local_rank,
+    process_group,
+)
 import torch._dynamo
 
 logger = logging.getLogger(__name__)
@@ -33,6 +42,45 @@ def batched(input_list: list[Any], batch_size: int) -> list[list[Any]]:
     return [
         input_list[i : i + batch_size] for i in range(0, len(input_list), batch_size)
     ]
+
+
+def _infer_config_from_checkpoint(ckpt: dict, window_size: int) -> GeneClassifierConfig:
+    """Reconstruct a GeneClassifierConfig from a checkpoint that lacks saved hyperparameters.
+
+    Reads weight tensor shapes from the state dict to recover the key architectural
+    dimensions (hidden size, number of labels, head-encoder depth) that must match
+    the saved weights.  Falls back to GeneClassifierConfig defaults for anything
+    that cannot be inferred.
+    """
+    sd = ckpt.get("state_dict", {})
+    config = GeneClassifierConfig()
+    config.max_sequence_length = window_size
+
+    # hidden_size == fc1 input dim  (fc1 shape: [4*H, H])
+    if "classifier.fc1.weight" in sd:
+        config.token_embedding_dim = sd["classifier.fc1.weight"].shape[1]
+
+    # num_labels == fc2 output dim  (fc2 shape: [num_labels, 4*H])
+    if "classifier.fc2.weight" in sd:
+        config.num_labels = sd["classifier.fc2.weight"].shape[0]
+
+    # head_encoder depth from highest layer index present
+    layer_indices = {
+        int(k.split(".")[2])
+        for k in sd
+        if k.startswith("head_encoder.layers.") and k.split(".")[2].isdigit()
+    }
+    if layer_indices:
+        config.head_encoder_layers = max(layer_indices) + 1
+
+    logger.info(
+        f"Inferred config from checkpoint state dict: "
+        f"token_embedding_dim={config.token_embedding_dim}, "
+        f"num_labels={config.num_labels}, "
+        f"head_encoder_layers={config.head_encoder_layers}, "
+        f"max_sequence_length={config.max_sequence_length}"
+    )
+    return config
 
 
 def load_classifier(args: Args) -> GeneClassifier:
@@ -52,9 +100,51 @@ def load_classifier(args: Args) -> GeneClassifier:
         model_checkpoint = hf_hub_download(args.model_checkpoint, filename="model.ckpt")
         logger.info(f"Downloaded classifier to {model_checkpoint}")
 
-    model = GeneClassifier.load_from_checkpoint(
-        model_checkpoint, map_location=args.device
-    )
+    # Peek at the checkpoint to check whether hyperparameters were saved.
+    # Old checkpoints (and raw Lightning trainer checkpoints) lack this key,
+    # causing load_from_checkpoint to fail with a missing-argument TypeError.
+    ckpt = torch.load(model_checkpoint, map_location="cpu", weights_only=False)
+    hparams = ckpt.get("hyper_parameters") or {}
+
+    if hparams:
+        # Prefer the serialized config object saved with the checkpoint.
+        # Older checkpoints may still store config values flat, so keep a fallback.
+        config = hparams.get("config")
+        if isinstance(config, dict):
+            config = GeneClassifierConfig(**config)
+        elif not isinstance(config, GeneClassifierConfig):
+            config_field_names = {
+                f.name for f in dataclasses.fields(GeneClassifierConfig)
+            }
+            config_kwargs = {
+                k: v for k, v in hparams.items() if k in config_field_names
+            }
+            if config_kwargs.get("max_sequence_length") is None:
+                config_kwargs["max_sequence_length"] = args.window_size
+            config = GeneClassifierConfig(**config_kwargs)
+        if config.max_sequence_length is None:
+            config.max_sequence_length = args.window_size
+        config.base_encoder_path = args.model_path
+        model = GeneClassifier.load_from_checkpoint(
+            model_checkpoint,
+            map_location=args.device,
+            strict=False,
+            config=config,
+        )
+    else:
+        logger.warning(
+            "Checkpoint has no saved hyperparameters (was saved before save_hyperparameters() "
+            "was added). Inferring GeneClassifierConfig from state dict shapes."
+        )
+        config = _infer_config_from_checkpoint(ckpt, window_size=args.window_size)
+        config.base_encoder_path = args.model_path
+        model = GeneClassifier.load_from_checkpoint(
+            model_checkpoint,
+            map_location=args.device,
+            strict=False,
+            config=config,
+        )
+
     model = model.eval()
     model = model.to(args.device, dtype=dtype)
     return model
@@ -175,6 +265,17 @@ def _create_predictions(
     """
     # Get distributed processing info
     rank, world_size = process_group()
+    tqdm_position = args.tqdm_position if args.tqdm_position is not None else rank
+    gpu_label = str(rank)
+    visible_gpus = os.environ.get("CUDA_VISIBLE_DEVICES", "").strip()
+    if visible_gpus:
+        visible_gpu_ids = [g.strip() for g in visible_gpus.split(",") if g.strip()]
+        # In torchrun, LOCAL_RANK indexes into CUDA_VISIBLE_DEVICES.
+        # In single-process runs launched with one visible GPU, index 0 maps
+        # to the physical GPU that was selected in predict.sh.
+        gpu_index = local_rank() if world_size > 1 else 0
+        if 0 <= gpu_index < len(visible_gpu_ids):
+            gpu_label = visible_gpu_ids[gpu_index]
 
     # Construct rank-specific output path
     dataset_path = os.path.join(args.output_dir, f"predictions.{rank}.zarr")
@@ -231,17 +332,38 @@ def _create_predictions(
         # pyrefly: ignore  # no-matching-overload
         windows = np.array_split(windows, world_size)[rank]
 
-        # Batch windows together
-        window_batches = np.array_split(windows, len(windows) // args.batch_size)
+        # Skip this strand if no windows were assigned to this rank
+        # (can happen when the sequence is shorter than world_size windows)
+        if len(windows) == 0:
+            logger.warning(
+                f"Rank {rank}: no windows for strand '{strand}' — skipping "
+                f"(sequence may be shorter than window_size × world_size)"
+            )
+            continue
+
+        # Batch windows together using ceiling division so batch_size is an
+        # upper bound, not a lower bound.  e.g. 195 windows / batch 112 → 2
+        # batches of 98 and 97, not 1 batch of 195.
+        n_batches = max(1, (len(windows) + args.batch_size - 1) // args.batch_size)
+        window_batches = np.array_split(windows, n_batches)
         logger.info(
             f"Processing {len(windows)} windows in {len(window_batches)} batches of size {args.batch_size}"
         )
 
-        # Process batches
-        for batch_index, window_batch in enumerate(window_batches):
-            logger.info(
-                f"Processing batch {batch_index + 1} of {len(window_batches)} [{rank=}, {world_size=}]"
+        # Process batches — each rank occupies its own tqdm row so bars don't
+        # overwrite each other when world_size > 1.
+        for (
+            batch_index,
+            window_batch,
+        ) in enumerate(  # pyrefly: ignore[bad-argument-type]
+            tqdm.tqdm(
+                window_batches,
+                desc=f"[GPU {gpu_label} | {strand}]",
+                position=tqdm_position,
+                leave=False,
+                dynamic_ncols=True,
             )
+        ):
             current_batch_size = len(window_batch)
 
             # Get equally sized sequence windows to process for batch
@@ -362,41 +484,187 @@ def flip(sequence: npt.ArrayLike) -> npt.ArrayLike:
     return np.flip(sequence, axis=0)
 
 
+@torch.inference_mode()
+def warmup_triton(args: Args):
+    """Pre-warm the Triton autotune cache by running a dummy forward pass.
+
+    Triton compiles and benchmarks GPU kernels the first time a new tensor
+    shape is seen.  When two torchrun ranks encounter the same new shape
+    simultaneously the concurrent CUDA benchmarks can collide and produce an
+    illegal memory access.
+
+    This function runs a single dummy forward pass **without** initialising the
+    distributed process group, so it must be called once per GPU sequentially
+    (before the multi-GPU torchrun launch).  The Triton cache persists across
+    processes, so the actual torchrun run will find pre-built configs and skip
+    the autotuning step entirely.
+
+    Parameters
+    ----------
+    args : argparse.Namespace
+        Must supply ``model_path``, ``model_checkpoint``, ``dtype``,
+        ``batch_size``, and ``window_size``.
+    """
+    if torch.cuda.is_available():
+        args.device = "cuda:0"
+    else:
+        args.device = "cpu"
+
+    logger.info(
+        f"[warmup] device={args.device}  batch_size={args.batch_size}  window_size={args.window_size}"
+    )
+
+    torch.set_float32_matmul_precision("medium")
+    if args.suppress_dynamo_errors == "yes":
+        torch._dynamo.config.suppress_errors = True
+
+    base_model, classifier, tokenizer = load_models(args)
+
+    pad_value = tokenizer.unk_token_id
+    if pad_value is None:
+        pad_value = 0
+
+    # Warm up with either the exact requested probe batch or a conservative
+    # capped batch when no explicit probe size was provided.
+    warmup_batch_size = getattr(args, "warmup_batch_size", None)
+    if warmup_batch_size is None:
+        warmup_batch_size = max(1, min(args.batch_size, 4))
+        if warmup_batch_size != args.batch_size:
+            logger.info(
+                f"[warmup] Capping probe batch from {args.batch_size} to {warmup_batch_size} for safety"
+            )
+    else:
+        warmup_batch_size = max(1, warmup_batch_size)
+        logger.info(f"[warmup] Using exact probe batch size {warmup_batch_size}")
+
+    dummy = torch.full(
+        (warmup_batch_size, args.window_size),
+        pad_value,
+        dtype=torch.long,
+        device=args.device,
+    )
+
+    if base_model is not None:
+        embeds = base_model(input_ids=dummy).last_hidden_state
+    else:
+        embeds = None
+
+    classifier(input_ids=dummy, inputs_embeds=embeds)  # pyrefly: ignore[not-callable]
+
+    # Also warm up remainder-batch shape (1 sample) so the last batch in each
+    # strand doesn't trigger a new autotuning run.
+    if warmup_batch_size > 1:
+        dummy1 = dummy[:1]
+        embeds1 = (
+            base_model(input_ids=dummy1).last_hidden_state
+            if base_model is not None
+            else None
+        )
+        classifier(
+            input_ids=dummy1, inputs_embeds=embeds1
+        )  # pyrefly: ignore[not-callable]
+
+    logger.info("[warmup] Triton cache warm-up complete.")
+
+
 def create_predictions(args: Args):
     """Run the inference pipeline to generate logits for each genomic strand.
+
+    When launched via ``torchrun`` (multi-GPU), every rank initialises the
+    distributed process group, binds to its own GPU (``LOCAL_RANK``), and
+    processes a disjoint slice of the sequence windows.  All ranks write
+    their own shard zarr file (``predictions.<rank>.zarr``).  After a barrier
+    ensures every shard has been flushed to disk the process group is torn
+    down cleanly.  The downstream ``detect_intervals`` step merges the shards
+    transparently via :func:`~src.prediction.merge_prediction_datasets`.
+
+    When launched normally (single-GPU), the function behaves exactly as
+    before: rank 0, world size 1.
 
     Parameters
     ----------
     args : argparse.Namespace
         Command-line arguments controlling inputs, outputs, and runtime options.
     """
+    # ---- Distributed setup ------------------------------------------------
+    # No-op when not launched by torchrun (RANK env var absent).
+    init_process_group()
+
+    # Bind this process to its LOCAL_RANK GPU so tensor ops land on the
+    # correct device.  torchrun sets LOCAL_RANK; single-process runs keep
+    # the device that was passed via --device.
+    if torch.cuda.is_available():
+        lr = local_rank()
+        torch.cuda.set_device(lr)
+        args.device = f"cuda:{lr}"
+    else:
+        args.device = "cpu"
+
+    rank, world_size = process_group()
+    logger.info(
+        f"create_predictions starting: {rank=}, {world_size=}, device={args.device}"
+    )
+
+    # ---- PyTorch settings -------------------------------------------------
     # Set to avoid:
-    # UserWarning: TensorFloat32 tensor cores for float32 matrix multiplication available but not enabled. Consider setting `torch.set_float32_matmul_precision('high')` for better performance.
+    # UserWarning: TensorFloat32 tensor cores for float32 matrix multiplication
+    # available but not enabled.
     torch.set_float32_matmul_precision("medium")  # same setting as training
 
-    # Supress errors related to models trained with torch.compile, e.g.:
+    # Suppress errors related to models trained with torch.compile, e.g.:
     # AssertionError: increase TRITON_MAX_BLOCK['X'] to 4096
     # https://github.com/pytorch/pytorch/issues/135028#issuecomment-2330421513
-    # Eager mode is fine in this pipeline so far -- compilation barely makes a difference
     if args.suppress_dynamo_errors == "yes":
         torch._dynamo.config.suppress_errors = True
 
-    # Load the models and tokenizer
-    base_model, classifier, tokenizer = load_models(args)
+    # ---- Build work list --------------------------------------------------
+    # Manifest mode: process many sequences with one model load.
+    # Single mode: original behaviour (one chromosome per invocation).
+    if args.manifest is not None:
+        import json
 
-    # Load the data
-    dataset = load_data(args)
+        with open(args.manifest) as fh:
+            entries = json.load(fh)
+        logger.info(f"Manifest mode: {len(entries)} sequence(s) to process")
+    else:
+        entries = [
+            {
+                "chromosome_id": args.chromosome_id,
+                "input": args.input,
+                "output_dir": args.output_dir,
+            }
+        ]
 
-    # Run the windowed inference to generate and save logits per rank
-    logger.info(f"Running predictions for {args.species_id}/{args.chromosome_id}")
-    predictions = _create_predictions(
-        args,
-        dataset,
-        base_model,
-        classifier,
-        tokenizer,
-    )
-    logger.info(f"Complete predictions dataset:\n{predictions}")
+    # ---- Inference --------------------------------------------------------
+    try:
+        # Load models onto this rank's device — happens ONCE regardless of
+        # how many sequences are in the manifest.
+        base_model, classifier, tokenizer = load_models(args)
+
+        for i, entry in enumerate(entries):
+            args.chromosome_id = entry["chromosome_id"]
+            args.input = entry["input"]
+            args.output_dir = entry["output_dir"]
+
+            logger.info(
+                f"[{i + 1}/{len(entries)}] Running predictions for "
+                f"{args.species_id}/{args.chromosome_id}"
+            )
+            _create_predictions(
+                args, load_data(args), base_model, classifier, tokenizer
+            )
+
+            # All ranks must finish this sequence before moving to the next.
+            barrier()
+
+        if is_main_process():
+            logger.info(
+                f"All {len(entries)} sequence(s) done across {world_size} rank(s)."
+            )
+    finally:
+        # Always tear down the process group even if an exception occurred so
+        # that NCCL resources are released and port numbers are freed.
+        destroy_process_group()
 
     logger.info("Done")
 
@@ -454,7 +722,8 @@ def _detect_intervals(
         logits: npt.ArrayLike, remove_incomplete_features: bool
     ) -> np.ndarray:
         transition_probs = token_transition_probs(
-            remove_incomplete_features=remove_incomplete_features
+            remove_incomplete_features=remove_incomplete_features,
+            domain=getattr(args, "domain", "plant"),
         )
         if (
             transition_probs.columns.tolist()
@@ -677,8 +946,29 @@ def process_single_transcript(
         return None
 
 
+_TRANSCRIPT_WORKER_FEATURES: pd.DataFrame | None = None
+
+
+def _init_transcript_worker(all_features: pd.DataFrame) -> None:
+    global _TRANSCRIPT_WORKER_FEATURES
+    _TRANSCRIPT_WORKER_FEATURES = all_features
+
+
+def _process_single_transcript_worker(
+    transcript_row_dict: dict,
+) -> pd.DataFrame | None:
+    if _TRANSCRIPT_WORKER_FEATURES is None:
+        raise RuntimeError("Transcript worker was not initialized with features")
+    transcript_row = pd.Series(transcript_row_dict)
+    return process_single_transcript(transcript_row, _TRANSCRIPT_WORKER_FEATURES)
+
+
 def group_intervals_by_transcript(
-    intervals: pd.DataFrame, min_transcript_length: int = 0
+    intervals: pd.DataFrame,
+    min_transcript_length: int = 0,
+    cpu_workers: int = 1,
+    tqdm_position: int | None = None,
+    tqdm_desc: str | None = None,
 ) -> list[pd.DataFrame]:
     """Group feature intervals by transcript with optional length filtering.
 
@@ -689,6 +979,14 @@ def group_intervals_by_transcript(
         ``strand``, and ``entity_name`` columns.
     min_transcript_length : int, default 0
         Minimum transcript length in base pairs required to keep a transcript.
+    cpu_workers : int, default 1
+        Number of CPU worker processes for transcript grouping. A value of 1
+        preserves original single-process behavior.
+    tqdm_position : int or None, default None
+        Optional terminal row index for tqdm when multiple processes are
+        writing progress bars concurrently.
+    tqdm_desc : str or None, default None
+        Optional tqdm description label.
 
     Returns
     -------
@@ -719,13 +1017,48 @@ def group_intervals_by_transcript(
 
     feature_intervals = intervals[intervals["entity_name"] != "transcript"]
 
-    results = [
-        process_single_transcript(row, feature_intervals)
-        # pyrefly: ignore  # not-iterable
-        for _, row in tqdm.tqdm(
-            transcript_intervals.iterrows(), total=len(transcript_intervals)
+    # Preserve deterministic transcript order so generated gene IDs and final
+    # GFF record ordering remain unchanged regardless of worker count.
+    transcript_rows = [row.to_dict() for _, row in transcript_intervals.iterrows()]
+
+    if cpu_workers <= 1 or len(transcript_rows) == 0:
+        results = [
+            process_single_transcript(pd.Series(row), feature_intervals)
+            for row in tqdm.tqdm(
+                transcript_rows,
+                total=len(transcript_rows),
+                desc=tqdm_desc,
+                position=tqdm_position,
+                dynamic_ncols=True,
+                leave=False,
+                mininterval=0.1,
+            )
+        ]
+    else:
+        logger.info(
+            f"Grouping transcripts with cpu_workers={cpu_workers} (order-preserving map)"
         )
-    ]
+        start_methods = mp.get_all_start_methods()
+        ctx_name = "fork" if "fork" in start_methods else start_methods[0]
+        ctx = mp.get_context(ctx_name)
+        with ctx.Pool(
+            processes=cpu_workers,
+            initializer=_init_transcript_worker,
+            initargs=(feature_intervals,),
+        ) as pool:
+            results = [
+                result
+                for result in tqdm.tqdm(
+                    pool.imap(_process_single_transcript_worker, transcript_rows),
+                    total=len(transcript_rows),
+                    desc=tqdm_desc,
+                    position=tqdm_position,
+                    dynamic_ncols=True,
+                    leave=False,
+                    mininterval=0.1,
+                )
+            ]
+
     genes = [group for group in results if group is not None]
 
     logger.info(f"Grouped intervals into {len(genes)} transcripts/genes.")
@@ -738,6 +1071,8 @@ def generate_gff(
     output_path: str,
     strip_introns: bool = True,
     source: str = "GeneCAD",
+    tqdm_position: int | None = None,
+    tqdm_desc: str | None = None,
 ) -> None:
     """Write a GFF3 file from grouped gene intervals.
 
@@ -754,6 +1089,11 @@ def generate_gff(
         Whether to remove intron records when constructing gene boundaries.
     source : str, default "GeneCAD"
         Value written in the GFF ``source`` column.
+    tqdm_position : int or None, default None
+        Optional terminal row index for tqdm when multiple processes are
+        writing progress bars concurrently.
+    tqdm_desc : str or None, default None
+        Optional tqdm description label.
     """
     logger.info(f"Generating GFF3 output for {len(genes)} genes on {chrom_id}")
     gff_records = []
@@ -775,7 +1115,14 @@ def generate_gff(
         "transcript",
     }
 
-    for gene_group in genes:
+    for gene_group in tqdm.tqdm(  # pyrefly: ignore[not-iterable]
+        genes,
+        desc=tqdm_desc,
+        position=tqdm_position,
+        dynamic_ncols=True,
+        leave=False,
+        mininterval=0.1,
+    ):
         # Validate entity names
         invalid_entities = set(gene_group["entity_name"].unique()) - valid_entity_names
         if invalid_entities:
@@ -913,13 +1260,27 @@ def export_gff(args: Args):
     )
 
     # Group intervals by transcript
-    genes = group_intervals_by_transcript(intervals_table, args.min_transcript_length)
+    tqdm_position = args.tqdm_position if hasattr(args, "tqdm_position") else None
+    genes = group_intervals_by_transcript(
+        intervals_table,
+        args.min_transcript_length,
+        cpu_workers=args.cpu_workers,
+        tqdm_position=tqdm_position,
+        tqdm_desc=f"[GFF {chrom_id}]",
+    )
 
     # Convert strip_introns argument to boolean
     strip_introns = args.strip_introns.lower() == "yes"
 
     # Generate and save GFF
-    generate_gff(genes, chrom_id, args.output, strip_introns=strip_introns)
+    generate_gff(
+        genes,
+        chrom_id,
+        args.output,
+        strip_introns=strip_introns,
+        tqdm_position=tqdm_position,
+        tqdm_desc=f"[GFF write {chrom_id}]",
+    )
 
     logger.info("GFF export complete")
 
@@ -930,6 +1291,9 @@ def main():
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
     )
+    # Suppress noisy HTTP traffic logs from HuggingFace Hub's internal HTTP client
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("huggingface_hub").setLevel(logging.WARNING)
 
     parser = argparse.ArgumentParser(description="Gene prediction and export tools")
     subparsers = parser.add_subparsers(
@@ -942,12 +1306,23 @@ def main():
         help="Generate token and feature logits with predicted classes",
     )
     inference_parser.add_argument(
-        "--input", required=True, help="Path to input zarr dataset (from transform.py)"
+        "--input",
+        default=None,
+        help="Path to input zarr dataset (from transform.py). "
+        "Not required when --manifest is used.",
     )
     inference_parser.add_argument(
         "--output-dir",
-        required=True,
-        help="Directory to save rank-specific output zarr datasets",
+        default=None,
+        help="Directory to save rank-specific output zarr datasets. "
+        "Not required when --manifest is used.",
+    )
+    inference_parser.add_argument(
+        "--manifest",
+        default=None,
+        help="Path to a JSON file listing sequences to process in one model-load session. "
+        'Format: [{"chromosome_id": "...", "input": "...", "output_dir": "..."}, ...]. '
+        "Enables processing thousands of short sequences without reloading the model each time.",
     )
     inference_parser.add_argument(
         "--model-checkpoint", required=True, help="Path to classifier checkpoint"
@@ -961,7 +1336,9 @@ def main():
         "--species-id", required=True, help="Species ID to process (e.g., 'Osativa')"
     )
     inference_parser.add_argument(
-        "--chromosome-id", required=True, help="Chromosome ID to process (e.g., 'Chr1')"
+        "--chromosome-id",
+        default=None,
+        help="Chromosome ID to process (e.g., 'Chr1'). Not required when --manifest is used.",
     )
 
     # Processing parameters
@@ -981,6 +1358,12 @@ def main():
         "--batch-size", type=int, default=64, help="Batch size for inference"
     )
     inference_parser.add_argument(
+        "--tqdm-position",
+        type=int,
+        default=None,
+        help="Optional tqdm row to use for this process when multiple GPU jobs run in one terminal",
+    )
+    inference_parser.add_argument(
         "--device",
         type=str,
         default="cuda",
@@ -996,9 +1379,53 @@ def main():
     inference_parser.add_argument(
         "--dtype",
         type=str,
-        default="float32",
+        default="bfloat16",
         choices=["float32", "float16", "bfloat16", "float64", "double", "half"],
         help="Data type for model inference (default: bfloat16)",
+    )
+
+    # Triton warmup command — run once per GPU BEFORE multi-GPU torchrun launch
+    warmup_parser = subparsers.add_parser(
+        "warmup",
+        help="Pre-warm Triton autotune cache with a dummy forward pass (run sequentially per GPU before multi-GPU launch)",
+    )
+    warmup_parser.add_argument(
+        "--model-checkpoint", required=True, help="Path to classifier checkpoint"
+    )
+    warmup_parser.add_argument(
+        "--model-path", required=True, help="Path to base embedding model"
+    )
+    warmup_parser.add_argument(
+        "--window-size",
+        type=int,
+        default=WINDOW_SIZE,
+        help="Window size used during inference (must match actual run)",
+    )
+    warmup_parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=64,
+        help="Batch size used during inference (must match actual run)",
+    )
+    warmup_parser.add_argument(
+        "--warmup-batch-size",
+        type=int,
+        default=None,
+        help="Exact batch size to probe during warmup (overrides conservative capping)",
+    )
+    warmup_parser.add_argument(
+        "--dtype",
+        type=str,
+        default="bfloat16",
+        choices=["float32", "float16", "bfloat16", "float64", "double", "half"],
+        help="Data type matching the actual inference run",
+    )
+    warmup_parser.add_argument(
+        "--suppress-dynamo-errors",
+        type=str,
+        choices=["yes", "no"],
+        default="yes",
+        help="Whether to suppress torch dynamo errors (default: yes)",
     )
 
     # Detect intervals command
@@ -1039,12 +1466,11 @@ def main():
         help="Whether to remove incomplete features from predictions (default: no)",
     )
     detect_parser.add_argument(
-        "--intergenic-bias",
-        type=float,
-        default=0.0,
-        help="Additive penalty subtracted from intergenic feature logits before "
-        "softmax/decoding. Positive values reduce intergenic dominance and increase "
-        "recall of genic elements (default: 0.0, no change)",
+        "--domain",
+        type=str,
+        choices=["plant", "animal"],
+        default="plant",
+        help="Biological domain for Viterbi transition priors (default: plant)",
     )
 
     # Export GFF command
@@ -1075,11 +1501,25 @@ def main():
         default="no",
         help="Whether to strip terminal introns from genes (default: no)",
     )
+    gff_parser.add_argument(
+        "--tqdm-position",
+        type=int,
+        default=None,
+        help="Optional tqdm row to use for export when multiple jobs run in one terminal",
+    )
+    gff_parser.add_argument(
+        "--cpu-workers",
+        type=int,
+        default=1,
+        help="CPU worker processes for transcript grouping (default: 1)",
+    )
 
     args = parser.parse_args()
 
     if args.command == "create_predictions":
         create_predictions(args)
+    elif args.command == "warmup":
+        warmup_triton(args)
     elif args.command == "detect_intervals":
         detect_intervals(args)
     elif args.command == "export_gff":

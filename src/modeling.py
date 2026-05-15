@@ -66,25 +66,46 @@ class ThroughputMonitor(Callback):
     def __init__(self):
         super().__init__()
         self.start_time: float | None = None
+        self.last_batch_end_time: float | None = None
         self.total_batches = 0
+        self.total_tokens = 0
 
     def on_train_start(self, trainer, pl_module):
-        self.start_time = time.time()
+        now = time.time()
+        self.start_time = now
+        self.last_batch_end_time = now
         self.total_batches = 0
+        self.total_tokens = 0
 
     def on_train_batch_end(self, trainer, pl_module, outputs, batch, batch_idx):
+        now = time.time()
         self.total_batches += 1
         if self.start_time is None:
             raise ValueError("start_time is not set (must call `on_train_start` first)")
-        elapsed_time = time.time() - self.start_time
+        if self.last_batch_end_time is None:
+            self.last_batch_end_time = self.start_time
+
+        batch_size = int(batch["input_ids"].shape[0])
+        seq_len = int(batch["input_ids"].shape[1])
+        batch_tokens = batch_size * seq_len
+        self.total_tokens += batch_tokens
+
+        elapsed_time = now - self.start_time
+        batch_time = max(now - self.last_batch_end_time, 1e-9)
         batch_per_sec = self.total_batches / elapsed_time
-        sample_per_sec = batch_per_sec * batch["input_ids"].shape[0]
-        token_per_sec = (
-            batch_per_sec * batch["input_ids"].shape[0] * batch["input_ids"].shape[1]
-        )
+        sample_per_sec = batch_per_sec * batch_size
+        token_per_sec = batch_per_sec * batch_tokens
+
+        # Explicit time metrics requested for monitoring in WandB.
+        pl_module.log("time/train", elapsed_time)
+        pl_module.log("time/batch", batch_time)
+        pl_module.log("time/token", elapsed_time / max(self.total_tokens, 1))
+
         pl_module.log("throughput/train_batches_per_sec", batch_per_sec)
         pl_module.log("throughput/train_samples_per_sec", sample_per_sec)
         pl_module.log("throughput/train_tokens_per_sec", token_per_sec)
+
+        self.last_batch_end_time = now
 
 
 # ------------------------------------------------------------------------------------------------
@@ -149,6 +170,31 @@ TOKEN_CLASS_FREQUENCIES: dict[str, float] = {
     TokenBiluoClass.L_THREE_PRIME_UTR.value: 8.319502e-05, # [15]
     TokenBiluoClass.U_THREE_PRIME_UTR.value: 2.072122e-07, # [16]
 }
+
+# Token class frequencies computed from actual animal training data
+# (Drerio + Ggallus + Hsapiens + Mmusculus + Xtropicalis, 1001078 windows, 8.18B unmasked tokens)
+# Source: label_qc_summary.json from genecad-animal-tuned-e128-e6 training run
+# Key difference from plant priors: animal genomes have 75% I-intron (vs 10.7%) and only 18.5%
+# intergenic (vs 75%), due to much longer introns (~6 kbp average in vertebrates vs ~500 bp in plants).
+ANIMAL_TOKEN_CLASS_FREQUENCIES: dict[str, float] = {
+    TokenBiluoClass.INTERGENIC.value:       1511640749 / 8181860505,  # 0.18476  [0]
+    TokenBiluoClass.B_INTRON.value:            1521795 / 8181860505,  # 1.860e-4 [1]
+    TokenBiluoClass.I_INTRON.value:         6147850608 / 8181860505,  # 0.75145  [2]
+    TokenBiluoClass.L_INTRON.value:            1521930 / 8181860505,  # 1.860e-4 [3]
+    TokenBiluoClass.U_INTRON.value:                 93 / 8181860505,  # 1.14e-8  [4]
+    TokenBiluoClass.B_FIVE_PRIME_UTR.value:     228502 / 8181860505,  # 2.79e-5  [5]
+    TokenBiluoClass.I_FIVE_PRIME_UTR.value:   40433651 / 8181860505,  # 4.94e-3  [6]
+    TokenBiluoClass.L_FIVE_PRIME_UTR.value:     229625 / 8181860505,  # 2.81e-5  [7]
+    TokenBiluoClass.U_FIVE_PRIME_UTR.value:       1450 / 8181860505,  # 1.77e-7  [8]
+    TokenBiluoClass.B_CDS.value:              1594128 / 8181860505,  # 1.95e-4  [9]
+    TokenBiluoClass.I_CDS.value:           271461051 / 8181860505,  # 3.32e-2  [10]
+    TokenBiluoClass.L_CDS.value:             1594201 / 8181860505,  # 1.95e-4  [11]
+    TokenBiluoClass.U_CDS.value:                 245 / 8181860505,  # 2.99e-8  [12]
+    TokenBiluoClass.B_THREE_PRIME_UTR.value:    169648 / 8181860505,  # 2.07e-5  [13]
+    TokenBiluoClass.I_THREE_PRIME_UTR.value: 203443699 / 8181860505,  # 2.49e-2  [14]
+    TokenBiluoClass.L_THREE_PRIME_UTR.value:    168370 / 8181860505,  # 2.06e-5  [15]
+    TokenBiluoClass.U_THREE_PRIME_UTR.value:       760 / 8181860505,  # 9.29e-8  [16]
+}
 # fmt: on
 # Assert equality of pre-calculated frequency classes until support for dynamic configuration is necessary
 assert TOKEN_CLASS_NAMES == list(TOKEN_CLASS_FREQUENCIES.keys())
@@ -178,7 +224,6 @@ class GeneClassifierConfig:
     )
     token_embedding_dim: int = 512
     head_encoder_layers: int = 4
-    head_encoder_heads: int = 8
     base_encoder_dim: int = 1536
     base_encoder_path: str | None = None
     base_encoder_revision: str | None = None
@@ -301,7 +346,6 @@ class GeneClassifier(L.LightningModule):
         self.num_total_entities = (
             self.num_core_entities + 1
         )  # Entity count w/ background
-        self.criterion = torch.nn.CrossEntropyLoss()
 
         self.classifier = MLP(
             input_dim=self.config.hidden_size,
@@ -319,11 +363,13 @@ class GeneClassifier(L.LightningModule):
                 hidden_size=self.config.hidden_size,
                 intermediate_size=self.config.hidden_size * 4,
                 num_hidden_layers=config.head_encoder_layers,
-                num_attention_heads=config.head_encoder_heads,
+                num_attention_heads=8,
                 pad_token_id=0,
                 max_position_embeddings=config.max_sequence_length,
                 attention_dropout=self.config.dropout,
                 mlp_dropout=self.config.dropout,
+                dtype=torch.bfloat16,
+                attn_implementation="flash_attention_2",
             )
             self.head_encoder = ModernBertModel(self.head_config)
 
@@ -387,12 +433,24 @@ class GeneClassifier(L.LightningModule):
         else:
             self.bias = nn.Parameter(torch.zeros(self.num_labels))
 
+        self.criterion = torch.nn.CrossEntropyLoss()
+
         if self.torch_compile:
             # Avoid base model compilation due to https://github.com/pytorch/pytorch/issues/146129
             self.head_encoder = torch.compile(self.head_encoder, fullgraph=False)
             self.classifier = torch.compile(self.classifier, fullgraph=False)
 
-        self.save_hyperparameters()
+        # Flatten hparams so WandB displays separate keys rather than nested blobs.
+        hparams = {
+            "learning_rate": self.learning_rate,
+            "learning_rate_decay": self.learning_rate_decay,
+            "learning_rate_warmup_ratio": self.learning_rate_warmup_ratio,
+            "torch_compile": self.torch_compile,
+            **vars(config).copy(),
+        }
+        if "token_class_frequencies" in hparams:
+            del hparams["token_class_frequencies"]  # exclude large dictionary
+        self.save_hyperparameters(hparams)
 
     # -------------------------------------------------------------------------
     # Lightning Methods
@@ -413,9 +471,29 @@ class GeneClassifier(L.LightningModule):
             batch, source=Source(split="train", index=batch_idx)
         )
         loss = self._compute_loss(batch)
-        self.log("train/loss", loss)
-        for i in range(self.bias.shape[0]):
-            self.log(f"bias/class_{i:02d}", self.bias[i])
+        valid_tokens = max(int(batch.masks.sum().detach().item()), 1)
+        self.log(
+            "train/loss_step",
+            loss,
+            on_step=True,
+            on_epoch=False,
+            prog_bar=True,
+            sync_dist=True,
+            batch_size=valid_tokens,
+        )
+        self.log(
+            "train/loss_epoch",
+            loss,
+            on_step=False,
+            on_epoch=True,
+            sync_dist=True,
+            batch_size=valid_tokens,
+        )
+        # Log bias terms periodically to track if token classes are balancing
+        if hasattr(self, "bias") and self.bias is not None:
+            for i in range(self.bias.shape[0]):
+                class_name = self.config.token_class_names[i]
+                self.log(f"bias/{i:02d}-{class_name}", self.bias[i])
 
         if (
             self.config.train_eval_frequency
@@ -431,7 +509,24 @@ class GeneClassifier(L.LightningModule):
             batch, source=Source(split="valid", index=batch_idx)
         )
         loss = self._compute_loss(batch)
-        self.log("valid/loss", loss, sync_dist=False)
+        valid_tokens = max(int(batch.masks.sum().detach().item()), 1)
+        self.log(
+            "valid/loss_step",
+            loss,
+            on_step=True,
+            on_epoch=False,
+            sync_dist=True,
+            batch_size=valid_tokens,
+        )
+        self.log(
+            "valid/loss_epoch",
+            loss,
+            on_step=False,
+            on_epoch=True,
+            prog_bar=True,
+            sync_dist=True,
+            batch_size=valid_tokens,
+        )
         visualize = (
             self.config.enable_visualization
             and self.global_step > 0
@@ -440,8 +535,22 @@ class GeneClassifier(L.LightningModule):
         self._evaluate(batch, "valid", visualize=visualize)
 
     def configure_optimizers(self):
+        base_params = []
+        head_params = []
+        for name, param in self.named_parameters():
+            if not param.requires_grad:
+                continue
+            if "base_encoder" in name:
+                base_params.append(param)
+            else:
+                head_params.append(param)
+
         optimizer = torch.optim.AdamW(
-            self.parameters(), lr=self.learning_rate, weight_decay=1e-5
+            [
+                {"params": head_params, "lr": self.learning_rate},
+                {"params": base_params, "lr": self.learning_rate * 0.1},
+            ],
+            weight_decay=0.01,
         )
 
         expected_steps = self.trainer.estimated_stepping_batches
@@ -488,7 +597,13 @@ class GeneClassifier(L.LightningModule):
         logits = self._token_logits(hidden_states)
 
         if self.training:
-            self.log("train/logit_mean", float(logits.mean()))
+            self.log(
+                "train/logit_mean",
+                logits.detach().mean(),
+                on_step=True,
+                on_epoch=False,
+                sync_dist=True,
+            )
 
         return logits
 
@@ -745,15 +860,51 @@ TOKEN_TRANSITION_PROBS_2 = [
     [2.9278358774311944e-04, 3.0940342516742247e-03, 1.2635776951496243e-08, 9.9603932835033049e-01, 5.7384117447525039e-04],  # cds
     [2.8602482119673934e-03, 2.7769522276139527e-04, 1.2582474977861136e-06, 1.8873712466791704e-07, 9.9686060958064870e-01],  # three_prime_utr
 ]
+
+# Transition probabilities for animal genomes, mathematically derived from average
+# feature lengths of 5 species vertebrate training dataset:
+# Intergenic: 20907bp, Intron: 4040bp, 5'UTR: 177bp, CDS: 170bp, 3'UTR: 1204bp
+ANIMAL_TOKEN_TRANSITION_PROBS_1 = [
+    # intergenic              intron                  five_prime_utr          cds                     three_prime_utr
+    [9.99952169130e-01, 0.00000000000e+00, 4.7830870e-05, 0.00000000000e+00, 0.00000000000e+00],  # intergenic
+    [0.00000000000e+00, 9.99752475248e-01, 9.9009900e-06, 2.351485150e-04, 2.4752480e-06],  # intron
+    [0.00000000000e+00, 9.604519770e-04, 9.94350282486e-01, 4.689265537e-03, 0.00000000000e+00],  # five_prime_utr
+    [0.00000000000e+00, 4.705882353e-03, 0.00000000000e+00, 9.94117647059e-01, 1.176470588e-03],  # cds
+    [7.890365450e-04, 4.1528239e-05, 0.00000000000e+00, 0.00000000000e+00, 9.991694352159e-01],  # three_prime_utr
+]
+
+# Transition probabilities for animal genomes, allowing partial transcript annotations
+ANIMAL_TOKEN_TRANSITION_PROBS_2 = [
+    # intergenic              intron                  five_prime_utr          cds                     three_prime_utr
+    [9.99952169130e-01, 0.00000000000e+00, 2.8698522e-05, 1.9132348e-05, 0.00000000000e+00],  # intergenic
+    [0.00000000000e+00, 9.99752475248e-01, 9.9009900e-06, 2.351485150e-04, 2.4752480e-06],  # intron
+    [0.00000000000e+00, 9.604519770e-04, 9.94350282486e-01, 4.689265537e-03, 0.00000000000e+00],  # five_prime_utr
+    [2.941176470e-04, 4.705882353e-03, 0.00000000000e+00, 9.94117647059e-01, 8.823529410e-04],  # cds
+    [7.890365450e-04, 4.1528239e-05, 0.00000000000e+00, 0.00000000000e+00, 9.991694352159e-01],  # three_prime_utr
+]
 # fmt: on
 
 
-def token_transition_probs(remove_incomplete_features: bool = True) -> pd.DataFrame:
-    probs = (
-        TOKEN_TRANSITION_PROBS_1
-        if remove_incomplete_features
-        else TOKEN_TRANSITION_PROBS_2
-    )
+def token_transition_probs(
+    remove_incomplete_features: bool = True, domain: str = "plant"
+) -> pd.DataFrame:
+    if domain == "animal":
+        probs = (
+            ANIMAL_TOKEN_TRANSITION_PROBS_1
+            if remove_incomplete_features
+            else ANIMAL_TOKEN_TRANSITION_PROBS_2
+        )
+    elif domain == "plant":
+        probs = (
+            TOKEN_TRANSITION_PROBS_1
+            if remove_incomplete_features
+            else TOKEN_TRANSITION_PROBS_2
+        )
+    else:
+        raise ValueError(
+            f"Unsupported domain {domain!r}. Expected 'plant' or 'animal'."
+        )
+
     return pd.DataFrame(
         data=probs,
         # pyrefly: ignore  # bad-argument-type

@@ -6,7 +6,7 @@ on:
     branches: [ main ]
 
   push:
-    branches: [ main ]
+    branches: [ main, refine-CrossEntropyLoss ]
 
 jobs:
   ci:

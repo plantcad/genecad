@@ -9,5 +9,4 @@ logs/train*
 .ruff_cache
 .specstory/
 data/
-.claude/settings.local.json
-.DS_Store
+genecad_result/

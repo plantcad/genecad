@@ -111,10 +111,13 @@ class RegionType(StrEnum):
     There is only one CDS region per transcript, and the same is true for
     the FIVE_PRIME_UTR and THREE_PRIME_UTR regions.
 
-    The INTRON and EXON regions are slighly different.  There can be multiple
+    The INTRON and EXON regions are slightly different.  There can be multiple
     per transcript where EXON regions are the union of CDS, THREE_PRIME_UTR, or
-    FIVE_PRIME_UTR regions.  INTRON regions are the regions between CDS, THREE_PRIME_UTR,
-    and FIVE_PRIME_UTR regions.
+    FIVE_PRIME_UTR regions.  INTRON regions are positions within the mRNA span
+    that are not covered by any exonic feature (CDS, five_prime_UTR, or
+    three_prime_UTR).  This definition ensures that unannotated positions
+    between the mRNA boundary and the first/last exonic feature are correctly
+    labeled as intronic rather than intergenic.
     """
 
     GENE = "gene"
