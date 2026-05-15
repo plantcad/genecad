@@ -20,6 +20,11 @@ GeneCAD is an end-to-end genome annotation pipeline for plants, powered by the D
 
 Unlike traditional annotation tools that rely on hand-crafted features or splice-site grammars, GeneCAD learns gene structure directly from sequence using a pretrained transformer encoder followed by a Viterbi decoder and protein-level refinement via [ReelProtein](https://onlinelibrary.wiley.com/doi/10.1111/tpj.70483). Both plant (`-m plant`, default) and vertebrate (`-m animal`) genomes are supported.
 
+> [!CAUTION]
+> **Scientific Update**: We’ve identified a significant problem in the current `main` branch regarding missing BUSCO genes (Thank you [MaizeGDB](https://www.maizegdb.org/) team!). The model was failing because of inconsistencies in the model's training data and limitations in the previous architecture.
+> 
+> At the current moment, we **do not** recommend using the `main` branch. All active development, including the move to a new branch to solve the BUSCO gene issue, is now happening on [**refine-CrossEntropyLoss**](https://github.com/plantcad/genecad/tree/refine-CrossEntropyLoss). That branch also includes our upcoming support for animal models and a much-simplified prediction pipeline. We suggest heading over there for the most accurate results.
+
 ## Contents
 
 - [🚀 Quick Start](#-quick-start)
