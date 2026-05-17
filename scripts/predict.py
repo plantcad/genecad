@@ -1459,6 +1459,15 @@ def main():
         help="Comma-separated list of decoding methods to run (choices: direct, viterbi)",
     )
     detect_parser.add_argument(
+        "--intergenic-bias",
+        type=float,
+        default=0.0,
+        help=(
+            "Amount to subtract from intergenic feature logits before interval "
+            "decoding (default: 0.0)"
+        ),
+    )
+    detect_parser.add_argument(
         "--remove-incomplete-features",
         type=str,
         choices=["yes", "no"],
