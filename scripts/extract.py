@@ -422,7 +422,7 @@ FASTA_OOV_TOKENS = "MRWSYKVHDBXN"
 def extract_fasta_file(
     species_id: str,
     fasta_file: str,
-    chrom_map_str: str,
+    chrom_map_str: str | None,
     output_path: str,
     chunk_size: int = DEFAULT_SEQUENCE_CHUNK_SIZE,
     tokenizer_path: str | None = None,
@@ -445,12 +445,16 @@ def extract_fasta_file(
         Path to tokenizer if tokenizing sequences
     """
     # Parse chromosome map from string
-    chrom_map = {}
-    for mapping in chrom_map_str.split(","):
-        src, dst = mapping.split(":")
-        chrom_map[src.strip()] = dst.strip()
-
-    logger.info(f"Parsed chromosome mapping: {chrom_map}")
+    if chrom_map_str is not None:
+        chrom_map = {}
+        for mapping in chrom_map_str.split(","):
+            src, dst = mapping.split(":")
+            chrom_map[src.strip()] = dst.strip()
+        logger.info(f"Parsed chromosome mapping: {chrom_map}")
+    else:
+        logger.info(
+            "No chromosome mapping provided. All chromosomes will retain their original names."
+        )
 
     # Create output directory if it doesn't exist
     output_dir = os.path.dirname(output_path)
@@ -554,7 +558,7 @@ def _extract_fasta_sequences(
     *,
     species_id: str,
     fasta_file: str,
-    chrom_map: dict[str, str],
+    chrom_map: dict[str, str] | None,
     output_path: str,
     chunk_size: int,
     tokenizer: Tokenizer | None = None,
@@ -575,12 +579,16 @@ def _extract_fasta_sequences(
     with open_func(fasta_file, mode) as file:
         for record in SeqIO.parse(file, "fasta"):
             raw_id = record.id
-            if raw_id not in chrom_map:
-                logger.debug(
-                    f"[species={species_id}] Skipping unmapped chromosome record: {raw_id}"
-                )
-                continue
-            chrom_id = chrom_map[raw_id]
+
+            if chrom_map is not None:
+                if raw_id not in chrom_map:
+                    logger.debug(
+                        f"[species={species_id}] Skipping unmapped chromosome record: {raw_id}"
+                    )
+                    continue
+                chrom_id = chrom_map[raw_id]
+            else:
+                chrom_id = raw_id
             sequence_records[(species_id, chrom_id)] = record
             logger.info(
                 f"[species={species_id}] Added {chrom_id} (from {raw_id}), length: {len(record.seq)}"
@@ -907,6 +915,7 @@ def main():
     gff_parser.add_argument(
         "--output", required=True, help="Path to output parquet file"
     )
+    # TODO binary flag
     gff_parser.add_argument(
         "--skip-exon-features",
         choices=["yes", "no"],
@@ -935,18 +944,18 @@ def main():
     )
     fasta_single_parser.add_argument("--species-id", required=True, help="Species ID")
     fasta_single_parser.add_argument(
-        "--fasta-file", required=True, help="Path to FASTA file"
+        "--input-fasta", "-i", required=True, help="Path to FASTA file"
     )
     fasta_single_parser.add_argument(
         "--chrom-map",
-        required=True,
-        help="Chromosome mapping as 'src1:dst1,src2:dst2,...'",
+        help="Rename chromosomes and/or select a subset of chromosomes to process. Format "
+        "chromosome mapping as 'src1:dst1,src2:dst2,...'. Optional.",
     )
     fasta_single_parser.add_argument(
-        "--output", required=True, help="Path to output file"
+        "--output-zarr", "-o", required=True, help="Path to output file"
     )
     fasta_single_parser.add_argument(
-        "--tokenizer-path", help="Path to the tokenizer model for tokenizing sequences"
+        "--model-path", help="Path to the base PlantCAD model for tokenizing sequences"
     )
 
     # Validate configs command
@@ -969,6 +978,8 @@ def main():
             args.output,
             args.skip_exon_features == "yes",
         )
+
+    # TODO make it clear this is only for training/eval species
     elif args.command == "extract_fasta_sequences":
         extract_fasta_sequences(
             args.input_dir,
@@ -979,10 +990,10 @@ def main():
     elif args.command == "extract_fasta_file":
         extract_fasta_file(
             args.species_id,
-            args.fasta_file,
+            args.input_fasta,
             args.chrom_map,
-            args.output,
-            tokenizer_path=args.tokenizer_path,
+            args.output_zarr,
+            tokenizer_path=args.model_path,
         )
     elif args.command == "validate_configs":
         validate_configs(args.data_dir)

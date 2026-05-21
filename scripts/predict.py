@@ -9,19 +9,15 @@ from numpy import typing as npt
 from pydantic import BaseModel, Field, field_validator, ValidationInfo
 from src.config import WINDOW_SIZE
 from src.sequence import (
-    convert_entity_labels_to_intervals,
     create_sequence_windows,
-    viterbi_decode,
 )
 import torch
-import torch.nn.functional as F
 import numpy as np
 import xarray as xr
 from argparse import Namespace as Args
 from transformers import AutoModel, AutoConfig, AutoTokenizer
 from src.dataset import open_datatree, set_dimension_chunks
-from src.prediction import merge_prediction_datasets
-from src.modeling import GeneClassifier, GeneClassifierConfig, token_transition_probs
+from src.modeling import GeneClassifier, GeneClassifierConfig
 from src.schema import GffFeatureType
 import pandas as pd
 from src.dist import (
@@ -189,7 +185,7 @@ def load_models(args: Args) -> tuple[AutoModel | None, GeneClassifier, AutoToken
     return base_model, classifier, tokenizer
 
 
-def load_data(args: Args) -> xr.Dataset:
+def load_seq_data(args: Args) -> xr.Dataset:
     """Load the sequence dataset for a specific species and chromosome.
 
     Parameters
@@ -202,8 +198,8 @@ def load_data(args: Args) -> xr.Dataset:
     xarray.Dataset
         Dataset containing the sequence data for the requested species and chromosome.
     """
-    logger.info(f"Opening input sequence datatree from {args.input}")
-    sequences = open_datatree(args.input, consolidated=False)
+    logger.info(f"Opening input sequence datatree from {args.input_zarr}")
+    sequences = open_datatree(args.input_zarr, consolidated=False)
     logger.info(f"Input sequences:\n{sequences}")
 
     # Check if species exists
@@ -479,6 +475,7 @@ def _create_predictions(
     return result
 
 
+# TODO: move to utils somewhere
 def flip(sequence: npt.ArrayLike) -> npt.ArrayLike:
     """Reverse a sequence along its first axis."""
     return np.flip(sequence, axis=0)
@@ -505,6 +502,7 @@ def warmup_triton(args: Args):
         Must supply ``model_path``, ``model_checkpoint``, ``dtype``,
         ``batch_size``, and ``window_size``.
     """
+    # TODO: allow other CUDA device if available
     if torch.cuda.is_available():
         args.device = "cuda:0"
     else:
@@ -598,7 +596,7 @@ def create_predictions(args: Args):
         torch.cuda.set_device(lr)
         args.device = f"cuda:{lr}"
     else:
-        args.device = "cpu"
+        raise RuntimeError("No CUDA GPUs are available")
 
     rank, world_size = process_group()
     logger.info(
@@ -614,7 +612,7 @@ def create_predictions(args: Args):
     # Suppress errors related to models trained with torch.compile, e.g.:
     # AssertionError: increase TRITON_MAX_BLOCK['X'] to 4096
     # https://github.com/pytorch/pytorch/issues/135028#issuecomment-2330421513
-    if args.suppress_dynamo_errors == "yes":
+    if not args.show_dynamo_errors:
         torch._dynamo.config.suppress_errors = True
 
     # ---- Build work list --------------------------------------------------
@@ -630,7 +628,7 @@ def create_predictions(args: Args):
         entries = [
             {
                 "chromosome_id": args.chromosome_id,
-                "input": args.input,
+                "input_zarr": args.input_zarr,
                 "output_dir": args.output_dir,
             }
         ]
@@ -643,7 +641,7 @@ def create_predictions(args: Args):
 
         for i, entry in enumerate(entries):
             args.chromosome_id = entry["chromosome_id"]
-            args.input = entry["input"]
+            args.input_zarr = entry["input_zarr"]
             args.output_dir = entry["output_dir"]
 
             logger.info(
@@ -651,7 +649,7 @@ def create_predictions(args: Args):
                 f"{args.species_id}/{args.chromosome_id}"
             )
             _create_predictions(
-                args, load_data(args), base_model, classifier, tokenizer
+                args, load_seq_data(args), base_model, classifier, tokenizer
             )
 
             # All ranks must finish this sequence before moving to the next.
@@ -665,199 +663,6 @@ def create_predictions(args: Args):
         # Always tear down the process group even if an exception occurred so
         # that NCCL resources are released and port numbers are freed.
         destroy_process_group()
-
-    logger.info("Done")
-
-
-# -------------------------------------------------------------------------------------------------
-# Detect intervals
-# -------------------------------------------------------------------------------------------------
-
-
-def _detect_intervals(
-    args: Args,
-    predictions: xr.Dataset,
-) -> xr.Dataset:
-    """Infer genomic intervals from per-token feature predictions.
-
-    Parameters
-    ----------
-    args : argparse.Namespace
-        Command-line arguments describing decoding options.
-    predictions : xr.Dataset
-        Dataset containing feature logits and predictions for each strand.
-
-    Returns
-    -------
-    xr.Dataset
-        Dataset containing inferred region intervals.
-    """
-    logger.info("Inferring regions from predicted labels")
-
-    # Parse and validate decoding methods
-    valid_methods = {"direct", "viterbi"}
-    decoding_methods = [method.strip() for method in args.decoding_methods.split(",")]
-
-    # Validate that at least one method is provided
-    if not decoding_methods or all(not method for method in decoding_methods):
-        raise ValueError("At least one decoding method must be provided")
-
-    # Validate that all methods are valid
-    invalid_methods = set(decoding_methods) - valid_methods
-    if invalid_methods:
-        raise ValueError(
-            f"Invalid decoding methods: {invalid_methods}. Valid choices are: {valid_methods}"
-        )
-
-    logger.info(f"Running decoding methods: {decoding_methods}")
-
-    # TODO: Fetch the label properties necessary from attributes stored in the predictions
-    # datasets rather than from the configuration files, or from the original model checkpoint.
-    config = GeneClassifierConfig()
-    region_intervals = []
-    strands = predictions.strand.values.tolist()
-    assert set(strands) == {"positive", "negative"}
-
-    def _decode_intervals_viterbi(
-        logits: npt.ArrayLike, remove_incomplete_features: bool
-    ) -> np.ndarray:
-        transition_probs = token_transition_probs(
-            remove_incomplete_features=remove_incomplete_features,
-            domain=getattr(args, "domain", "plant"),
-        )
-        if (
-            transition_probs.columns.tolist()
-            != config.token_entity_names_with_background()
-        ):
-            raise ValueError(
-                f"Transition probability classes must match token entity names; expected: {config.token_entity_names_with_background()}, got: {transition_probs.columns.tolist()}"
-            )
-        emissions = F.softmax(torch.from_numpy(logits), dim=-1).numpy()
-        assert emissions.min() >= 0 and emissions.max() <= 1
-        assert transition_probs.index.tolist() == transition_probs.columns.tolist()
-
-        # Decoding takes ~90 seconds for 308452471 tokens on Grace CPU
-        alpha = args.viterbi_alpha
-        logger.info(f"Running viterbi decoding ({alpha=})")
-        labels = viterbi_decode(
-            emission_probs=emissions,
-            transition_matrix=transition_probs.values,
-            alpha=alpha,
-        )
-
-        assert labels.ndim == 1
-        # pyrefly: ignore  # bad-argument-type
-        assert len(labels) == len(logits)
-        return labels
-
-    # Penalize intergenic logits to shift the model toward predicting more
-    # genic elements, compensating for class-imbalanced training data.
-    # Note: this intentionally overlaps with what _create_predictions could do
-    # at inference time, but we apply it here (downstream) so the bias can be
-    # swept cheaply without regenerating the large prediction datasets.
-    intergenic_bias = args.intergenic_bias
-    logger.info(f"Using intergenic bias: {intergenic_bias}")
-
-    for strand in strands:
-        feature_logits = predictions.sel(strand=strand).feature_logits.copy()
-        feature_logits.loc[dict(feature="intergenic")] -= intergenic_bias
-
-        # Direct label inference
-        if "direct" in decoding_methods:
-            labels = feature_logits.argmax(dim="feature").values
-            logger.info(f"Running direct decoding for {strand!r} strand")
-            intervals = convert_entity_labels_to_intervals(
-                labels=labels, class_groups=config.interval_entity_classes
-            )
-            region_intervals.append(intervals.assign(strand=strand, decoding="direct"))
-
-        # Viterbi decoding (uses biased logits via softmax internally)
-        if "viterbi" in decoding_methods:
-            logger.info(f"Running viterbi decoding for {strand!r} strand")
-            logits = feature_logits.values
-            if strand == "positive":
-                viterbi_labels = _decode_intervals_viterbi(
-                    logits=logits,
-                    remove_incomplete_features=args.remove_incomplete_features,
-                )
-            else:
-                viterbi_labels = flip(
-                    _decode_intervals_viterbi(
-                        logits=flip(logits).copy(),
-                        remove_incomplete_features=args.remove_incomplete_features,
-                    )
-                )
-
-            intervals = convert_entity_labels_to_intervals(
-                # pyrefly: ignore  # bad-argument-type
-                labels=viterbi_labels,
-                class_groups=config.interval_entity_classes,
-            )
-            region_intervals.append(intervals.assign(strand=strand, decoding="viterbi"))
-
-    region_intervals = pd.concat(region_intervals, ignore_index=True, axis=0)
-    region_name_map = {
-        i: config.interval_entity_name(i) for i in region_intervals["entity"].unique()
-    }
-    region_intervals = (
-        region_intervals.rename(columns={"entity": "entity_index"})
-        .assign(entity_name=lambda df: df["entity_index"].map(region_name_map))
-        .rename_axis("interval", axis="index")
-    )
-    logger.info(f"Region intervals detected:\n{region_intervals}")
-    logger.info("Region interval info:\n")
-    region_intervals.info()
-    region_intervals = region_intervals.to_xarray().assign_attrs(
-        interval_entity_names=config.interval_entity_names
-    )
-    return region_intervals
-
-
-def detect_intervals(args: Args):
-    """Aggregate rank outputs and decode genomic intervals from logits.
-
-    Parameters
-    ----------
-    args : argparse.Namespace
-        Command-line arguments where ``args.input_dir`` points to
-        ``predictions.*.zarr`` files produced by inference.
-    """
-    logger.info(
-        f"Detecting intervals from rank files in {args.input_dir} and saving to {args.output}"
-    )
-
-    # Merge predictions from all ranks
-    sequence_predictions = merge_prediction_datasets(
-        args.input_dir,
-        drop_variables=["token_predictions", "token_logits"],
-    )
-
-    # Convert remove_incomplete_features string to boolean
-    args.remove_incomplete_features = args.remove_incomplete_features == "yes"
-
-    logger.info("Detecting intervals")
-    interval_predictions = _detect_intervals(
-        args=args,
-        predictions=sequence_predictions,
-    )
-    interval_predictions = interval_predictions.assign_attrs(
-        # Copy attributes from sequence predictions, which have
-        # been carried along from the original fasta extraction
-        **sequence_predictions.attrs
-    )
-
-    logger.info("Merging sequence and interval predictions")
-    result = xr.DataTree.from_dict(
-        {
-            "/sequences": sequence_predictions,
-            "/intervals": interval_predictions,
-        }
-    )
-
-    logger.info(f"Final results:\n{result}")
-
-    logger.info(f"Saving results to output path {args.output}")
-    result.to_zarr(args.output, zarr_format=2, mode="w", consolidated=True)
 
     logger.info("Done")
 
@@ -1306,13 +1111,15 @@ def main():
         help="Generate token and feature logits with predicted classes",
     )
     inference_parser.add_argument(
-        "--input",
+        "--input-zarr",
+        "-i",
         default=None,
         help="Path to input zarr dataset (from transform.py). "
         "Not required when --manifest is used.",
     )
     inference_parser.add_argument(
         "--output-dir",
+        "-o",
         default=None,
         help="Directory to save rank-specific output zarr datasets. "
         "Not required when --manifest is used.",
@@ -1321,7 +1128,7 @@ def main():
         "--manifest",
         default=None,
         help="Path to a JSON file listing sequences to process in one model-load session. "
-        'Format: [{"chromosome_id": "...", "input": "...", "output_dir": "..."}, ...]. '
+        'Format: [{"chromosome_id": "...", "input_zarr": "...", "output_dir": "..."}, ...]. '
         "Enables processing thousands of short sequences without reloading the model each time.",
     )
     inference_parser.add_argument(
@@ -1354,8 +1161,12 @@ def main():
         default=WINDOW_SIZE // 2,
         help="Stride size for overlapping windows",
     )
+    # TODO: change? default keeps crashing
     inference_parser.add_argument(
-        "--batch-size", type=int, default=64, help="Batch size for inference"
+        "--batch-size",
+        type=int,
+        default=16,
+        help="Batch size for inference. Default 16.",
     )
     inference_parser.add_argument(
         "--tqdm-position",
@@ -1364,18 +1175,11 @@ def main():
         help="Optional tqdm row to use for this process when multiple GPU jobs run in one terminal",
     )
     inference_parser.add_argument(
-        "--device",
-        type=str,
-        default="cuda",
-        help="Device to use for inference (cuda/cpu)",
+        "--show-dynamo-errors",
+        action="store_false",
+        help="Show torch dynamo errors (suppressed by default)",
     )
-    inference_parser.add_argument(
-        "--suppress-dynamo-errors",
-        type=str,
-        choices=["yes", "no"],
-        default="yes",
-        help="Whether to suppress torch dynamo errors (default: yes)",
-    )
+    # TODO: could this be determined by model config?
     inference_parser.add_argument(
         "--dtype",
         type=str,
@@ -1428,60 +1232,6 @@ def main():
         help="Whether to suppress torch dynamo errors (default: yes)",
     )
 
-    # Detect intervals command
-    detect_parser = subparsers.add_parser(
-        "detect_intervals", help="Detect intervals from generated logits"
-    )
-    detect_parser.add_argument(
-        "--input-dir",
-        required=True,
-        help="Path to input zarr dataset from generate_logits",
-    )
-    detect_parser.add_argument(
-        "--output", required=True, help="Path to output zarr dataset for intervals"
-    )
-    detect_parser.add_argument(
-        "--window-size",
-        type=int,
-        default=WINDOW_SIZE,
-        help="Window size for sequence processing",
-    )
-    detect_parser.add_argument(
-        "--viterbi-alpha",
-        type=float,
-        default=None,
-        help="Alpha parameter for viterbi decoding (default: None)",
-    )
-    detect_parser.add_argument(
-        "--decoding-methods",
-        type=str,
-        default="direct,viterbi",
-        help="Comma-separated list of decoding methods to run (choices: direct, viterbi)",
-    )
-    detect_parser.add_argument(
-        "--intergenic-bias",
-        type=float,
-        default=0.0,
-        help=(
-            "Amount to subtract from intergenic feature logits before interval "
-            "decoding (default: 0.0)"
-        ),
-    )
-    detect_parser.add_argument(
-        "--remove-incomplete-features",
-        type=str,
-        choices=["yes", "no"],
-        default="no",
-        help="Whether to remove incomplete features from predictions (default: no)",
-    )
-    detect_parser.add_argument(
-        "--domain",
-        type=str,
-        choices=["plant", "animal"],
-        default="plant",
-        help="Biological domain for Viterbi transition priors (default: plant)",
-    )
-
     # Export GFF command
     gff_parser = subparsers.add_parser(
         "export_gff", help="Export predictions to GFF format"
@@ -1529,8 +1279,6 @@ def main():
         create_predictions(args)
     elif args.command == "warmup":
         warmup_triton(args)
-    elif args.command == "detect_intervals":
-        detect_intervals(args)
     elif args.command == "export_gff":
         export_gff(args)
     else:
