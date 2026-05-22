@@ -297,6 +297,7 @@ def generate_gff(
                 ]
             )
 
+            # TODO: if this is an option, then why does it raise an error if not satisfied?
             if "intron" in start_entities or "intron" in stop_entities:
                 raise ValueError(
                     "Gene has terminal introns, but strip_introns is False. "
@@ -374,11 +375,9 @@ def generate_gff(
 def export_gff(
     input_zarr: str,
     output: str,
-    decoding_method: str,
     tqdm_position: int | None,
     min_transcript_length: int,
     cpu_workers: int,
-    strip_introns: bool,
 ):
     """Convert interval predictions to a GFF3 file.
 
@@ -405,12 +404,6 @@ def export_gff(
     if "decoding" not in intervals_table.columns:
         intervals_table["decoding"] = "direct"
 
-    # Filter by decoding method
-    intervals_table = intervals_table[intervals_table["decoding"] == decoding_method]
-    logger.info(
-        f"Filtered intervals to {len(intervals_table)} rows using decoding method: {decoding_method}"
-    )
-
     # Group intervals by transcript
     genes = group_intervals_by_transcript(
         intervals_table,
@@ -425,7 +418,7 @@ def export_gff(
         genes,
         chrom_id,
         output,
-        strip_introns=strip_introns,
+        strip_introns=True,
         tqdm_position=tqdm_position,
         tqdm_desc=f"[GFF write {chrom_id}]",
     )
@@ -448,9 +441,14 @@ def main():
     )
 
     parser.add_argument(
-        "--input", required=True, help="Path to input zarr dataset from run_inference"
+        "--input-zarr",
+        "-i",
+        required=True,
+        help="Path to input zarr dataset from run_inference",
     )
-    parser.add_argument("--output", required=True, help="Path to output GFF file")
+    parser.add_argument(
+        "--output-gff", "-o", required=True, help="Path to output GFF file"
+    )
 
     # TODO: if we have a separate filter step for this, why is it here now? Redundant
     parser.add_argument(
@@ -459,20 +457,7 @@ def main():
         default=0,
         help="Minimum transcript length (default: 0, no filtering)",
     )
-    parser.add_argument(
-        "--decoding-method",
-        type=str,
-        choices=["direct", "viterbi"],
-        default="direct",
-        help="Decoding method to use (default: direct)",
-    )
 
-    # TODO make sure this works as intended. Also default should be reversed
-    parser.add_argument(
-        "--strip-introns",
-        action="store_true",
-        help="If set, strip terminal introns from genes",
-    )
     parser.add_argument(
         "--tqdm-position",
         type=int,
@@ -489,13 +474,11 @@ def main():
     args = parser.parse_args()
 
     export_gff(
-        input_zarr=args.input,
-        output=args.output,
-        decoding_method=args.decoding_method,
+        input_zarr=args.input_zarr,
+        output=args.output_gff,
         tqdm_position=args.tqdm_position,
         min_transcript_length=args.min_transcript_length,
         cpu_workers=args.cpu_workers,
-        strip_introns=args.strip_introns,
     )
 
 
