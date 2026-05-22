@@ -17,6 +17,8 @@ If using single-chromosome mode, the parameters `--chromosome-id`, `--input-zarr
 `--manifest` is required. The manifest json file contains the required input and output
 information for each chromosome. An example of the formatting is shown below.
 
+### Parameters
+
 * `--manifest` - A JSON file containing input/output parameters for each chromosome to be processed. Required if `chromosome-id`, `input`, and `output-dir` are not specified.
 * `--chromosome-id` - name of the chromosome to be processed. Required if `manifest` is not specified
 * `--input-zarr`, `-i` - path to the input zarr file. Required if `manifest` is not specified
@@ -43,10 +45,6 @@ An example of the formatting for the `manifest` file
 ## warmup
 
 TODO
-
-## detect_intervals
-
-TODO - move to new file
 
 ## export_gff
 

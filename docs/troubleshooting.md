@@ -29,3 +29,25 @@ be the same or a minor version higher than `torch.version.cuda`.
 
 In most situations, the solution is to remove the current environment and retry installation.
 If you are using an HPC with multiple nodes, you must run the installation process on a node with a GPU.
+
+
+## Assertion Error during detect_intervals.py
+
+```
+Traceback (most recent call last):
+  File "/local/workdir/ahb232/genecad/scripts/predict.py", line 1541, in <module>
+    main()
+  File "/local/workdir/ahb232/genecad/scripts/predict.py", line 1533, in main
+    detect_intervals(args)
+  File "/local/workdir/ahb232/genecad/scripts/predict.py", line 830, in detect_intervals
+    sequence_predictions = merge_prediction_datasets(
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/local/workdir/ahb232/genecad/.venv/lib/python3.12/site-packages/src/prediction.py", line 65, in merge_prediction_datasets
+    assert np.array_equal(
+           ^^^^^^^^^^^^^^^
+AssertionError
+```
+This can be caused if there was an interruption in the earlier predict.py step
+and that step was restarted. Certain data may have been written to file twice. Remove the
+affected directory and rerun predict.py. This may only affect one chromosome in a multi-chromosome
+run, in which case only the affected chromosome needs to be redone.

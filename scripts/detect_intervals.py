@@ -1,7 +1,6 @@
 import argparse
 import logging
 from numpy import typing as npt
-from src.config import WINDOW_SIZE
 from src.sequence import (
     convert_entity_labels_to_intervals,
     viterbi_decode,
@@ -233,12 +232,6 @@ def main():
         help="Path to output zarr dataset for intervals",
     )
     parser.add_argument(
-        "--window-size",
-        type=int,
-        default=WINDOW_SIZE,
-        help="Window size for sequence processing",
-    )
-    parser.add_argument(
         "--viterbi-alpha",
         type=float,
         default=None,
@@ -259,9 +252,9 @@ def main():
         ),
     )
     parser.add_argument(
-        "--remove-incomplete-features",
+        "--keep-incomplete-features",
         action="store_true",
-        help="Remove incomplete features from the prediction",
+        help="Keep incomplete features in the prediction",
     )
     parser.add_argument(
         "--domain",
@@ -280,7 +273,7 @@ def main():
         viterbi_alpha=args.viterbi_alpha,
         intergenic_bias=args.intergenic_bias,
         domain=args.domain,
-        remove_incomplete_features=args.remove_incomplete_features,
+        remove_incomplete_features=(not args.keep_incomplete_features),
     )
 
 
