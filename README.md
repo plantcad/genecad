@@ -11,6 +11,7 @@
 [![Docker](https://img.shields.io/badge/Install-Docker-blue?logo=docker)](#using-docker)
 [![GeneCAD Downloads](https://img.shields.io/github/downloads/plantcad/genecad/total?label=GitHub%20downloads)](https://github.com/plantcad/genecad/releases)
 [![HF Downloads](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fplantcad%2Fgenecad%2Fmain%2F.github%2Fbadges%2Fhf-downloads.json)](https://huggingface.co/plantcad/models)
+[![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/1dVY1WoLSHRDS7o-5dMvgNylywh7Ei1w3)
 
 GeneCAD is an end-to-end genome annotation pipeline for plants, powered by the DNA foundation model [PlantCAD2](https://doi.org/10.1101/2025.10.31.685877). Give it a genome FASTA and it returns a protein-refined GFF3 annotation. No species-specific training data, no external alignments, and no model configuration required.
 
@@ -22,7 +23,8 @@ Unlike traditional annotation tools that rely on hand-crafted features or splice
 
 ## Contents
 
-- [🚀 Quick Start](#-quick-start)
+- [Try in Google Colab](#️-try-in-google-colab)
+- [Quick Start](#-quick-start)
 - [Inference Guide](#inference-guide)
   - [CLI Reference](#cli-reference)
   - [Common run recipes](#common-run-recipes)
@@ -45,7 +47,18 @@ Unlike traditional annotation tools that rely on hand-crafted features or splice
 
 ---
 
-## 🚀 Quick Start
+## Try in Google Colab
+
+Want to try GeneCAD without any local installation? Open the notebook directly in your browser:
+
+[![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/1dVY1WoLSHRDS7o-5dMvgNylywh7Ei1w3)
+
+> [!NOTE]
+> The free Colab tier uses a shared T4 GPU (~16 GB VRAM). GeneCAD will run, but expect roughly **5–10× slower throughput** than a dedicated A100. It is best suited for small genomes or test sequences. For production runs on full plant genomes, use the CLI with a local or cloud GPU.
+
+---
+
+## Quick Start
 
 We provide a **Command Line Interface (CLI)** for automated pipelines and local usage.
 
