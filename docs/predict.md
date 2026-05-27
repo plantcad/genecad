@@ -5,7 +5,7 @@
 Performs multiclass classification on each base pair in the input sequence.
 [NOTE!] This command requires a CUDA GPU
 ```
-python predict.py create_predictions \
+python predict.py \
 --manifest manifest.json \
 --checkpoint plantcad/genecad_plant \
 --model-path emarro/pcad2-200M-cnet-baseline \
@@ -32,20 +32,14 @@ information for each chromosome. An example of the formatting is shown below.
 * `--tqdm-position` - tqdm row to use for this process when multiple GPU jobs run in one terminal. Optional
 * `--show-dynamo-errors` - Flag to show torch dynamo errors, which are suppressed by default.
 * `--dtype` - model inference data type. Options: float32, float16, bfloat16(default), float64, double, half
-
+* `--warmup-batch-size` - Size of the warmup batches. Only used if `--triton-warmup is set`
+* `--triton-warmup` - Pre-warms the Triton autotune cache with dummy data. If set, input data is ignored and
+output will not be written to file.
 
 An example of the formatting for the `manifest` file
 ```
-[{"chromosome_id": "Chr1", "input_zarr": "sequence.zarr", "output_dir":"predictions_Chr1/"},
-{"chromosome_id": "Chr2", "input_zarr": "sequence.zarr", "output_dir":"predictions_Chr2/"},
-{"chromosome_id": "Chr3", "input_zarr": "sequence.zarr", "output_dir":"predictions_Chr3/"}]
+[{"chromosome_id": "Chr1", "sequence_zarr": "sequence.zarr", "predictions_dir":"predictions_Chr1/"},
+{"chromosome_id": "Chr2", "sequence_zarr": "sequence.zarr", "predictions_dir":"predictions_Chr2/"},
+{"chromosome_id": "Chr3", "sequence_zarr": "sequence.zarr", "predictions_dir":"predictions_Chr3/"}]
 
 ```
-
-## warmup
-
-TODO
-
-## export_gff
-
-TODO - move to new file

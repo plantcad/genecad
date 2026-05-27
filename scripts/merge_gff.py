@@ -95,14 +95,18 @@ def main():
         description="Merge per-chromosome GFF files with unique chromosome-prefixed IDs"
     )
     parser.add_argument(
-        "--output", required=True, help="Path to the merged output GFF file"
+        "--output-gff", "-o", required=True, help="Path to the merged output GFF file"
     )
     parser.add_argument(
-        "--inputs", nargs="+", required=True, help="Paths to per-chromosome GFF files"
+        "--input-gffs",
+        "-i",
+        nargs="+",
+        required=True,
+        help="Paths to per-chromosome GFF files",
     )
     args = parser.parse_args()
 
-    merge_gff_files(args.inputs, args.output)
+    merge_gff_files(args.input_gffs, args.output_gff)
 
 
 if __name__ == "__main__":

@@ -5,6 +5,8 @@ import os
 import tqdm
 from typing import Any
 from numpy import typing as npt
+from zarr.errors import GroupNotFoundError
+import json
 from src.config import WINDOW_SIZE
 from src.sequence import (
     create_sequence_windows,
@@ -12,7 +14,6 @@ from src.sequence import (
 import torch
 import numpy as np
 import xarray as xr
-from argparse import Namespace as Args
 from transformers import AutoModel, AutoConfig, AutoTokenizer
 from src.dataset import open_datatree, set_dimension_chunks
 from src.modeling import GeneClassifier, GeneClassifierConfig
@@ -75,27 +76,52 @@ def _infer_config_from_checkpoint(ckpt: dict, window_size: int) -> GeneClassifie
     return config
 
 
-def load_classifier(args: Args) -> GeneClassifier:
-    logger.info(f"Loading model from {args.model_checkpoint}")
-    if not hasattr(torch, args.dtype):
-        raise ValueError(f"Invalid torch dtype: {args.dtype}")
-    dtype = getattr(torch, args.dtype)
+def load_classifier(
+    model_checkpoint: str,
+    model_path: str | None,
+    window_size: int,
+    dtype: str,
+    device: str,
+) -> GeneClassifier:
+    logger.info(f"Loading model from {model_checkpoint}")
+    if not hasattr(torch, dtype):
+        raise ValueError(f"Invalid torch dtype: {dtype}")
+    dtype = getattr(torch, dtype)
+
+    base_model_path = model_path
 
     # If checkpoint is not local, assume it is a Hugging Face path
-    model_checkpoint = args.model_checkpoint
     if not os.path.exists(model_checkpoint):
         logger.info(
             f"Local path for classifier {model_checkpoint} not found; attempting Hugging Face download ..."
         )
         from huggingface_hub import hf_hub_download
 
-        model_checkpoint = hf_hub_download(args.model_checkpoint, filename="model.ckpt")
+        checkpoint_local = hf_hub_download(model_checkpoint, filename="model.ckpt")
+
+        # Infer encoder model path using config json
+        if base_model_path is None:
+            config_local = hf_hub_download(model_checkpoint, filename="config.json")
+            with open(config_local) as file:
+                config_dict = json.load(file)
+
+            if "base_encoder_path" in config_dict.keys():
+                base_model_path = config_dict["base_encoder_path"]
+
         logger.info(f"Downloaded classifier to {model_checkpoint}")
+    else:
+        checkpoint_local = model_checkpoint
+
+    if base_model_path is None:
+        logger.error(
+            "Base model path cannot be inferred from classifier config. Please specify --model-path"
+        )
+        raise FileNotFoundError
 
     # Peek at the checkpoint to check whether hyperparameters were saved.
     # Old checkpoints (and raw Lightning trainer checkpoints) lack this key,
     # causing load_from_checkpoint to fail with a missing-argument TypeError.
-    ckpt = torch.load(model_checkpoint, map_location="cpu", weights_only=False)
+    ckpt = torch.load(checkpoint_local, map_location="cpu", weights_only=False)
     hparams = ckpt.get("hyper_parameters") or {}
 
     if hparams:
@@ -112,14 +138,14 @@ def load_classifier(args: Args) -> GeneClassifier:
                 k: v for k, v in hparams.items() if k in config_field_names
             }
             if config_kwargs.get("max_sequence_length") is None:
-                config_kwargs["max_sequence_length"] = args.window_size
+                config_kwargs["max_sequence_length"] = window_size
             config = GeneClassifierConfig(**config_kwargs)
         if config.max_sequence_length is None:
-            config.max_sequence_length = args.window_size
-        config.base_encoder_path = args.model_path
+            config.max_sequence_length = window_size
+        config.base_encoder_path = base_model_path
         model = GeneClassifier.load_from_checkpoint(
-            model_checkpoint,
-            map_location=args.device,
+            checkpoint_local,
+            map_location=device,
             strict=False,
             config=config,
         )
@@ -128,95 +154,139 @@ def load_classifier(args: Args) -> GeneClassifier:
             "Checkpoint has no saved hyperparameters (was saved before save_hyperparameters() "
             "was added). Inferring GeneClassifierConfig from state dict shapes."
         )
-        config = _infer_config_from_checkpoint(ckpt, window_size=args.window_size)
-        config.base_encoder_path = args.model_path
+        config = _infer_config_from_checkpoint(ckpt, window_size=window_size)
+        config.base_encoder_path = base_model_path
         model = GeneClassifier.load_from_checkpoint(
-            model_checkpoint,
-            map_location=args.device,
+            checkpoint_local,
+            map_location=device,
             strict=False,
             config=config,
         )
 
     model = model.eval()
-    model = model.to(args.device, dtype=dtype)
+    model = model.to(device, dtype=dtype)
     return model
 
 
-def load_base_model(args: Args) -> AutoModel:
-    logger.info(f"Loading base embedding model from {args.model_path}")
-    config = AutoConfig.from_pretrained(args.model_path, trust_remote_code=True)
-    dtype = getattr(torch, args.dtype)
+def load_base_model(model_path: str, dtype: str, device: str) -> AutoModel:
+    """Loads PlantCAD Encoder model"""
+
+    logger.info(f"Loading base embedding model from {model_path}")
+    config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
+    dtype = getattr(torch, dtype)
     base_model = AutoModel.from_pretrained(
-        args.model_path, config=config, trust_remote_code=True, dtype=dtype
+        model_path, config=config, trust_remote_code=True, dtype=dtype
     )
     base_model = base_model.eval()
-    base_model = base_model.to(args.device, dtype=dtype)
+    base_model = base_model.to(device, dtype=dtype)
     return base_model
 
 
-def load_tokenizer(args: Args) -> AutoTokenizer:
-    logger.info(f"Loading tokenizer from {args.model_path}")
-    tokenizer = AutoTokenizer.from_pretrained(args.model_path, trust_remote_code=True)
+def load_tokenizer(model_path) -> AutoTokenizer:
+    """Loads PlantCAD tokenizer"""
+    logger.info(f"Loading tokenizer from {model_path}")
+    tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
     return tokenizer
 
 
-def load_models(args: Args) -> tuple[AutoModel | None, GeneClassifier, AutoTokenizer]:
+def load_models(
+    model_checkpoint: str,
+    model_path: str | None,
+    window_size: int,
+    dtype: str,
+    device: str,
+) -> tuple[AutoModel | None, GeneClassifier, AutoTokenizer]:
     """Load the base model, classifier, and tokenizer required for inference.
 
     Parameters
     ----------
-    args : argparse.Namespace
-        Command-line arguments controlling checkpoint paths and device.
+    model_checkpoint : str
+        Path (local or HuggingFace) to the GeneCAD model checkpoint
+    model_path : str | None
+        Path (local or HuggingFace) to the base PlantCAD Encoder model. If none, an attempt will
+        be made to infer model_path from model_checkpoint config.
+    window_size : int
+        Size of the PlantCAD context window
+    dtype: int
+        Input data type
+    device: str
+        Device on which to run inference. Note that PlantCAD requires a CUDA GPU and cannot be run on CPU
 
     Returns
     -------
     tuple[AutoModel | None, GeneClassifier, AutoTokenizer]
         Tuple containing the optional base model, the classifier, and the tokenizer.
     """
-    classifier = load_classifier(args)
+    classifier = load_classifier(
+        model_checkpoint=model_checkpoint,
+        model_path=model_path,
+        window_size=window_size,
+        dtype=dtype,
+        device=device,
+    )
     base_model = None
     if classifier.config.use_precomputed_base_encodings:
-        base_model = load_base_model(args)
-    tokenizer = load_tokenizer(args)
+        base_model = load_base_model(
+            model_path=classifier.config.base_encoder_path, device=device, dtype=dtype
+        )
+    tokenizer = load_tokenizer(classifier.config.base_encoder_path)
     return base_model, classifier, tokenizer
 
 
-def load_seq_data(args: Args) -> xr.Dataset:
+def load_seq_data(input_zarr: str, chromosome_id: str, species_id: str) -> xr.Dataset:
     """Load the sequence dataset for a specific species and chromosome.
 
     Parameters
     ----------
-    args : argparse.Namespace
-        Command-line arguments describing the input path, species, and chromosome.
+    input_zarr: str
+        Path to the input sequence data, in .zarr format
+    chromosome_id: str
+        Name of the chromosome in the dataset
+    species_id: str
+        Name of the species in the dataset
 
     Returns
     -------
     xarray.Dataset
         Dataset containing the sequence data for the requested species and chromosome.
     """
-    logger.info(f"Opening input sequence datatree from {args.input_zarr}")
-    sequences = open_datatree(args.input_zarr, consolidated=False)
-    logger.info(f"Input sequences:\n{sequences}")
-
-    # Check if species exists
-    if args.species_id not in sequences:
-        available_species = list(sequences.keys())
-        raise ValueError(
-            f"Species '{args.species_id}' not found in input data. Available species: {available_species}"
+    try:
+        logger.info(f"Opening input sequence datatree from {input_zarr}")
+        sequences = open_datatree(input_zarr, consolidated=False)
+        logger.info(f"Input sequences:\n{sequences}")
+    except GroupNotFoundError as e:
+        print(e)
+        logger.error(
+            f"File {input_zarr} is not formatted as an input sequence datatree. \n"
+            f"Check that it is the output of the command extract.py extract_fasta_file"
         )
 
+    # Check if species exists
+    if species_id not in sequences:
+        available_species = list(sequences.keys())
+        if available_species == ["sequences", "intervals"]:
+            raise ValueError(
+                f"{input_zarr} is an intervals file, not a sequence file. \n"
+                f"Check that it is the output of the command extract.py extract_fasta_file"
+            )
+        else:
+            raise ValueError(
+                f"Species '{species_id}' not found in input data. Available species: {available_species}"
+            )
+
     # Check if chromosome exists for the specified species
-    if args.chromosome_id not in sequences[args.species_id]:
-        available_chromosomes = list(sequences[args.species_id].keys())
+    if chromosome_id not in sequences[species_id]:
+        available_chromosomes = list(sequences[species_id].keys())
         raise ValueError(
-            f"Chromosome '{args.chromosome_id}' not found for species '{args.species_id}'. Available chromosomes: {available_chromosomes}"
+            f"Chromosome '{chromosome_id}' not found for species '{species_id}'. Available chromosomes: "
+            f"{available_chromosomes} "
         )
 
     # Select the dataset for the specified species and chromosome
     logger.info(
-        f"Selecting data for species '{args.species_id}' and chromosome '{args.chromosome_id}'"
+        f"Selecting data for species '{species_id}' and chromosome '{chromosome_id}'"
     )
-    ds = sequences[args.species_id][args.chromosome_id].ds
+    ds = sequences[species_id][chromosome_id].ds
 
     logger.info(f"Loaded dataset with dimensions: {dict(ds.sizes)}")
     return ds
@@ -229,18 +299,25 @@ def load_seq_data(args: Args) -> xr.Dataset:
 
 @torch.inference_mode()
 def _create_predictions(
-    args: Args,
     ds: xr.Dataset,
     base_model: AutoModel | None,
     classifier: GeneClassifier,
     tokenizer: AutoTokenizer,
+    species_id: str,
+    chromosome_id: str,
+    model_checkpoint: str,
+    model_path: str,
+    output_dir: str,
+    batch_size: int,
+    window_size: int,
+    stride: int,
+    device: str,
+    tqdm_position: int | None,
 ) -> xr.DataTree:
     """Generate token and feature predictions in strided windows.
 
     Parameters
     ----------
-    args : argparse.Namespace
-        Command-line arguments configuring batch size, stride, and output paths.
     ds : xarray.Dataset
         Dataset containing the sequence input identifiers and metadata.
     base_model : AutoModel or None
@@ -249,6 +326,26 @@ def _create_predictions(
         Fine-tuned classifier that produces token logits.
     tokenizer : AutoTokenizer
         Tokenizer associated with the base model.
+    species_id : str
+        Species name
+    chromosome_id : str
+        Chromosome or contig name
+    model_checkpoint: str
+        Path (local or HuggingFace) to the GeneCAD model checkpoint
+    model_path: str
+        Path (local or HuggingFace) to the PlantCAD base model
+    output_dir: str
+        Path to the output directory
+    batch_size: int
+        Inference batch size
+    window_size: int
+        PlantCAD context window size
+    stride: int
+        Distance between the start position of each input window
+    device: str
+        Device on which to run inference
+    tqdm_position: int | None
+        optional tqdm row to use
 
     Returns
     -------
@@ -257,7 +354,7 @@ def _create_predictions(
     """
     # Get distributed processing info
     rank, world_size = process_group()
-    tqdm_position = args.tqdm_position if args.tqdm_position is not None else rank
+    tqdm_position = tqdm_position if tqdm_position is not None else rank
     gpu_label = str(rank)
     visible_gpus = os.environ.get("CUDA_VISIBLE_DEVICES", "").strip()
     if visible_gpus:
@@ -270,10 +367,10 @@ def _create_predictions(
             gpu_label = visible_gpu_ids[gpu_index]
 
     # Construct rank-specific output path
-    dataset_path = os.path.join(args.output_dir, f"predictions.{rank}.zarr")
+    dataset_path = os.path.join(output_dir, f"predictions.{rank}.zarr")
 
     logger.info(
-        f"Generating predictions with {args.batch_size=}, {args.window_size=}, {args.stride=} ({rank=}, {world_size=})"
+        f"Generating predictions with {batch_size=}, {window_size=}, {stride=} ({rank=}, {world_size=})"
     )
 
     # Get padding token ID from tokenizer
@@ -312,8 +409,8 @@ def _create_predictions(
         windows: list[tuple[npt.ArrayLike, tuple[int, int], tuple[int, int]]] = list(
             create_sequence_windows(
                 sequence_input_ids,
-                window_size=args.window_size,
-                stride=args.stride,
+                window_size=window_size,
+                stride=stride,
                 pad_value=pad_value,
             )
         )
@@ -336,10 +433,10 @@ def _create_predictions(
         # Batch windows together using ceiling division so batch_size is an
         # upper bound, not a lower bound.  e.g. 195 windows / batch 112 → 2
         # batches of 98 and 97, not 1 batch of 195.
-        n_batches = max(1, (len(windows) + args.batch_size - 1) // args.batch_size)
+        n_batches = max(1, (len(windows) + batch_size - 1) // batch_size)
         window_batches = np.array_split(windows, n_batches)
         logger.info(
-            f"Processing {len(windows)} windows in {len(window_batches)} batches of size {args.batch_size}"
+            f"Processing {len(windows)} windows in {len(window_batches)} batches of size {batch_size}"
         )
 
         # Process batches — each rank occupies its own tqdm row so bars don't
@@ -360,8 +457,8 @@ def _create_predictions(
 
             # Get equally sized sequence windows to process for batch
             input_ids = np.array([w[0] for w in window_batch])
-            input_ids = torch.tensor(input_ids, device=args.device)
-            assert input_ids.shape == (current_batch_size, args.window_size)
+            input_ids = torch.tensor(input_ids, device=device)
+            assert input_ids.shape == (current_batch_size, window_size)
 
             # Generate embeddings, if necessary
             inputs_embeds = None
@@ -369,14 +466,14 @@ def _create_predictions(
                 # pyrefly: ignore  # not-callable
                 inputs_embeds = base_model(input_ids=input_ids).last_hidden_state
                 assert inputs_embeds.ndim == 3
-                assert inputs_embeds.shape[:2] == (current_batch_size, args.window_size)
+                assert inputs_embeds.shape[:2] == (current_batch_size, window_size)
 
             # Get predictions from classifier
             # pyrefly: ignore  # not-callable
             token_logits = classifier(input_ids=input_ids, inputs_embeds=inputs_embeds)
             assert token_logits.shape == (
                 current_batch_size,
-                args.window_size,
+                window_size,
                 num_token_classes,
             )
 
@@ -384,7 +481,7 @@ def _create_predictions(
             feature_logits = classifier.aggregate_logits(token_logits)
             assert feature_logits.shape == (
                 current_batch_size,
-                args.window_size,
+                window_size,
                 num_feature_classes,
             )
 
@@ -438,10 +535,10 @@ def _create_predictions(
                 },
                 attrs={
                     "strand": strand,
-                    "species_id": args.species_id,
-                    "chromosome_id": args.chromosome_id,
-                    "model_checkpoint": args.model_checkpoint,
-                    "model_path": args.model_path,
+                    "species_id": species_id,
+                    "chromosome_id": chromosome_id,
+                    "model_checkpoint": model_checkpoint,
+                    "model_path": model_path,
                 },
             )
 
@@ -451,7 +548,7 @@ def _create_predictions(
 
             # Chunk in sequence dim only and save
             result = set_dimension_chunks(result, "sequence", result.sizes["sequence"])
-            os.makedirs(args.output_dir, exist_ok=True)
+            os.makedirs(output_dir, exist_ok=True)
             # pyrefly: ignore  # no-matching-overload
             result.to_zarr(
                 dataset_path,
@@ -478,7 +575,15 @@ def flip(sequence: npt.ArrayLike) -> npt.ArrayLike:
 
 
 @torch.inference_mode()
-def warmup_triton(args: Args):
+def warmup_triton(
+    model_checkpoint: str,
+    model_path: str | None,
+    window_size: int,
+    batch_size: int,
+    warmup_batch_size: int | None,
+    dtype: str,
+    suppress_dynamo_errors: bool,
+):
     """Pre-warm the Triton autotune cache by running a dummy forward pass.
 
     Triton compiles and benchmarks GPU kernels the first time a new tensor
@@ -494,25 +599,42 @@ def warmup_triton(args: Args):
 
     Parameters
     ----------
-    args : argparse.Namespace
-        Must supply ``model_path``, ``model_checkpoint``, ``dtype``,
-        ``batch_size``, and ``window_size``.
+    model_checkpoint: str
+        Path (local or HuggingFace) to the GeneCAD checkpoint.
+    model_path: str | None
+        Path (local or HuggingFace) to the base PlantCAD encoder model. Inferred from model_checkpoint if not provided
+    window_size: int
+        Size of the input context window
+    batch_size: int
+        batch size
+    warmup_batch_size: int | None
+        size of the warmup batch. Inferred if not provided
+    dtype: str
+        Data type for sequence input
+    suppress_dynamo_errors : bool
+        Suppress dynamo error messages in output
     """
     # TODO: allow other CUDA device if available
     if torch.cuda.is_available():
-        args.device = "cuda:0"
+        device = "cuda:0"
     else:
-        args.device = "cpu"
+        device = "cpu"
 
     logger.info(
-        f"[warmup] device={args.device}  batch_size={args.batch_size}  window_size={args.window_size}"
+        f"[warmup] device={device}  batch_size={batch_size}  window_size={window_size}"
     )
 
     torch.set_float32_matmul_precision("medium")
-    if args.suppress_dynamo_errors == "yes":
+    if suppress_dynamo_errors:
         torch._dynamo.config.suppress_errors = True
 
-    base_model, classifier, tokenizer = load_models(args)
+    base_model, classifier, tokenizer = load_models(
+        model_checkpoint=model_checkpoint,
+        model_path=model_path,
+        window_size=window_size,
+        dtype=dtype,
+        device=device,
+    )
 
     pad_value = tokenizer.unk_token_id
     if pad_value is None:
@@ -520,22 +642,21 @@ def warmup_triton(args: Args):
 
     # Warm up with either the exact requested probe batch or a conservative
     # capped batch when no explicit probe size was provided.
-    warmup_batch_size = getattr(args, "warmup_batch_size", None)
     if warmup_batch_size is None:
-        warmup_batch_size = max(1, min(args.batch_size, 4))
-        if warmup_batch_size != args.batch_size:
+        warmup_batch_size = max(1, min(batch_size, 4))
+        if warmup_batch_size != batch_size:
             logger.info(
-                f"[warmup] Capping probe batch from {args.batch_size} to {warmup_batch_size} for safety"
+                f"[warmup] Capping probe batch from {batch_size} to {warmup_batch_size} for safety"
             )
     else:
         warmup_batch_size = max(1, warmup_batch_size)
         logger.info(f"[warmup] Using exact probe batch size {warmup_batch_size}")
 
     dummy = torch.full(
-        (warmup_batch_size, args.window_size),
+        (warmup_batch_size, window_size),
         pad_value,
         dtype=torch.long,
-        device=args.device,
+        device=device,
     )
 
     if base_model is not None:
@@ -561,7 +682,21 @@ def warmup_triton(args: Args):
     logger.info("[warmup] Triton cache warm-up complete.")
 
 
-def create_predictions(args: Args):
+def create_predictions(
+    manifest: str | None,
+    species_id: str,
+    chromosome_id: str | None,
+    input_zarr: str | None,
+    output_dir: str | None,
+    model_checkpoint: str,
+    model_path: str | None,
+    window_size: int,
+    stride: int,
+    batch_size: int,
+    dtype: str,
+    tqdm_position: int | None,
+    show_dynamo_errors: bool,
+):
     """Run the inference pipeline to generate logits for each genomic strand.
 
     When launched via ``torchrun`` (multi-GPU), every rank initialises the
@@ -590,14 +725,12 @@ def create_predictions(args: Args):
     if torch.cuda.is_available():
         lr = local_rank()
         torch.cuda.set_device(lr)
-        args.device = f"cuda:{lr}"
+        device = f"cuda:{lr}"
     else:
         raise RuntimeError("No CUDA GPUs are available")
 
     rank, world_size = process_group()
-    logger.info(
-        f"create_predictions starting: {rank=}, {world_size=}, device={args.device}"
-    )
+    logger.info(f"create_predictions starting: {rank=}, {world_size=}, device={device}")
 
     # ---- PyTorch settings -------------------------------------------------
     # Set to avoid:
@@ -608,24 +741,24 @@ def create_predictions(args: Args):
     # Suppress errors related to models trained with torch.compile, e.g.:
     # AssertionError: increase TRITON_MAX_BLOCK['X'] to 4096
     # https://github.com/pytorch/pytorch/issues/135028#issuecomment-2330421513
-    if not args.show_dynamo_errors:
+    if not show_dynamo_errors:
         torch._dynamo.config.suppress_errors = True
 
     # ---- Build work list --------------------------------------------------
     # Manifest mode: process many sequences with one model load.
     # Single mode: original behaviour (one chromosome per invocation).
-    if args.manifest is not None:
+    if manifest is not None:
         import json
 
-        with open(args.manifest) as fh:
+        with open(manifest) as fh:
             entries = json.load(fh)
         logger.info(f"Manifest mode: {len(entries)} sequence(s) to process")
     else:
         entries = [
             {
-                "chromosome_id": args.chromosome_id,
-                "input_zarr": args.input_zarr,
-                "output_dir": args.output_dir,
+                "chromosome_id": chromosome_id,
+                "sequence_zarr": input_zarr,
+                "predictions_dir": output_dir,
             }
         ]
 
@@ -633,19 +766,42 @@ def create_predictions(args: Args):
     try:
         # Load models onto this rank's device — happens ONCE regardless of
         # how many sequences are in the manifest.
-        base_model, classifier, tokenizer = load_models(args)
+        base_model, classifier, tokenizer = load_models(
+            model_checkpoint=model_checkpoint,
+            model_path=model_path,
+            window_size=window_size,
+            dtype=dtype,
+            device=device,
+        )
 
         for i, entry in enumerate(entries):
-            args.chromosome_id = entry["chromosome_id"]
-            args.input_zarr = entry["input_zarr"]
-            args.output_dir = entry["output_dir"]
+            chromosome_id = entry["chromosome_id"]
+            input_zarr = entry["sequence_zarr"]
+            output_dir = entry["predictions_dir"]
 
             logger.info(
                 f"[{i + 1}/{len(entries)}] Running predictions for "
-                f"{args.species_id}/{args.chromosome_id}"
+                f"{species_id}/{chromosome_id}"
             )
             _create_predictions(
-                args, load_seq_data(args), base_model, classifier, tokenizer
+                ds=load_seq_data(
+                    input_zarr=input_zarr,
+                    chromosome_id=chromosome_id,
+                    species_id=species_id,
+                ),
+                base_model=base_model,
+                classifier=classifier,
+                tokenizer=tokenizer,
+                species_id=species_id,
+                chromosome_id=chromosome_id,
+                model_checkpoint=model_checkpoint,
+                model_path=model_path,
+                output_dir=output_dir,
+                batch_size=batch_size,
+                window_size=window_size,
+                stride=stride,
+                device=device,
+                tqdm_position=tqdm_position,
             )
 
             # All ranks must finish this sequence before moving to the next.
@@ -673,146 +829,149 @@ def main():
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("huggingface_hub").setLevel(logging.WARNING)
 
-    parser = argparse.ArgumentParser(description="Gene prediction and export tools")
-    subparsers = parser.add_subparsers(
-        dest="command", required=True, help="Command to execute"
-    )
+    parser = argparse.ArgumentParser(description="Gene prediction")
 
-    # Run inference command
-    inference_parser = subparsers.add_parser(
-        "create_predictions",
-        help="Generate token and feature logits with predicted classes",
-    )
-    inference_parser.add_argument(
+    parser.add_argument(
         "--input-zarr",
         "-i",
         default=None,
         help="Path to input zarr dataset (from transform.py). "
         "Not required when --manifest is used.",
     )
-    inference_parser.add_argument(
+    parser.add_argument(
         "--output-dir",
         "-o",
         default=None,
         help="Directory to save rank-specific output zarr datasets. "
         "Not required when --manifest is used.",
     )
-    inference_parser.add_argument(
+    parser.add_argument(
         "--manifest",
         default=None,
         help="Path to a JSON file listing sequences to process in one model-load session. "
-        'Format: [{"chromosome_id": "...", "input_zarr": "...", "output_dir": "..."}, ...]. '
+        'Format: [{"chromosome_id": "...", "sequence_zarr": "...", "predictions_dir": "..."}, ...]. '
         "Enables processing thousands of short sequences without reloading the model each time.",
     )
-    inference_parser.add_argument(
+    parser.add_argument(
         "--model-checkpoint", required=True, help="Path to classifier checkpoint"
     )
-    inference_parser.add_argument(
-        "--model-path", required=True, help="Path to base embedding model"
+    parser.add_argument(
+        "--model-path",
+        default=None,
+        help="Path to base embedding model. If not specified, model path will be "
+        "inferred from model checkpoint if possible.",
     )
 
     # Selection arguments
-    inference_parser.add_argument(
-        "--species-id", required=True, help="Species ID to process (e.g., 'Osativa')"
+    parser.add_argument(
+        "--species-id",
+        default=None,
+        help="Species ID to process (e.g., 'Osativa'). Required unless "
+        "--triton-warmup is true",
     )
-    inference_parser.add_argument(
+    parser.add_argument(
         "--chromosome-id",
         default=None,
         help="Chromosome ID to process (e.g., 'Chr1'). Not required when --manifest is used.",
     )
 
     # Processing parameters
-    inference_parser.add_argument(
+    parser.add_argument(
         "--window-size",
         type=int,
         default=WINDOW_SIZE,
         help="Window size for sequence processing",
     )
-    inference_parser.add_argument(
+    parser.add_argument(
         "--stride",
         type=int,
         default=WINDOW_SIZE // 2,
         help="Stride size for overlapping windows",
     )
-    # TODO: change? default keeps crashing
-    inference_parser.add_argument(
+
+    parser.add_argument(
         "--batch-size",
         type=int,
         default=16,
         help="Batch size for inference. Default 16.",
     )
-    inference_parser.add_argument(
+    parser.add_argument(
         "--tqdm-position",
         type=int,
         default=None,
         help="Optional tqdm row to use for this process when multiple GPU jobs run in one terminal",
     )
-    inference_parser.add_argument(
+    parser.add_argument(
         "--show-dynamo-errors",
         action="store_false",
         help="Show torch dynamo errors (suppressed by default)",
     )
     # TODO: could this be determined by model config?
-    inference_parser.add_argument(
+    parser.add_argument(
         "--dtype",
         type=str,
         default="bfloat16",
         choices=["float32", "float16", "bfloat16", "float64", "double", "half"],
         help="Data type for model inference (default: bfloat16)",
     )
-
-    # Triton warmup command — run once per GPU BEFORE multi-GPU torchrun launch
-    warmup_parser = subparsers.add_parser(
-        "warmup",
-        help="Pre-warm Triton autotune cache with a dummy forward pass (run sequentially per GPU before multi-GPU launch)",
-    )
-    warmup_parser.add_argument(
-        "--model-checkpoint", required=True, help="Path to classifier checkpoint"
-    )
-    warmup_parser.add_argument(
-        "--model-path", required=True, help="Path to base embedding model"
-    )
-    warmup_parser.add_argument(
-        "--window-size",
-        type=int,
-        default=WINDOW_SIZE,
-        help="Window size used during inference (must match actual run)",
-    )
-    warmup_parser.add_argument(
-        "--batch-size",
-        type=int,
-        default=64,
-        help="Batch size used during inference (must match actual run)",
-    )
-    warmup_parser.add_argument(
+    parser.add_argument(
         "--warmup-batch-size",
         type=int,
         default=None,
         help="Exact batch size to probe during warmup (overrides conservative capping)",
     )
-    warmup_parser.add_argument(
-        "--dtype",
-        type=str,
-        default="bfloat16",
-        choices=["float32", "float16", "bfloat16", "float64", "double", "half"],
-        help="Data type matching the actual inference run",
-    )
-    warmup_parser.add_argument(
-        "--suppress-dynamo-errors",
-        type=str,
-        choices=["yes", "no"],
-        default="yes",
-        help="Whether to suppress torch dynamo errors (default: yes)",
+
+    parser.add_argument(
+        "--triton-warmup",
+        action="store_true",
+        help="pre-warm the Triton autotune cache with a dummy forward pass.",
     )
 
     args = parser.parse_args()
 
-    if args.command == "create_predictions":
-        create_predictions(args)
-    elif args.command == "warmup":
-        warmup_triton(args)
+    if not args.triton_warmup:
+        if args.species_id is None:
+            logger.error(
+                "Error: --species-id is required unless --triton-warmup is set"
+            )
+
+        if args.manifest is None:
+            if (
+                (args.chromosome_id is None)
+                or (args.input_zarr is None)
+                or (args.output_dir is None)
+            ):
+                logger.error(
+                    "Error: this is not a triton warmup run, but input data has not been provided. One of the "
+                    "following is required: \n --manifest \n OR \n --chromosome-id --input-zarr and --output-dir"
+                )
+                raise RuntimeError
+
+        create_predictions(
+            manifest=args.manifest,
+            species_id=args.species_id,
+            chromosome_id=args.chromosome_id,
+            input_zarr=args.input_zarr,
+            output_dir=args.output_dir,
+            model_checkpoint=args.model_checkpoint,
+            model_path=args.model_path,
+            window_size=args.window_size,
+            stride=args.stride,
+            batch_size=args.batch_size,
+            dtype=args.dtype,
+            tqdm_position=args.tqdm_position,
+            show_dynamo_errors=args.show_dynamo_errors,
+        )
     else:
-        parser.print_help()
+        warmup_triton(
+            model_checkpoint=args.model_checkpoint,
+            model_path=args.model_path,
+            window_size=args.window_size,
+            batch_size=args.batch_size,
+            warmup_batch_size=args.warmup_batch_size,
+            dtype=args.dtype,
+            suppress_dynamo_errors=args.suppress_dynamo_errors,
+        )
 
 
 if __name__ == "__main__":
