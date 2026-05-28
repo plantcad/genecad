@@ -13,6 +13,7 @@ from src.prediction import merge_prediction_datasets
 from src.modeling import GeneClassifierConfig, token_transition_probs
 import pandas as pd
 import torch._dynamo
+import json
 
 logger = logging.getLogger(__name__)
 
@@ -222,15 +223,25 @@ def main():
     parser.add_argument(
         "--input-dir",
         "-i",
-        required=True,
+        type=str,
+        default=None,
         help="Path to input dataset from predict",
     )
     parser.add_argument(
         "--output-zarr",
         "-o",
-        required=True,
+        type=str,
+        default=None,
         help="Path to output zarr dataset for intervals",
     )
+    parser.add_argument(
+        "--manifest",
+        type=str,
+        default=None,
+        help="Manifest json for multi-chromosome runs. Key-value pairs 'chromosome_id', 'predictions_dir' and "
+        "'intervals_zarr' are required. Required if --input-dir and --output-zarr are not specified.",
+    )
+
     parser.add_argument(
         "--viterbi-alpha",
         type=float,
@@ -266,15 +277,43 @@ def main():
 
     args = parser.parse_args()
 
-    detect_intervals(
-        input_dir=args.input_dir,
-        output=args.output_zarr,
-        decode_direct=args.decode_direct,
-        viterbi_alpha=args.viterbi_alpha,
-        intergenic_bias=args.intergenic_bias,
-        domain=args.domain,
-        remove_incomplete_features=(not args.keep_incomplete_features),
-    )
+    if args.manifest is None:
+        if (args.input_dir is None) or (args.output_zarr is None):
+            logger.error(
+                "Error: one of the following must be provided:\n"
+                "--manifest\n OR \n --input-dir and --output-zarr"
+            )
+            raise RuntimeError
+
+        detect_intervals(
+            input_dir=args.input_dir,
+            output=args.output_zarr,
+            decode_direct=args.decode_direct,
+            viterbi_alpha=args.viterbi_alpha,
+            intergenic_bias=args.intergenic_bias,
+            domain=args.domain,
+            remove_incomplete_features=(not args.keep_incomplete_features),
+        )
+    else:
+        with open(args.manifest) as fh:
+            entries = json.load(fh)
+
+        for entry in entries:
+            chromosome_id = entry["chromosome_id"]
+            input_dir = entry["predictions_dir"]
+            output_zarr = entry["intervals_zarr"]
+
+            logger.info(f"Detecting intervals for chromosome {chromosome_id}")
+
+            detect_intervals(
+                input_dir=input_dir,
+                output=output_zarr,
+                decode_direct=args.decode_direct,
+                viterbi_alpha=args.viterbi_alpha,
+                intergenic_bias=args.intergenic_bias,
+                domain=args.domain,
+                remove_incomplete_features=(not args.keep_incomplete_features),
+            )
 
 
 if __name__ == "__main__":

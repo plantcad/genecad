@@ -91,6 +91,7 @@ def load_classifier(
     base_model_path = model_path
 
     # If checkpoint is not local, assume it is a Hugging Face path
+    # TODO: as it stands, we do not attempt to infer base model from local checkpoints. This should be added.
     if not os.path.exists(model_checkpoint):
         logger.info(
             f"Local path for classifier {model_checkpoint} not found; attempting Hugging Face download ..."

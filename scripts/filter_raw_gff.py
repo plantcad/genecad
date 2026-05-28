@@ -1,4 +1,5 @@
 import argparse
+import json
 import logging
 import re
 import pandas as pd
@@ -492,8 +493,22 @@ def main() -> None:
 
     parser = argparse.ArgumentParser(description="Manipulate GFF files")
 
-    parser.add_argument("--input-gff", "-i", required=True, help="Input GFF file")
-    parser.add_argument("--output-gff", "-o", required=True, help="Output GFF file")
+    parser.add_argument(
+        "--input-gff", "-i", default=None, type=str, help="Input GFF file"
+    )
+    parser.add_argument(
+        "--output-gff", "-o", default=None, type=str, help="Output GFF file"
+    )
+
+    parser.add_argument(
+        "--manifest",
+        default=None,
+        type=str,
+        help="Manifest json for multi-chromosome runs. "
+        "Key-value pairs 'chromosome_id', 'raw_gff' "
+        "and 'filtered_gff' are required. Required if "
+        "--input-gff and --output-gff are not specified.",
+    )
 
     # TODO: this should really be checking exon length, not feature length
     parser.add_argument(
@@ -535,15 +550,44 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    filter_gff(
-        args.input_gff,
-        args.output_gff,
-        args.min_feature_length,
-        args.feature_types,
-        args.min_gene_length,
-        args.require_utrs,
-        args.keep_incomplete_models,
-    )
+    if args.manifest is None:
+        if (args.input_gff is None) or (args.output_gff is None):
+            logger.error(
+                "Error: one of the following must be provided:\n"
+                "--manifest\n OR \n --input-gff and --output-gff"
+            )
+            raise RuntimeError
+
+        filter_gff(
+            args.input_gff,
+            args.output_gff,
+            args.min_feature_length,
+            args.feature_types,
+            args.min_gene_length,
+            args.require_utrs,
+            args.keep_incomplete_models,
+        )
+
+    else:
+        with open(args.manifest) as fh:
+            entries = json.load(fh)
+
+        for entry in entries:
+            chromosome_id = entry["chromosome_id"]
+            raw_gff = entry["raw_gff"]
+            filtered_gff = entry["filtered_gff"]
+
+            logger.info(f"Filtering gff for chromosome {chromosome_id}")
+
+            filter_gff(
+                raw_gff,
+                filtered_gff,
+                args.min_feature_length,
+                args.feature_types,
+                args.min_gene_length,
+                args.require_utrs,
+                args.keep_incomplete_models,
+            )
 
 
 if __name__ == "__main__":

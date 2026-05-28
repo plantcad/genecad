@@ -39,6 +39,10 @@ all chromosomes will be prepared and will retain their original names. The map s
 be formatted as a comma-separated list of key-value pairs, e.g.
 `oldChr1:newChr1,oldChr2:newChr2,oldChr3:newChr3...`
 
+### Next Step
+
+`python predict.py` [Predict Documentation](predict.md)
+
 
 ## validate_configs
 

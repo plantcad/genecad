@@ -43,3 +43,7 @@ An example of the formatting for the `manifest` file
 {"chromosome_id": "Chr3", "sequence_zarr": "sequence.zarr", "predictions_dir":"predictions_Chr3/"}]
 
 ```
+
+### Next Step
+
+`python detect_intervals.py` [Detect Intervals Documentation](detect_intervals.md)

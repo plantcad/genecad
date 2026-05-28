@@ -1,4 +1,5 @@
 import argparse
+import json
 import logging
 import multiprocessing as mp
 import os
@@ -443,11 +444,22 @@ def main():
     parser.add_argument(
         "--input-zarr",
         "-i",
-        required=True,
+        type=str,
+        default=None,
         help="Path to input zarr dataset from run_inference",
     )
     parser.add_argument(
-        "--output-gff", "-o", required=True, help="Path to output GFF file"
+        "--output-gff", "-o", default=None, type=str, help="Path to output GFF file"
+    )
+
+    parser.add_argument(
+        "--manifest",
+        default=None,
+        type=str,
+        help="Manifest json for multi-chromosome runs. "
+        "Key-value pairs 'chromosome_id', 'intervals_zarr' "
+        "and 'raw_gff' are required. Required if "
+        "--input-dir and --output-zarr are not specified.",
     )
 
     # TODO: if we have a separate filter step for this, why is it here now? Redundant
@@ -473,13 +485,40 @@ def main():
 
     args = parser.parse_args()
 
-    export_gff(
-        input_zarr=args.input_zarr,
-        output=args.output_gff,
-        tqdm_position=args.tqdm_position,
-        min_transcript_length=args.min_transcript_length,
-        cpu_workers=args.cpu_workers,
-    )
+    if args.manifest is None:
+        if (args.input_zarr is None) or (args.output_gff is None):
+            logger.error(
+                "Error: one of the following must be provided:\n"
+                "--manifest\n OR \n --input-zarr and --output-gff"
+            )
+            raise RuntimeError
+
+        export_gff(
+            input_zarr=args.input_zarr,
+            output=args.output_gff,
+            tqdm_position=args.tqdm_position,
+            min_transcript_length=args.min_transcript_length,
+            cpu_workers=args.cpu_workers,
+        )
+
+    else:
+        with open(args.manifest) as fh:
+            entries = json.load(fh)
+
+        for entry in entries:
+            chromosome_id = entry["chromosome_id"]
+            input_zarr = entry["intervals_zarr"]
+            output_gff = entry["raw_gff"]
+
+            logger.info(f"Exporting raw gff for chromosome {chromosome_id}")
+
+            export_gff(
+                input_zarr=input_zarr,
+                output=output_gff,
+                tqdm_position=args.tqdm_position,
+                min_transcript_length=args.min_transcript_length,
+                cpu_workers=args.cpu_workers,
+            )
 
 
 if __name__ == "__main__":

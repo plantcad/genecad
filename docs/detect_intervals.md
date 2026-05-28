@@ -14,6 +14,9 @@ python detect_intervals.py \
 
 * `--input-dir`, `-i` - The base-level predictions, output from `predict.py`
 * `--output-zarr`, `-o` - Output zarr file containing interval/region data.
+* `--manifest` - Json file containing input and output paths for a set of chromosomes/samples.
+This can be used in place of specifying `--input-dir` and `--output-zarr`. Required key for each
+sample are: chromosome_id, predictions_dir, and intervals_zarr.
 * `--alpha-viterbi` - Float between 0 and 1. Increases the transition probability for all state transitions.
 Higher transition probabilities are more sensitive to detecting genes, but also increase the likelihood of
 finding pseudogenes and/or creating ill-formed gene models. Default None.
@@ -27,3 +30,7 @@ softmax, and so can be greater than 1.
 * `--keep-incomplete-features` - Flag. If set, gene models missing UTRs are allowed.
 * `--domain` - Domain sets the transition probabilities between states based on empirical observation from
 different types of organisms. Default: plant. Options: plant, animal.
+
+### Next Step
+
+`python export_gff.py` [Export GFF Documentation](export_gff.md)
