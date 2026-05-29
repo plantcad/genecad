@@ -36,7 +36,7 @@ def build_json(
         print(e)
         logger.error(
             f"File {input_zarr} is not formatted as an input sequence datatree. \n"
-            f"Check that it is the output of the command extract.py extract_fasta_file"
+            f"Check that it is the output of the command extract_train.py extract_fasta_file"
         )
 
     # Check if species exists
@@ -45,7 +45,7 @@ def build_json(
         if available_species == ["sequences", "intervals"]:
             raise ValueError(
                 f"{input_zarr} is an intervals file, not a sequence file. \n"
-                f"Check that it is the output of the command extract.py extract_fasta_file"
+                f"Check that it is the output of the command extract_train.py extract_fasta_file"
             )
         else:
             raise ValueError(
@@ -101,7 +101,7 @@ def main():
         "-i",
         type=str,
         required=True,
-        help="Sequences .zarr file created by extract.py",
+        help="Sequences .zarr file created by extract_train.py",
     )
     parser.add_argument(
         "--output-json",

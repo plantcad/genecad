@@ -753,7 +753,7 @@ if [ ! -f "$EXTRACT_DIR/raw_features.parquet" ]; then
     for sid in $SPECIES_IDS; do
       out_file="$SPECIES_EXTRACT_DIR/${sid}.parquet"
       (
-        run_python scripts/extract.py extract_gff_features \
+        run_python scripts/extract_train.py extract_gff_features \
           --input-dir "$GFF_DIR" \
           --species-id "$sid" \
           --output "$out_file"
@@ -788,7 +788,7 @@ pd.concat(dfs, ignore_index=True).to_parquet(out)
 print(f"Merged {len(paths)} species parquet files into {out}")
 PY
   else
-    run_python scripts/extract.py extract_gff_features \
+    run_python scripts/extract_train.py extract_gff_features \
       --input-dir "$GFF_DIR" \
       --species-id $SPECIES_IDS \
       --output "$EXTRACT_DIR/raw_features.parquet"
@@ -804,7 +804,7 @@ fi
 echo ""
 echo "[3/8] Extracting and tokenizing FASTA sequences..."
 if [ ! -d "$EXTRACT_DIR/tokens.zarr" ]; then
-  run_python scripts/extract.py extract_fasta_sequences \
+  run_python scripts/extract_train.py extract_fasta_sequences \
     --input-dir "$FASTA_DIR" \
     --species-id $SPECIES_IDS \
     --tokenizer-path "$BASE_MODEL" \

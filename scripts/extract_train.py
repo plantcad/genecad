@@ -895,7 +895,7 @@ def main():
         level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
     )
     parser = argparse.ArgumentParser(
-        description="Extract data from genomic files into structured formats"
+        description="Extract data from genomic files into structured formats for model training"
     )
     subparsers = parser.add_subparsers(
         dest="command", required=True, help="Command to execute"
@@ -938,26 +938,6 @@ def main():
         "--tokenizer-path", help="Path to the tokenizer model for tokenizing sequences"
     )
 
-    # Extract single FASTA sequence command
-    fasta_single_parser = subparsers.add_parser(
-        "extract_fasta_file", help="Extract sequences from a single FASTA file"
-    )
-    fasta_single_parser.add_argument("--species-id", required=True, help="Species ID")
-    fasta_single_parser.add_argument(
-        "--input-fasta", "-i", required=True, help="Path to FASTA file"
-    )
-    fasta_single_parser.add_argument(
-        "--chrom-map",
-        help="Rename chromosomes and/or select a subset of chromosomes to process. Format "
-        "chromosome mapping as 'src1:dst1,src2:dst2,...'. Optional.",
-    )
-    fasta_single_parser.add_argument(
-        "--output-zarr", "-o", required=True, help="Path to output file"
-    )
-    fasta_single_parser.add_argument(
-        "--model-path", help="Path to the base PlantCAD model for tokenizing sequences"
-    )
-
     # Validate configs command
     validate_parser = subparsers.add_parser(
         "validate_configs",
@@ -979,21 +959,12 @@ def main():
             args.skip_exon_features == "yes",
         )
 
-    # TODO make it clear this is only for training/eval species
     elif args.command == "extract_fasta_sequences":
         extract_fasta_sequences(
             args.input_dir,
             args.species_id,
             args.output,
             tokenizer_path=args.tokenizer_path,
-        )
-    elif args.command == "extract_fasta_file":
-        extract_fasta_file(
-            args.species_id,
-            args.input_fasta,
-            args.chrom_map,
-            args.output_zarr,
-            tokenizer_path=args.model_path,
         )
     elif args.command == "validate_configs":
         validate_configs(args.data_dir)
