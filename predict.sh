@@ -482,7 +482,6 @@ process_chromosome() {
         $PYTHON "$SCRIPT_DIR/scripts/detect_intervals.py" \
             --input-dir $PREDICTIONS_DIR \
             --output-zarr $INTERVALS_ZARR \
-            --decoding-methods "viterbi" \
             --domain "$MODE"
     fi
 
