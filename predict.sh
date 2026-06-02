@@ -512,6 +512,7 @@ process_chromosome() {
         $PYTHON "$SCRIPT_DIR/scripts/filter_raw_gff.py" \
             --input-gff $RAW_GENECAD_GFF \
             --output-gff $FILTERED_GENECAD_GFF
+    fi
 
     echo "${LOG_PREFIX} Done!"
 }
