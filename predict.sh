@@ -388,7 +388,7 @@ process_chromosome() {
         echo "${LOG_PREFIX} [1/5] Skipping — sequences.zarr already exists"
     else
         echo "${LOG_PREFIX} [1/5] Extracting sequences..."
-        $PYTHON "$SCRIPT_DIR/scripts/extract_train.py" \
+        $PYTHON "$SCRIPT_DIR/scripts/extract_fasta.py" \
             --species-id "$SPECIES_ID" \
             --input-fasta "$INPUT_FILE" \
             --chrom-map "${CHR_ID}:${CHR_ID}" \
