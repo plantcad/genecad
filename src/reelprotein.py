@@ -780,7 +780,7 @@ def merge_group_transcripts(grp, gene_entries, synthetic_mrna_id):
             cds_items.sort(key=lambda item: int(item[0][3]))
         else:
             cds_items.sort(key=lambda item: int(item[0][3]), reverse=True)
-        
+
         cumulative_cds_bases = 0
         for fields, _ in cds_items:
             fields[7] = str((-cumulative_cds_bases) % 3)

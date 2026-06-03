@@ -1216,7 +1216,9 @@ def generate_gff(
         for idx, cds_row in cds_intervals.iterrows():
             # Phase is how many bases to skip to reach the next codon start
             cds_phase_map[int(idx)] = (-cumulative_cds_bases) % 3
-            cds_len = int(cds_row["stop"]) - int(cds_row["start"]) + 1  # inclusive coords
+            cds_len = (
+                int(cds_row["stop"]) - int(cds_row["start"]) + 1
+            )  # inclusive coords
             cumulative_cds_bases += cds_len
 
         # Create feature records (CDS, UTRs) - use original gene_group to include all features except when filtered
@@ -1231,7 +1233,9 @@ def generate_gff(
 
             # Assign the pre-computed phase for CDS features; None (.) for UTRs
             phase: int | None = (
-                cds_phase_map.get(int(idx)) if gff_type == GffFeatureType.CDS.value else None
+                cds_phase_map.get(int(idx))
+                if gff_type == GffFeatureType.CDS.value
+                else None
             )
 
             gff_records.append(

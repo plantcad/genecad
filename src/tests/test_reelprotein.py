@@ -192,31 +192,31 @@ def test_merge_group_transcripts_recalculates_phases(tmp_path):
             ]
         )
     )
-    
+
     header, gene_entries = reelprotein.read_gff_raw(gff_path)
-    
+
     # We call merge_group_transcripts for gene1 and gene2
     grp_keys = [("chr1", "gene1"), ("chr1", "gene2")]
     synthetic_mrna_id = "concat_gene1_gene2.t1"
-    
+
     mrna_fields, merged_children = reelprotein.merge_group_transcripts(
         grp_keys, gene_entries, synthetic_mrna_id
     )
-    
+
     # Find the CDS features in merged_children
     cds_features = [child for child, attrs in merged_children if child[2] == "CDS"]
     assert len(cds_features) == 2
-    
+
     # cds1 start=10, end=16 (length 7). Phase should be 0.
     assert cds_features[0][3] == "10"
     assert cds_features[0][4] == "16"
     assert cds_features[0][7] == "0"
-    
+
     # cds2 start=30, end=38 (length 9). Phase should be recalculated: (-7)%3 = 2.
     assert cds_features[1][3] == "30"
     assert cds_features[1][4] == "38"
     assert cds_features[1][7] == "2"
-    
+
     # Prepare input GFF3 with two genes on reverse strand
     # First transcribed/translated CDS (higher coordinates): cds1 30..36 (length 7). Phase 0.
     # Second transcribed/translated CDS (lower coordinates): cds2 10..18 (length 9). Original phase 0.
@@ -235,24 +235,25 @@ def test_merge_group_transcripts_recalculates_phases(tmp_path):
             ]
         )
     )
-    
+
     header_rev, gene_entries_rev = reelprotein.read_gff_raw(gff_path_rev)
     grp_keys_rev = [("chr1", "gene1"), ("chr1", "gene2")]
-    
+
     mrna_fields_rev, merged_children_rev = reelprotein.merge_group_transcripts(
         grp_keys_rev, gene_entries_rev, synthetic_mrna_id
     )
-    
-    cds_features_rev = [child for child, attrs in merged_children_rev if child[2] == "CDS"]
+
+    cds_features_rev = [
+        child for child, attrs in merged_children_rev if child[2] == "CDS"
+    ]
     assert len(cds_features_rev) == 2
-    
+
     # On negative strand, features are sorted in descending order of coordinate
     # So 30..36 is index 0, 10..18 is index 1.
     assert cds_features_rev[0][3] == "30"
     assert cds_features_rev[0][4] == "36"
     assert cds_features_rev[0][7] == "0"
-    
+
     assert cds_features_rev[1][3] == "10"
     assert cds_features_rev[1][4] == "18"
     assert cds_features_rev[1][7] == "2"
-
