@@ -40,8 +40,8 @@ torch = [
   "flash-attn>=2.8.3",
 ]
 mamba = [
-  "causal-conv1d==1.5.0.post8",
-  "mamba-ssm==2.2.4",
+  "causal-conv1d==1.6.2.post1",
+  "mamba-ssm==2.3.2.post1",
 ]
 
 [project.scripts]
@@ -59,8 +59,8 @@ packages = ["src"]
 torch = { index = "pytorch-cu128" }
 
 # Force build from source for mamba and causal-conv1d
-mamba-ssm = { git = "https://github.com/state-spaces/mamba", tag = "v2.2.4" }
-causal-conv1d = { git = "https://github.com/Dao-AILab/causal-conv1d", tag = "v1.5.0.post8" }
+mamba-ssm = { git = "https://github.com/state-spaces/mamba", tag = "v2.3.2.post1" }
+causal-conv1d = { git = "https://github.com/Dao-AILab/causal-conv1d", tag = "v1.6.2.post1" }
 
 [[tool.uv.index]]
 name = "pytorch-cu128"
@@ -72,12 +72,12 @@ no-build-isolation-package = ["mamba-ssm", "causal-conv1d", "flash-attn"]
 
 [[tool.uv.dependency-metadata]]
 name = "mamba-ssm"
-version = "2.2.4"
+version = "2.3.2.post1"
 requires-dist = ["torch", "einops"]
 
 [[tool.uv.dependency-metadata]]
 name = "causal-conv1d"
-version = "1.5.0.post8"
+version = "1.6.2.post1"
 requires-dist = ["torch", "einops"]
 
 [tool.pyrefly]

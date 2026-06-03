@@ -1194,15 +1194,45 @@ def generate_gff(
             )
         )
 
+        # Pre-compute CDS phases for this gene in 5'->3' order.
+        # GFF3 spec: phase = number of bases to skip at the start of a CDS feature
+        # to reach the first complete codon (0, 1, or 2).
+        #
+        # Correct formula: phase[i] = (-cumulative_bases_before_exon_i) % 3
+        # where cumulative_bases is the total CDS length processed so far.
+        # Intervals use 0-based inclusive [start, stop] → length = stop - start + 1.
+        #
+        # Process CDS exons in 5'->3' coding direction:
+        #   + strand: ascending genomic position
+        #   - strand: descending genomic position
+        cds_intervals = gene_group[gene_group["entity_name"] == "cds"].copy()
+        if strand_symbol == "+":
+            cds_intervals = cds_intervals.sort_values("start", ascending=True)
+        else:
+            cds_intervals = cds_intervals.sort_values("start", ascending=False)
+
+        cds_phase_map: dict[int, int] = {}  # maps DataFrame row index -> GFF3 phase
+        cumulative_cds_bases = 0
+        for idx, cds_row in cds_intervals.iterrows():
+            # Phase is how many bases to skip to reach the next codon start
+            cds_phase_map[int(idx)] = (-cumulative_cds_bases) % 3
+            cds_len = int(cds_row["stop"]) - int(cds_row["start"]) + 1  # inclusive coords
+            cumulative_cds_bases += cds_len
+
         # Create feature records (CDS, UTRs) - use original gene_group to include all features except when filtered
         feature_counters = {ftype: 0 for ftype in gff_feature_map.values()}
-        for _, interval in gene_group.iterrows():
+        for idx, interval in gene_group.iterrows():
             entity_name = interval["entity_name"]
             gff_type = gff_feature_map.get(entity_name)
             if not gff_type:
                 continue
             feature_counters[gff_type] += 1
             feature_id = f"{rna_id}.{gff_type}.{feature_counters[gff_type]}"
+
+            # Assign the pre-computed phase for CDS features; None (.) for UTRs
+            phase: int | None = (
+                cds_phase_map.get(int(idx)) if gff_type == GffFeatureType.CDS.value else None
+            )
 
             gff_records.append(
                 GffRecord(
@@ -1212,7 +1242,7 @@ def generate_gff(
                     start=int(interval["start"]) + 1,  # 1-based
                     end=int(interval["stop"]) + 1,  # 1-based
                     strand=strand_symbol,
-                    phase=None,  # Phase remains None
+                    phase=phase,
                     attributes=_create_gff_attributes(id=feature_id, parent_id=rna_id),
                 )
             )

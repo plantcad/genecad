@@ -11,12 +11,12 @@ resolution-markers = [
 
 [[manifest.dependency-metadata]]
 name = "causal-conv1d"
-version = "1.5.0.post8"
+version = "1.6.2.post1"
 requires-dist = ["torch", "einops"]
 
 [[manifest.dependency-metadata]]
 name = "mamba-ssm"
-version = "2.2.4"
+version = "2.3.2.post1"
 requires-dist = ["torch", "einops"]
 
 [[package]]
@@ -158,8 +158,8 @@ wheels = [
 
 [[package]]
 name = "causal-conv1d"
-version = "1.5.0.post8"
-source = { git = "https://github.com/Dao-AILab/causal-conv1d?tag=v1.5.0.post8#82867a9d2e6907cc0f637ac6aff318f696838548" }
+version = "1.6.2.post1"
+source = { git = "https://github.com/Dao-AILab/causal-conv1d?tag=v1.6.2.post1#4f6ae4e26ae5fe8af9372f8d312ab25cc4595223" }
 dependencies = [
     { name = "einops" },
     { name = "torch" },
@@ -447,11 +447,11 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "biopython", specifier = "~=1.85" },
-    { name = "causal-conv1d", marker = "extra == 'mamba'", git = "https://github.com/Dao-AILab/causal-conv1d?tag=v1.5.0.post8" },
+    { name = "causal-conv1d", marker = "extra == 'mamba'", git = "https://github.com/Dao-AILab/causal-conv1d?tag=v1.6.2.post1" },
     { name = "flash-attn", marker = "extra == 'torch'", specifier = ">=2.8.3" },
     { name = "gradio", specifier = ">=4.0.0" },
     { name = "lightning", marker = "extra == 'torch'", specifier = "~=2.5.1" },
-    { name = "mamba-ssm", marker = "extra == 'mamba'", git = "https://github.com/state-spaces/mamba?tag=v2.2.4" },
+    { name = "mamba-ssm", marker = "extra == 'mamba'", git = "https://github.com/state-spaces/mamba?tag=v2.3.2.post1" },
     { name = "matplotlib", specifier = "~=3.10.1" },
     { name = "numba", specifier = "~=0.61.0" },
     { name = "numpy", specifier = "~=2.1.2" },
@@ -774,8 +774,8 @@ wheels = [
 
 [[package]]
 name = "mamba-ssm"
-version = "2.2.4"
-source = { git = "https://github.com/state-spaces/mamba?tag=v2.2.4#95d8aba8a8c75aedcaa6143713b11e745e7cd0d9" }
+version = "2.3.2.post1"
+source = { git = "https://github.com/state-spaces/mamba?tag=v2.3.2.post1#a14b1dff0454a3bc27d9eb31355dc01e4b2490ec" }
 dependencies = [
     { name = "einops" },
     { name = "torch" },
