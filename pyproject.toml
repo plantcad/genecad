@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "genecad"
-version = "0.1.0"
+version = "0.2.0"
 description = "GeneCAD: A long-context genome annotation model built on PlantCAD2"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
