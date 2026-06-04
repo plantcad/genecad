@@ -10,7 +10,7 @@
 [![Release Wheel](https://img.shields.io/badge/Install-GitHub%20Release%20Wheel-orange)](#step-1-download-and-install)
 [![Docker](https://img.shields.io/badge/Install-Docker-blue?logo=docker)](#using-docker)
 [![GeneCAD Downloads](https://img.shields.io/github/downloads/plantcad/genecad/total?label=GitHub%20downloads)](https://github.com/plantcad/genecad/releases)
-[![HF Downloads](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fplantcad%2Fgenecad%2Fmain%2F.github%2Fbadges%2Fhf-downloads.json)](https://huggingface.co/plantcad/models)
+[![HF Downloads](https://img.shields.io/endpoint?url=https%3A%2F%2Fgist.githubusercontent.com%2Fzongyanliu%2F6f22252f237f3e06a4af3ba3cbed8485%2Fraw%2Fhf-downloads.json)](https://huggingface.co/plantcad/models)
 [![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/1dVY1WoLSHRDS7o-5dMvgNylywh7Ei1w3)
 
 GeneCAD is an end-to-end genome annotation pipeline for plants, powered by the DNA foundation model [PlantCAD2](https://doi.org/10.1101/2025.10.31.685877). Give it a genome FASTA and it returns a protein-refined GFF3 annotation. No species-specific training data, no external alignments, and no model configuration required.

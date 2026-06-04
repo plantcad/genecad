@@ -5,36 +5,51 @@ on:
   schedule:
     - cron: "17 3 * * *"
 
-permissions:
-  contents: write
-
 jobs:
   update-badge:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Update badge JSON
+      - name: Update badge Gist
+        env:
+          GIST_TOKEN: ${{ secrets.GIST_TOKEN }}
+          GIST_ID: ${{ secrets.GIST_ID }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
           python - <<'PY'
           import json
-          import pathlib
+          import os
+          import time
           import urllib.request
+          import urllib.error
+
+          def fetch_with_retry(url, headers=None, retries=4, base_delay=10):
+              for attempt in range(retries):
+                  req = urllib.request.Request(url, headers=headers or {})
+                  try:
+                      with urllib.request.urlopen(req, timeout=30) as r:
+                          return json.load(r)
+                  except urllib.error.HTTPError as e:
+                      if e.code == 429 and attempt < retries - 1:
+                          delay = base_delay * (2 ** attempt)
+                          print(f"Rate limited. Retrying in {delay}s...")
+                          time.sleep(delay)
+                      else:
+                          raise
 
           models = [
               "plantcad/genecad_plant",
               "plantcad/genecad_animal",
           ]
 
+          hf_headers = {}
+          if os.environ.get("HF_TOKEN"):
+              hf_headers["Authorization"] = f"Bearer {os.environ['HF_TOKEN']}"
+
           total = 0
           details = {}
           for model in models:
               url = f"https://huggingface.co/api/models/{model}"
-              with urllib.request.urlopen(url, timeout=30) as response:
-                  payload = json.load(response)
+              payload = fetch_with_retry(url, headers=hf_headers)
               downloads = int(payload.get("downloads") or 0)
               details[model] = downloads
               total += downloads
@@ -48,24 +63,30 @@ jobs:
               "cacheSeconds": 21600,
           }
 
-          path = pathlib.Path(".github/badges/hf-downloads.json")
-          path.parent.mkdir(parents=True, exist_ok=True)
-          path.write_text(json.dumps(badge, indent=2) + "\n")
-
           print("Combined Hugging Face downloads:")
           for model, downloads in details.items():
-              print(f"- {model}: {downloads:,}")
-          print(f"Total: {total:,}")
-          PY
+              print(f"  {model}: {downloads:,}")
+          print(f"  Total: {total:,}")
 
-      - name: Commit badge update
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add .github/badges/hf-downloads.json
-          if git diff --cached --quiet; then
-            echo "Badge already up to date."
-          else
-            git commit -m "Update Hugging Face downloads badge"
-            git push origin HEAD:${{ github.ref_name }}
-          fi
+          gist_token = os.environ["GIST_TOKEN"]
+          gist_id = os.environ["GIST_ID"]
+          body = json.dumps({
+              "files": {
+                  "hf-downloads.json": {
+                      "content": json.dumps(badge, indent=2) + "\n"
+                  }
+              }
+          }).encode()
+          req = urllib.request.Request(
+              f"https://api.github.com/gists/{gist_id}",
+              data=body,
+              method="PATCH",
+              headers={
+                  "Authorization": f"Bearer {gist_token}",
+                  "Accept": "application/vnd.github+json",
+                  "Content-Type": "application/json",
+              },
+          )
+          with urllib.request.urlopen(req, timeout=30) as r:
+              print(f"Gist updated: {json.load(r)['html_url']}")
+          PY
