@@ -23,14 +23,14 @@ GeneCAD predictions are returned in a standardized [GFF3 format](http://www.ense
 and can be further refined using [ReelProtein](https://onlinelibrary.wiley.com/doi/10.1111/tpj.70483).
 Currently, both plant and vertebrate models are available.
 
+</div>
+
 > [!WARNING]
 > We identified a significant problem in previous versions regarding missing BUSCO genes
 > (thank you [MaizeGDB](https://www.maizegdb.org/) team for alerting us!). The model was failing
 > because of incosistencies in the model's training data and limitations in the previous
 > architecture. These problems have since been identified and fixed. If you downloaded GeneCAD
 > v0.1.0 or earlier, we recommend installing the latest version and re-running all predictions.
-
-</div>
 
 
 ## Table of Contents
