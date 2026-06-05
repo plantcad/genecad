@@ -1,14 +1,4 @@
-# Detailed documentation for extract.py
-
-## extract_gff_features
-
-TODO - not used for inference
-
-## extract_fasta_sequences
-
-TODO - not used for inference
-
-## extract_fasta_file
+# Detailed documentation for extract_fasta.py
 
 Prepares fasta sequence for inference.
 
@@ -28,8 +18,8 @@ This is used primarily in file names and metadata tags.
 * `--model-path` - Path to the base PlantCAD model being used.
 Both absolute local paths and HuggingFace repository paths are supported.
 For help determining which model to use, see [Available GeneCAD Models]
-[!NOTE]
-Use the same GeneCAD and PlantCAD models through all steps in the pipeline.
+> [!NOTE]
+> Use the same GeneCAD and PlantCAD models through all steps in the pipeline.
 * `--output-zarr`, `-o` - path to the output sequence dataset file. The output
 is in .zarr format and will appear as a directory.
 * `--chrom-map` - (Optional) Map to rename chromosomes and/or select a
@@ -42,8 +32,3 @@ be formatted as a comma-separated list of key-value pairs, e.g.
 ### Next Step
 
 `python predict.py` [Predict Documentation](predict.md)
-
-
-## validate_configs
-
-TODO - not used for inference
