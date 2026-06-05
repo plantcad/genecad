@@ -19,16 +19,16 @@ along with a modernBERT encoder and a conditional random field (CRF), to
 predict gene structure directly from FASTA assemblies, without the need for additional
 transcriptomic or proteomic information or direct sequence alignment.
 
-GeneCAD predictions are returned in a standardized GFF3 format and can be further
-refined using [ReelProtein](https://onlinelibrary.wiley.com/doi/10.1111/tpj.70483).
+GeneCAD predictions are returned in a standardized [GFF3 format](http://www.ensembl.org/info/website/upload/gff3.html)
+and can be further refined using [ReelProtein](https://onlinelibrary.wiley.com/doi/10.1111/tpj.70483).
 Currently, both plant and vertebrate models are available.
 
-> [!CAUTION]
+> [!WARNING]
 > We identified a significant problem in previous versions regarding missing BUSCO genes
 > (thank you [MaizeGDB](https://www.maizegdb.org/) team for alerting us!). The model was failing
 > because of incosistencies in the model's training data and limitations in the previous
-> architecture. These problems have since been identified and fixed. If you downloaded GeneCAD before
-> **June 3, 2026**, (v0.1.0 or earlier) we recommend installing the latest version and re-running all predictions.
+> architecture. These problems have since been identified and fixed. If you downloaded GeneCAD
+> v0.1.0 or earlier, we recommend installing the latest version and re-running all predictions.
 
 </div>
 
