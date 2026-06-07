@@ -22,17 +22,21 @@ jobs:
           import urllib.request
           import urllib.error
 
-          def fetch_with_retry(url, headers=None, retries=4, base_delay=10):
+          def fetch_with_retry(url, headers=None, retries=4, base_delay=15):
               for attempt in range(retries):
                   req = urllib.request.Request(url, headers=headers or {})
                   try:
                       with urllib.request.urlopen(req, timeout=30) as r:
                           return json.load(r)
                   except urllib.error.HTTPError as e:
-                      if e.code == 429 and attempt < retries - 1:
-                          delay = base_delay * (2 ** attempt)
-                          print(f"Rate limited. Retrying in {delay}s...")
-                          time.sleep(delay)
+                      if e.code == 429:
+                          if attempt < retries - 1:
+                              delay = base_delay * (2 ** attempt)
+                              print(f"Rate limited (attempt {attempt+1}/{retries}). Retrying in {delay}s...")
+                              time.sleep(delay)
+                          else:
+                              print("Rate limited after all retries. Skipping update.")
+                              raise SystemExit(0)
                       else:
                           raise
 
