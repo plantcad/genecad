@@ -41,7 +41,9 @@ class CheckpointAtValidation(Callback):
     def __init__(self, dirpath: str) -> None:
         self._dirpath = dirpath
 
-    def on_validation_epoch_end(self, trainer: L.Trainer, pl_module: L.LightningModule) -> None:
+    def on_validation_epoch_end(
+        self, trainer: L.Trainer, pl_module: L.LightningModule
+    ) -> None:
         if trainer.sanity_checking:
             return
         os.makedirs(self._dirpath, exist_ok=True)
@@ -468,7 +470,12 @@ def train(args: Args) -> None:
     lr_monitor_callback = LearningRateMonitor(logging_interval="step")
 
     throughput_monitor_callback = ThroughputMonitor()
-    callbacks = [checkpoint_callback, val_checkpoint_callback, lr_monitor_callback, throughput_monitor_callback]
+    callbacks = [
+        checkpoint_callback,
+        val_checkpoint_callback,
+        lr_monitor_callback,
+        throughput_monitor_callback,
+    ]
 
     strategy = args.strategy
     if config.use_head_encoder and strategy == "ddp":

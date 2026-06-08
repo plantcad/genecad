@@ -160,7 +160,14 @@ def plot_intervals(
         & (intervals_df["start"] <= region_end)
     ].copy()
 
-    entity_order = ["transcript", "exon", "five_prime_utr", "cds", "three_prime_utr", "intron"]
+    entity_order = [
+        "transcript",
+        "exon",
+        "five_prime_utr",
+        "cds",
+        "three_prime_utr",
+        "intron",
+    ]
     entity_y = {name: i for i, name in enumerate(entity_order)}
     n_tracks = len(entity_order)
 
@@ -325,15 +332,23 @@ def step_extract(
         logger.info("[1/3] sequences.zarr already exists — skipping extraction")
         return
     logger.info("[1/3] Extracting FASTA → sequences.zarr ...")
-    _run([
-        _python(), os.path.join(script_dir, "extract.py"),
-        "extract_fasta_file",
-        "--species-id", species_id,
-        "--fasta-file", fasta,
-        "--chrom-map", f"{chromosome}:{chromosome}",
-        "--tokenizer-path", model_path,
-        "--output", output_zarr,
-    ])
+    _run(
+        [
+            _python(),
+            os.path.join(script_dir, "extract.py"),
+            "extract_fasta_file",
+            "--species-id",
+            species_id,
+            "--fasta-file",
+            fasta,
+            "--chrom-map",
+            f"{chromosome}:{chromosome}",
+            "--tokenizer-path",
+            model_path,
+            "--output",
+            output_zarr,
+        ]
+    )
 
 
 def step_predict(
@@ -355,22 +370,37 @@ def step_predict(
         logger.info("[2/3] predictions.zarr already exists — skipping inference")
         return
     logger.info("[2/3] Running inference → predictions.zarr ...")
-    _run([
-        _python(), os.path.join(script_dir, "predict.py"),
-        "create_predictions",
-        "--input", sequences_zarr,
-        "--output-dir", predictions_dir,
-        "--model-path", model_path,
-        "--model-checkpoint", checkpoint,
-        "--species-id", species_id,
-        "--chromosome-id", chromosome,
-        "--batch-size", str(batch_size),
-        "--device", device,
-        "--dtype", dtype,
-        "--window-size", str(window_size),
-        "--stride", str(stride),
-        "--suppress-dynamo-errors", "yes",
-    ])
+    _run(
+        [
+            _python(),
+            os.path.join(script_dir, "predict.py"),
+            "create_predictions",
+            "--input",
+            sequences_zarr,
+            "--output-dir",
+            predictions_dir,
+            "--model-path",
+            model_path,
+            "--model-checkpoint",
+            checkpoint,
+            "--species-id",
+            species_id,
+            "--chromosome-id",
+            chromosome,
+            "--batch-size",
+            str(batch_size),
+            "--device",
+            device,
+            "--dtype",
+            dtype,
+            "--window-size",
+            str(window_size),
+            "--stride",
+            str(stride),
+            "--suppress-dynamo-errors",
+            "yes",
+        ]
+    )
 
 
 def step_detect_intervals(
@@ -384,15 +414,23 @@ def step_detect_intervals(
         logger.info("[3/3] intervals.zarr already exists — skipping interval detection")
         return
     logger.info("[3/3] Detecting intervals → intervals.zarr ...")
-    _run([
-        _python(), os.path.join(script_dir, "predict.py"),
-        "detect_intervals",
-        "--input-dir", predictions_dir,
-        "--output", intervals_zarr,
-        "--decoding-methods", decoding_methods,
-        "--remove-incomplete-features", "yes",
-        "--domain", domain,
-    ])
+    _run(
+        [
+            _python(),
+            os.path.join(script_dir, "predict.py"),
+            "detect_intervals",
+            "--input-dir",
+            predictions_dir,
+            "--output",
+            intervals_zarr,
+            "--decoding-methods",
+            decoding_methods,
+            "--remove-incomplete-features",
+            "yes",
+            "--domain",
+            domain,
+        ]
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -412,7 +450,9 @@ def main() -> None:
     )
 
     # --- Required inputs ---
-    parser.add_argument("--fasta", required=True, help="Input genome FASTA file (.fa or .fa.gz)")
+    parser.add_argument(
+        "--fasta", required=True, help="Input genome FASTA file (.fa or .fa.gz)"
+    )
     parser.add_argument(
         "--checkpoint",
         required=True,
@@ -423,9 +463,13 @@ def main() -> None:
         required=True,
         help="Path to base encoder model or HuggingFace repo ID (e.g. emarro/pcad2-200M-cnet-baseline)",
     )
-    parser.add_argument("--species-id", required=True, help="Species label (e.g. Athaliana)")
     parser.add_argument(
-        "--chromosome", required=True, help="Chromosome/contig ID as it appears in the FASTA header"
+        "--species-id", required=True, help="Species label (e.g. Athaliana)"
+    )
+    parser.add_argument(
+        "--chromosome",
+        required=True,
+        help="Chromosome/contig ID as it appears in the FASTA header",
     )
 
     # --- Output ---
@@ -456,7 +500,9 @@ def main() -> None:
     )
 
     # --- Model / inference options ---
-    parser.add_argument("--batch-size", type=int, default=32, help="Inference batch size (default: 32)")
+    parser.add_argument(
+        "--batch-size", type=int, default=32, help="Inference batch size (default: 32)"
+    )
     parser.add_argument(
         "--device", default="cuda", help="PyTorch device string (default: cuda)"
     )
@@ -544,7 +590,9 @@ def main() -> None:
 
     chromosome_start = int(sequences_ds.sequence.isel(sequence=0).item())
     chromosome_end = int(sequences_ds.sequence.isel(sequence=-1).item())
-    region_start = args.region_start if args.region_start is not None else chromosome_start
+    region_start = (
+        args.region_start if args.region_start is not None else chromosome_start
+    )
     region_end = args.region_end if args.region_end is not None else chromosome_end
     if region_start > region_end:
         parser.error(
@@ -553,7 +601,10 @@ def main() -> None:
         )
 
     logger.info(
-        "Visualizing region %d–%d on chromosome %s", region_start, region_end, args.chromosome
+        "Visualizing region %d–%d on chromosome %s",
+        region_start,
+        region_end,
+        args.chromosome,
     )
 
     intervals_df = intervals_ds.to_dataframe().reset_index()
