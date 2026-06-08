@@ -82,11 +82,6 @@ def main():
         help="Hugging Face Repo ID for models",
     )
     parser.add_argument(
-        "--filter-unmerged",
-        action="store_true",
-        help="If set, strictly filter out any originally unmerged genes that the model did not score positively.",
-    )
-    parser.add_argument(
         "--gpus",
         default="0",
         help="Comma-separated GPU IDs for ProtT5 embedding (e.g. '0,1,2'). Default: '0'.",
@@ -101,7 +96,7 @@ def main():
         input_fasta=args.input_fasta,
         output_gff=args.output_gff,
         model_source=args.reelprotein_model_path,
-        filter_unmerged=args.filter_unmerged,
+        filter_unmerged=False,
         gpus=gpus,
     )
 

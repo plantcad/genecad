@@ -1,8 +1,6 @@
 # Detailed documenation for predict.py
 
-## create_predictions
-
-Performs multiclass classification on each base pair in the input sequence.
+Step [2/7] of the prediction pipeline performs multiclass classification on each base pair in the input sequence.
 [NOTE!] This command requires a CUDA GPU
 ```
 python predict.py \
@@ -11,11 +9,11 @@ python predict.py \
 --model-path emarro/pcad2-200M-cnet-baseline \
 --species-id species_name
 ```
-Note: This step can be run on either a single chromosome, or a set of chromosomes.
-If using single-chromosome mode, the parameters `--chromosome-id`, `--input-zarr`, and
-`--output-dir` are required. If using multi-chromosome mode, the parameter
-`--manifest` is required. The manifest json file contains the required input and output
-information for each chromosome. An example of the formatting is shown below.
+> [!NOTE] This step can be run on either a single chromosome, or a set of chromosomes.
+> If using single-chromosome mode, the parameters `--chromosome-id`, `--input-zarr`, and
+> `--output-dir` are required. If using multi-chromosome mode, the parameter
+> `--manifest` is required. The manifest json file contains the required input and output
+> information for each chromosome, and can be generated using `create_manifest.py` ([Documentation](create_manifest.md))
 
 ### Parameters
 
@@ -36,13 +34,7 @@ information for each chromosome. An example of the formatting is shown below.
 * `--triton-warmup` - Pre-warms the Triton autotune cache with dummy data. If set, input data is ignored and
 output will not be written to file.
 
-An example of the formatting for the `manifest` file
-```
-[{"chromosome_id": "Chr1", "sequence_zarr": "sequence.zarr", "predictions_dir":"predictions_Chr1/"},
-{"chromosome_id": "Chr2", "sequence_zarr": "sequence.zarr", "predictions_dir":"predictions_Chr2/"},
-{"chromosome_id": "Chr3", "sequence_zarr": "sequence.zarr", "predictions_dir":"predictions_Chr3/"}]
 
-```
 
 ### Next Step
 

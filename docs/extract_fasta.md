@@ -1,9 +1,9 @@
 # Detailed documentation for extract_fasta.py
 
-Prepares fasta sequence for inference.
+Step [1/7] of the prediction pipeline prepares fasta sequences for inference.
 
 ```
-python extract.py extract_fasta_file \
+python extract_fasta.py \
 --species-id species_name \
 --input-fasta path/to/fasta.fa \
 --model-path emarro/pcad2-200M-cnet-baseline \
@@ -31,4 +31,9 @@ be formatted as a comma-separated list of key-value pairs, e.g.
 
 ### Next Step
 
-`python predict.py` [Predict Documentation](predict.md)
+Optional: If your fasta file has multiple contigs, use `create_manifest.py` to
+process all contigs at once. Otherwise, you will have to run through the pipeline steps
+independently for each contig. [Create Manifest Documentation](create_manifest.md)
+
+If you are only processing one contig or would like to process contigs independently, move
+on to `python predict.py` [Predict Documentation](predict.md)

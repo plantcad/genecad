@@ -1,6 +1,6 @@
 # Detailed documentation for export_gff.py
 
-This script converts predicted intervals into a GFF3 formatted file.
+Step [4/7] of the prediction pipeline converts predicted intervals into a GFF3 formatted file.
 
 ```
 python export_gff.py \
@@ -24,4 +24,4 @@ Optional, default: None
 
 ### Next Step
 
-`python filter_raw_gff.py [Filter Raw GFF Documentation](filter_raw_gff.md)
+`python filter_raw_gff.py` [Filter Raw GFF Documentation](filter_raw_gff.md)

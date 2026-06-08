@@ -1,6 +1,6 @@
 # Detailed documentation for detect_intervals.py
 
-This script converts base-level classifications to genomic regions,
+Step [3/7] of the prediction pipeline converts base-level classifications to genomic regions,
 such as CDS and UTR exons using the viterbi algorithm and domain-specific
  transition probabilities.
 

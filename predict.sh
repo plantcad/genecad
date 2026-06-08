@@ -385,9 +385,9 @@ process_chromosome() {
 
     # --- Step 1: Extract Sequences ---
     if [[ -e $SEQUENCES_ZARR ]]; then
-        echo "${LOG_PREFIX} [1/5] Skipping — sequences.zarr already exists"
+        echo "${LOG_PREFIX} [1/7] Skipping — sequences.zarr already exists"
     else
-        echo "${LOG_PREFIX} [1/5] Extracting sequences..."
+        echo "${LOG_PREFIX} [1/7] Extracting sequences..."
         $PYTHON "$SCRIPT_DIR/scripts/extract_fasta.py" \
             --species-id "$SPECIES_ID" \
             --input-fasta "$INPUT_FILE" \
@@ -398,7 +398,7 @@ process_chromosome() {
 
     # --- Step 2: Predict ---
     if [[ -e $PREDICTIONS_DIR ]]; then
-        echo "${LOG_PREFIX} [2/5] Skipping — predictions dir already exists"
+        echo "${LOG_PREFIX} [2/7] Skipping — predictions dir already exists"
     else
         local gpu_id="$GPU_ID"
         local bs="$BATCH_SIZE"
@@ -408,7 +408,7 @@ process_chromosome() {
         while [[ $attempt -lt $max_attempts ]]; do
             local exit_code=0
             if [[ "$PREDICT_MODE" == "ddp" ]]; then
-                echo "${LOG_PREFIX} [2/5] Prediction via DDP (batch=${bs}/GPU, attempt $((attempt+1))/${max_attempts})..."
+                echo "${LOG_PREFIX} [2/7] Prediction via DDP (batch=${bs}/GPU, attempt $((attempt+1))/${max_attempts})..."
                 CUDA_VISIBLE_DEVICES="$GPU_LIST_STR" \
                 $PY_LAUNCHER \
                     "$SCRIPT_DIR/scripts/predict.py" \
@@ -423,7 +423,7 @@ process_chromosome() {
                     --window-size 8192 \
                     --stride 4096 || exit_code=$?
             elif [[ "$PREDICT_MODE" == "ddp_slurm" ]]; then
-                echo "${LOG_PREFIX} [2/5] Prediction via SLURM distributed (batch=${bs}/GPU, attempt $((attempt+1))/${max_attempts})..."
+                echo "${LOG_PREFIX} [2/7] Prediction via SLURM distributed (batch=${bs}/GPU, attempt $((attempt+1))/${max_attempts})..."
                 $PY_LAUNCHER "$SCRIPT_DIR/scripts/predict.py" \
                     --chromosome-id "$CHR_ID" \
                     --input-zarr $SEQUENCES_ZARR \
@@ -436,7 +436,7 @@ process_chromosome() {
                     --window-size 8192 \
                     --stride 4096 || exit_code=$?
             else
-                echo "${LOG_PREFIX} [2/5] Prediction on GPU ${gpu_id} (batch=${bs}, attempt $((attempt+1))/${max_attempts})..."
+                echo "${LOG_PREFIX} [2/7] Prediction on GPU ${gpu_id} (batch=${bs}, attempt $((attempt+1))/${max_attempts})..."
                 CUDA_VISIBLE_DEVICES="$gpu_id" \
                 $PY_LAUNCHER "$SCRIPT_DIR/scripts/predict.py" \
                     --chromosome-id "$CHR_ID" \
@@ -454,7 +454,7 @@ process_chromosome() {
             if [[ $exit_code -eq 0 ]]; then
                 success=1
                 if [[ $attempt -gt 0 ]]; then
-                    echo "${LOG_PREFIX} [2/6] Succeeded with batch size ${bs} after ${attempt} retry(s)."
+                    echo "${LOG_PREFIX} [2/7] Succeeded with batch size ${bs} after ${attempt} retry(s)."
                     echo "${LOG_PREFIX}   TIP: Add '-b ${bs}' to future runs to skip probing."
                 fi
                 break
@@ -462,9 +462,9 @@ process_chromosome() {
             local next_bs=$(( bs * 4 / 5 ))   # reduce by 20%
             [[ $next_bs -ge $bs ]] && next_bs=$(( bs - 1 ))  # guard against bs<5 rounding to same value
             [[ $next_bs -lt 1 ]] && next_bs=1
-            echo "${LOG_PREFIX} [2/5] Failed (exit ${exit_code}). Reducing batch size by 20%%: ${bs} → ${next_bs}..."
+            echo "${LOG_PREFIX} [2/7] Failed (exit ${exit_code}). Reducing batch size by 20%%: ${bs} → ${next_bs}..."
             bs=$next_bs
-            rm -rf "$PIPELINE_DIR/predictions.zarr"
+            rm -rf $PREDICTIONS_DIR
             attempt=$(( attempt + 1 ))
         done
         if [[ $success -ne 1 ]]; then
@@ -476,9 +476,9 @@ process_chromosome() {
 
     # --- Step 3: Detect Intervals ---
     if [[ -e $INTERVALS_ZARR ]]; then
-        echo "${LOG_PREFIX} [3/5] Skipping — intervals.zarr already exists"
+        echo "${LOG_PREFIX} [3/7] Skipping — intervals.zarr already exists"
     else
-        echo "${LOG_PREFIX} [3/5] Detecting intervals (Viterbi decoding)..."
+        echo "${LOG_PREFIX} [3/7] Detecting intervals (Viterbi decoding)..."
         $PYTHON "$SCRIPT_DIR/scripts/detect_intervals.py" \
             --input-dir $PREDICTIONS_DIR \
             --output-zarr $INTERVALS_ZARR \
@@ -487,9 +487,9 @@ process_chromosome() {
 
     # --- Step 4: Export Raw GFF ---
     if [[ -f $RAW_GENECAD_GFF ]]; then
-        echo "${LOG_PREFIX} [4/5] Skipping — predictions_raw.gff already exists"
+        echo "${LOG_PREFIX} [4/7] Skipping — predictions_raw.gff already exists"
     else
-        echo "${LOG_PREFIX} [4/5] Exporting raw GFF..."
+        echo "${LOG_PREFIX} [4/7] Exporting raw GFF..."
         local export_tqdm_args=()
         if [[ -n "$gpu_id" ]]; then
             export_tqdm_args=(--tqdm-position "$gpu_id")
@@ -503,7 +503,7 @@ process_chromosome() {
     fi
 
     # --- Step 5: Post-processing Filters ---
-    echo "${LOG_PREFIX} [5/5] Filtering features..."
+    echo "${LOG_PREFIX} [5/7] Filtering features..."
 
     if [[ -f $FILTERED_GENECAD_GFF ]]; then
         echo "${LOG_PREFIX}   Skipping feature-length filter — output already exists"
@@ -626,7 +626,7 @@ done
 # =================================================================
 echo ""
 echo "================================================================="
-echo "Merging per-chromosome GFFs into single files..."
+echo "[6/7] Merging per-chromosome GFFs into single files..."
 echo "================================================================="
 
 RAW_GFF="$OUTPUT_DIR/${SPECIES_ID}_GeneCAD_raw.gff"
@@ -642,7 +642,7 @@ fi
 
 echo ""
 echo "================================================================="
-echo "Running protein refinement on merged predictions..."
+echo "[7/7] Running protein refinement on merged predictions..."
 echo "================================================================="
 
 if [[ -f "$FINAL_GFF" ]]; then

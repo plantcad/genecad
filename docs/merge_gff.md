@@ -1,6 +1,6 @@
 # Detailed documentation for merge_gff.py
 
-This script merges a list of single-chromosome GFF files into one GFF file.
+Step [6/7] of the prediction pipeline merges a list of single-chromosome GFF files into one GFF file.
 
 ```
 python merge_gff.py \
@@ -26,4 +26,4 @@ transcripts with no CDS. The default behavior is to remove such models.
 
 ### Next Step
 
-`python merge_gff.py` [Merge GFF Documentation](merge_gff.md)
+`python refine.py` [Refine Documentation](refine.md)
