@@ -1,7 +1,10 @@
 # Detailed documenation for predict.py
 
 Step [2/7] of the prediction pipeline performs multiclass classification on each base pair in the input sequence.
-[NOTE!] This command requires a CUDA GPU
+
+> [NOTE!]
+> This script requires a CUDA GPU
+
 ```
 python predict.py \
 --manifest manifest.json \
@@ -9,7 +12,8 @@ python predict.py \
 --model-path emarro/pcad2-200M-cnet-baseline \
 --species-id species_name
 ```
-> [!NOTE] This step can be run on either a single chromosome, or a set of chromosomes.
+> [!NOTE]
+> This step can be run on either a single chromosome, or a set of chromosomes.
 > If using single-chromosome mode, the parameters `--chromosome-id`, `--input-zarr`, and
 > `--output-dir` are required. If using multi-chromosome mode, the parameter
 > `--manifest` is required. The manifest json file contains the required input and output

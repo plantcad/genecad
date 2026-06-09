@@ -53,7 +53,8 @@ source ~/.bashrc
 
 If you installed via the release wheel and activation is not the issue, the `genecad` executable may be in `~/.local/bin`, which may not be on your `PATH`:
 
-> [!NOTE] All `genecad` subcommands can alternatively be invoked with their corresponding bash
+> [!NOTE]
+> All `genecad` subcommands can alternatively be invoked with their corresponding bash
 > or python scripts (see main [README](../README.md) for details).
 
 ```bash
@@ -193,7 +194,8 @@ run, in which case only the affected chromosome needs to be redone.
 
 Re-run the exact same command. GeneCAD checks which steps have already written their output and skips them — only the remaining work runs.
 
-> [!WARNING] If the run was interrupted during step 2/5 - Prediction, there may be a partially-formed
+> [!WARNING]
+> If the run was interrupted during step 2/5 - Prediction, there may be a partially-formed
 > predictions subdirectory in the directory of the chromosome that was being processed: e.g.
 > output_dir/ChrN/predictions_ChrN. Delete this subdirectory and its contents before restarting the run.
 

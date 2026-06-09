@@ -4,7 +4,8 @@ Step [5/7] of the prediction pipeline applies a basic set of filters to raw Gene
 gene models and features that are abnormally short or that lack key components, such
 as coding sequences or UTRs.
 
-> [!NOTE] This script is intended for use within the GeneCAD pipeline and may not function as intended
+> [!NOTE]
+> This script is intended for use within the GeneCAD pipeline and may not function as intended
 > with other GFF files.
 
 ```

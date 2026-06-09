@@ -205,7 +205,7 @@ sky down genecad --yes
 > The pre-built Docker image includes all compiled packages, making cluster setup take seconds
 > instead of hours.
 
-See the [Throughput](#throughput) section for GPU cost comparisons across providers.
+See the [Throughput](../README.md#prerequisites) section for GPU cost comparisons across providers.
 
 <details><summary>SkyPilot GPU rates</summary>
 

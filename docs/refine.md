@@ -3,6 +3,9 @@
 Step [7/7] of the prediction pipeline refines GeneCAD predictions by removing gene models that are unlikely
 to be functional protein coding genes using ReelProtein, and by attempting to merge fragmented gene models.
 
+> [!NOTE]
+> This script requires a CUDA GPU
+
 ```
 python refine.py \
 --input-gff genecad_raw.gff \
