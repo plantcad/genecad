@@ -18,7 +18,7 @@ from src.sampling import (
     get_tag_class_map,
 )
 from src.sequence import partition_sequence
-from src.config import get_species_config
+from src.config import get_species_config, register_species_configs_from_yaml
 
 logger = logging.getLogger(__name__)
 
@@ -795,8 +795,15 @@ def main():
         default=32,
         help="Chunk size for sample dimension; align this to desired chunk sizes for training dataloader",
     )
+    splits_parser.add_argument(
+        "--species-config",
+        help="Path to a YAML file defining additional species configs (see src/config.py for format)",
+    )
 
     args = parser.parse_args()
+
+    if getattr(args, "species_config", None):
+        register_species_configs_from_yaml(args.species_config)
 
     if args.command == "generate_training_windows":
         generate_training_windows(args)

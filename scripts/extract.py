@@ -19,7 +19,7 @@ from src.dataset import (
     set_dimension_chunks,
 )
 from src.schema import GffFeatureType, SequenceFeature, PositionInfo
-from src.config import SPECIES_CONFIGS, SpeciesConfig, get_species_configs
+from src.config import SPECIES_CONFIGS, SpeciesConfig, get_species_configs, register_species_configs_from_yaml
 
 logger = logging.getLogger(__name__)
 
@@ -908,6 +908,10 @@ def main():
         "--output", required=True, help="Path to output parquet file"
     )
     gff_parser.add_argument(
+        "--species-config",
+        help="Path to a YAML file defining additional species configs (see src/config.py for format)",
+    )
+    gff_parser.add_argument(
         "--skip-exon-features",
         choices=["yes", "no"],
         default="yes",
@@ -927,6 +931,10 @@ def main():
     fasta_parser.add_argument("--output", required=True, help="Path to output file")
     fasta_parser.add_argument(
         "--tokenizer-path", help="Path to the tokenizer model for tokenizing sequences"
+    )
+    fasta_parser.add_argument(
+        "--species-config",
+        help="Path to a YAML file defining additional species configs (see src/config.py for format)",
     )
 
     # Extract single FASTA sequence command
@@ -961,6 +969,9 @@ def main():
     )
 
     args = parser.parse_args()
+
+    if getattr(args, "species_config", None):
+        register_species_configs_from_yaml(args.species_config)
 
     if args.command == "extract_gff_features":
         extract_gff_features(
