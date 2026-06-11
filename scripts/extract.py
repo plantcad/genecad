@@ -19,7 +19,12 @@ from src.dataset import (
     set_dimension_chunks,
 )
 from src.schema import GffFeatureType, SequenceFeature, PositionInfo
-from src.config import SPECIES_CONFIGS, SpeciesConfig, get_species_configs, register_species_configs_from_yaml
+from src.config import (
+    SPECIES_CONFIGS,
+    SpeciesConfig,
+    get_species_configs,
+    register_species_configs_from_yaml,
+)
 
 logger = logging.getLogger(__name__)
 
