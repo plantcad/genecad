@@ -119,52 +119,11 @@ Examples:
 
 
 def cmd_predict(argv: list[str]) -> int:
-    parser = _build_predict_parser()
-    args = parser.parse_args(argv)
-
     script_dir = _find_script_dir()
-    cache_dir = Path.home() / ".cache" / "genecad"
-
-    input_file = args.input
-    if input_file is None:
-        input_file = str(_ensure_example_fasta(cache_dir))
-
-    output_dir = args.output
-    if output_dir is None:
-        output_dir = str(Path.cwd() / "genecad_result" / f"{args.species}_predictions")
-
-    cmd = [
-        "bash",
-        str(script_dir / "predict.sh"),
-        "-i",
-        input_file,
-        "-o",
-        output_dir,
-        "-s",
-        args.species,
-        "-m",
-        args.mode,
-        "-n",
-        args.top_n_contigs,
-        "-l",
-        args.min_transcript_length,
-        "-c",
-        args.cpu_workers,
-        "-b",
-        args.batch_size,
-        "-g",
-        args.gpus,
-    ]
-    if args.launcher:
-        cmd += ["--launcher", args.launcher]
-    if args.model_checkpoint:
-        cmd += ["--model-checkpoint", args.model_checkpoint]
-
+    cmd = ["bash", str(script_dir / "predict.sh")] + argv
     env = os.environ.copy()
-    # Ensure src/ is importable when called from the installed wheel
     env["PYTHONPATH"] = str(script_dir) + os.pathsep + env.get("PYTHONPATH", "")
     env["GENECAD_PYTHON"] = sys.executable
-
     result = subprocess.run(cmd, env=env)
     return result.returncode
 

@@ -8,7 +8,7 @@ Step [2/7] of the prediction pipeline performs multiclass classification on each
 ```
 python predict.py \
 --manifest manifest.json \
---checkpoint plantcad/genecad_plant \
+--model-checkpoint plantcad/genecad_plant \
 --model-path emarro/pcad2-200M-cnet-baseline \
 --species-id species_name
 ```
@@ -25,8 +25,9 @@ python predict.py \
 * `--chromosome-id` - name of the chromosome to be processed. Required if `manifest` is not specified
 * `--input-zarr`, `-i` - path to the input zarr file. Required if `manifest` is not specified
 * `--output-dir`, `-o` - path to the zarr output file. Required if `manifest` is not specified
-* `--model-checkpoint` - GeneCAD model checkpoint, which can be loaded from a local directory or HuggingFace. See [[Available GeneCAD models]]. Required
-* `--model-path` - base PlantCAD model, which can be loaded from a local directory or HuggingFace. See [[Available GeneCAD models]]. Required
+* `--model-checkpoint` - GeneCAD head model checkpoint, which can be loaded from a local directory or HuggingFace. See [Available GeneCAD models](../README.md#available-models). Required
+* `--model-path` - base PlantCAD model, which can be loaded from a local directory or HuggingFace. If not
+specified, the script will attempt to infer the base model from the model checkpoint. See [Available GeneCAD models](../README.md#available-models) for model pairs.
 * `--species-id` - the name of the species or sample to process
 * `--window-size` - context length for the model. Must be between 2048 and 8192. Default 8192.
 * `--stride` - the distance between start position for each window the model sees. It is recommended to set stride to `window-size / 2` to avoid edge effects at window ends. Default 4096

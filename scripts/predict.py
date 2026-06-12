@@ -904,7 +904,7 @@ def main():
     )
     parser.add_argument(
         "--show-dynamo-errors",
-        action="store_false",
+        action="store_true",
         help="Show torch dynamo errors (suppressed by default)",
     )
     # TODO: could this be determined by model config?

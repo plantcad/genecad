@@ -17,7 +17,7 @@ Options:
   -i, --input-fasta PATH      Input genome FASTA file
                         (default: downloads Arabidopsis thaliana TAIR12 example)
   -o, --output-dir DIR      Output directory (default: genecad_result/Athaliana_predictions)
-  -s, --species NAME    Species label prefixed on output filenames (default: Athaliana)
+  -s, --species-id NAME    Species label prefixed on output filenames (default: Athaliana)
   -m, --mode MODE       Model to use: plant | animal  (default: plant)
   -n, --top-n-contigs N Predict only the N longest FASTA sequences (default: all)
     -l, --min-transcript-length N
@@ -86,7 +86,7 @@ while [[ $# -gt 0 ]]; do
   case $1 in
     -i|--input-fasta)      INPUT_FILE="$2";      shift 2 ;;
     -o|--output-dir)     OUTPUT_DIR="$2";      shift 2 ;;
-    -s|--species)    SPECIES_ID="$2";      shift 2 ;;
+    -s|--species-id)    SPECIES_ID="$2";      shift 2 ;;
     -m|--mode)       MODE="$2";            shift 2 ;;
     -n|--top-n-contigs) TOP_N_CONTIGS="$2"; shift 2 ;;
     -l|--min-transcript-length) MIN_TRANSCRIPT_LENGTH="$2"; shift 2 ;;

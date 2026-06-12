@@ -4,25 +4,19 @@ Step [6/7] of the prediction pipeline merges a list of single-chromosome GFF fil
 
 ```
 python merge_gff.py \
---input-gff genecad_raw.gff \
---output-gff genecad_filtered.gff
+--input-gffs genecad_chr1.gff genecad_chr2.gff genecad_chr3.gff \
+--output-gff genecad_raw.gff
 ```
 
 ### Parameters
 
-* `--input-gff`, `-i` - Input GFF file. Output from `export_gff.py`. Required if `--manifest` is not specified.
-* `--output-gff`, `-o` - Output GFF file. Required if `--manifest` is not specified.
-* `--manifest` - Json file containing input and output paths for a set of chromosomes/samples.
-This can be used in place of specifying `--input-gff` and `--output-gff`. Required key for each
-sample are: chromosome_id, raw_gff, and filtered_gff.
-* `--min-feature-length`- Minimum length for features such as CDS or UTR. Default 2.
-* `--feature-types` - A comma-separated list of features to filter for minimum length.
-Features must be one of: gene, mRNA, three_prime_UTR, five_prime_UTR, CDS. Default is three_prime_UTR,five_prime_UTR,CDS
-* `--min-gene-length` - Minimum length for genes. Includes length of introns. Default 30.
-* `--require-utrs` - If set, this flag removes all transcripts that are missing the 5' or 3' UTR.
-This parameter is ignored if `--keep-incomplete-models` is True.
-* `--keep-incomplete-models` - If set, this flag retains genes with no mRNA transcript and mRNA
-transcripts with no CDS. The default behavior is to remove such models.
+* `--input-gffs`, `-i` - One or more input GFF files. Required if `--manifest` is not specified.
+* `--output-gff`, `-o` - Merged output GFF file.
+* `--manifest` - Json file containing input files for a set of chromosomes. GFF files must be listed
+under the key `filtered_gff`, or `raw_gff` if `--use-raw-gffs` flag is set.
+* `--use-raw-gffs` - Flag. If set, the input gff list will be drawn from `raw_gff` in the manifest.json
+instead of the default `filtered_gff`. This flag does nothing if `input-gffs` are
+specified directly.
 
 ### Next Step
 

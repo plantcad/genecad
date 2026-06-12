@@ -30,9 +30,11 @@ Currently, both plant and vertebrate models are available.
 > v0.2.0 or later for the best results.
 
 <details><summary>More info</summary>
+
+
 We identified a significant problem in previous versions regarding missing BUSCO genes
 (thank you [MaizeGDB](https://www.maizegdb.org/) team for alerting us!). The model was failing
-because of incosistencies in the model's training data and limitations in the previous
+because of inconsistencies in the model's training data and limitations in the previous
 architecture. These problems have since been identified and fixed. If you downloaded GeneCAD
 v0.1.0 or earlier, we recommend installing the latest version and re-running all predictions.
 </details>
@@ -98,7 +100,7 @@ Estimated cost for common reference plant genomes (using Lambda A100 at $0.0202/
 
 #### Download and Install
 
-Recommended installation uses `uv` for environment management.
+Recommended installation uses [uv](https://docs.astral.sh/uv/) for environment management.
 For other installation options see [Alternative Installation Methods](docs/alternative_installation_methods.md)
 Docker/Singularity/Apptainer container images are available and may be useful when working on HPCs or in the cloud.
 
@@ -176,10 +178,20 @@ GeneCAD provides two pre-trained models for different taxonomic groups.
 Both are downloaded automatically from Hugging Face on first run and cached
 in `~/.cache/huggingface`. Internet access is required on the first run.
 
-| Mode (`-m`)         | Organism type      | Base model                                                                                  | GeneCAD head                                                                |
-|---------------------|--------------------|---------------------------------------------------------------------------------------------|-----------------------------------------------------------------------------|
-| `plant` *(default)* | Plants             | [`emarro/pcad2-200M-cnet-baseline`](https://huggingface.co/emarro/pcad2-200M-cnet-baseline) | [`plantcad/genecad_plant`](https://huggingface.co/plantcad/genecad_plant)   |
-| `animal`            | Vertebrate Animals | [`emarro/pcad2_vert_small`](https://huggingface.co/emarro/pcad2_vert_small)                 | [`plantcad/genecad_animal`](https://huggingface.co/plantcad/genecad_animal) |
+> [!TIP]
+> Each GeneCAD model uses a pre-trained PlantCAD2 model as its base. The base and
+> head models are NOT interchangeable - always use the pairs indicated by the table below.
+
+| Mode (`-m`)                 | Organism type         | Base model                                                                                  | GeneCAD head                                                                |
+|-----------------------------|-----------------------|---------------------------------------------------------------------------------------------|-----------------------------------------------------------------------------|
+| `plant` *(default)*         | Plants (Angiosperms)  | [`emarro/pcad2-200M-cnet-baseline`](https://huggingface.co/emarro/pcad2-200M-cnet-baseline) | [`plantcad/genecad_plant`](https://huggingface.co/plantcad/genecad_plant)   |
+| `animal` **(EXPERIMENTAL)** | Animals (Vertebrates) | [`emarro/pcad2_vert_small`](https://huggingface.co/emarro/pcad2_vert_small)                 | [`plantcad/genecad_animal`](https://huggingface.co/plantcad/genecad_animal) |
+
+> [!WARNING]
+> The current animal model is experimental and has been released as part of ongoing
+> development. We do not consider the resulting annotations to be production-ready at
+> this time and strongly suggest that users apply their own evaluation and refinement
+> if they wish to use the animal model.
 
 ### Legacy Models
 
@@ -191,7 +203,7 @@ compatibility and comparison purposes.
 
 | Model name          | Organism type | Base model                                                                                                    | GeneCAD head                                                                                                    |
 |---------------------|---------------|---------------------------------------------------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------|
-| `genecad-pc2-small` | Plants        | [`https://huggingface.co/kuleshov-group/PlantCAD2-Small-l24-d0768`](kuleshov-group/PlantCAD2-Small-l24-d0768) | [`plantcad/GeneCAD-l8-d768-PC2-Small`](https://huggingface.co/plantcad/GeneCAD-l8-d768-PC2-Small)               |
+| `genecad-pc2-small` | Plants        | [`kuleshov-group/PlantCAD2-Small-l24-d0768`](https://huggingface.co/kuleshov-group/PlantCAD2-Small-l24-d0768) | [`plantcad/GeneCAD-l8-d768-PC2-Small`](https://huggingface.co/plantcad/GeneCAD-l8-d768-PC2-Small)               |
 | `genecad-pc2-large` | Plants        | [`kuleshov-group/PlantCAD2-Large-l48-d1536`](https://huggingface.co/kuleshov-group/PlantCAD2-Large-l48-d1536) | [`plantcad/GeneCAD-l8-d768-PC2-Large`](https://huggingface.co/plantcad/GeneCAD-l8-d768-PC2-Large)               |
 | `genecad-pc2-cnet`  | Plants        | [`emarro/pcad2-200M-cnet-baseline`](https://huggingface.co/emarro/pcad2-200M-cnet-baseline)                   | [`plantcad/GeneCAD-pcad2-200M-cnet-baseline`](https://huggingface.co/plantcad/GeneCAD-pcad2-200M-cnet-baseline) |
 
@@ -440,7 +452,7 @@ Use `--auto-install-busco` to install BUSCO in the specified environment if it i
 
 ```bash
 genecad evaluate \
-  --conda-env busco-5.5.0 \
+  --busco-env busco-5.5.0 \
   --ref   /path/to/reference.gff3 \
   --pred  /path/to/Athaliana_GeneCAD_final.gff \
   --fasta /path/to/genome.fa \

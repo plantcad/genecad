@@ -17,7 +17,7 @@ python detect_intervals.py \
 * `--manifest` - Json file containing input and output paths for a set of chromosomes/samples.
 This can be used in place of specifying `--input-dir` and `--output-zarr`. Required key for each
 sample are: chromosome_id, predictions_dir, and intervals_zarr.
-* `--alpha-viterbi` - Float between 0 and 1. Increases the transition probability for all state transitions.
+* `--viterbi-alpha` - Float between 0 and 1. Increases the transition probability for all state transitions.
 Higher transition probabilities are more sensitive to detecting genes, but also increase the likelihood of
 finding pseudogenes and/or creating ill-formed gene models. Default None.
 * `--decode-direct` - Flag. By default, this script uses the viterbi algorithm and a
