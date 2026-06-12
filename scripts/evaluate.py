@@ -495,9 +495,12 @@ def eval_splice_sites(pred_exon_genes, genome):
 def extract_transcripts(pred_exon_genes, genome, output_path):
     """
     Extract spliced transcript sequences directly from the predicted exon
-    structure — replaces the need for gffread.
+    structure — replaces the need for gffread. Transcripts containing
+    ambiguous bases are excluded because older MetaEuk/MMseqs versions can
+    crash while translating them.
     """
-    count = skipped = 0
+    count = skipped = skipped_ambiguous = 0
+    valid_bases = set("ACGTacgt")
     with open(output_path, "w") as fh:
         for gdata in pred_exon_genes.values():
             ch, st = gdata["chrom"], gdata["strand"]
@@ -512,11 +515,20 @@ def extract_transcripts(pred_exon_genes, genome, output_path):
                 tx_seq = "".join(seq[s - 1 : e] for (s, e) in exons)
                 if st == "-":
                     tx_seq = _revcomp(tx_seq)
+                if not set(tx_seq) <= valid_bases:
+                    skipped_ambiguous += 1
+                    continue
                 fh.write(f">{tx_id}\n{tx_seq}\n")
                 count += 1
     print(f"[INFO] Extracted {count} transcript sequences.", file=sys.stderr)
     if skipped:
         print(f"[WARN] Skipped {skipped} genes (chrom not in FASTA).", file=sys.stderr)
+    if skipped_ambiguous:
+        print(
+            f"[WARN] Skipped {skipped_ambiguous} transcripts containing "
+            "ambiguous bases for BUSCO.",
+            file=sys.stderr,
+        )
     return count
 
 
