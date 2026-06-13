@@ -1,8 +1,21 @@
+---
+title: GeneCAD
+emoji: 🧬
+colorFrom: green
+colorTo: blue
+sdk: gradio
+sdk_version: "5.33.0"
+app_file: app.py
+pinned: false
+license: apache-2.0
+python_version: "3.12"
+---
+
 <div align="center">
 
 # GeneCAD: Plant Genome Annotation with a DNA Foundation Model
 
-![](https://img.shields.io/badge/version-0.2.0-blue)
+![](https://img.shields.io/badge/version-0.2.2-blue)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![CI](https://github.com/plantcad/genecad/actions/workflows/ci.yaml/badge.svg)](https://github.com/plantcad/genecad/actions/workflows/ci.yaml)
 [![bioRxiv](https://img.shields.io/badge/bioRxiv-10.1101/2025.10.31.685877-b31b1b.svg)](https://doi.org/10.1101/2025.10.31.685877)
