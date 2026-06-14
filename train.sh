@@ -325,6 +325,11 @@ DATA_DIR="$PIPELINE_DIR/data/$DOMAIN"
 GFF_DIR="$DATA_DIR/gff/training"
 FASTA_DIR="$DATA_DIR/fasta/training"
 
+# Default: skip exon features (Ensembl/plant GFFs have explicit UTR annotations).
+# Set to "no" for NCBI-style GFFs that lack UTR features; extract.py will then
+# derive five_prime_UTR / three_prime_UTR from exon-CDS difference.
+GFF_SKIP_EXON="yes"
+
 if [[ -z "$ANIMAL_INPUT_DIR" ]]; then
   ANIMAL_INPUT_DIR="$FASTA_DIR"
 fi
@@ -686,6 +691,11 @@ else
     fi
   done
 
+  # Custom NCBI GFFs lack explicit UTR features; derive them from exon-CDS in extract.py.
+  if [[ $contains_ensembl -eq 0 ]]; then
+    GFF_SKIP_EXON="no"
+  fi
+
   if [[ $contains_ensembl -eq 1 ]]; then
     mkdir -p "$ANIMAL_GFF_DIR" "$ANIMAL_INPUT_DIR"
 
@@ -867,6 +877,7 @@ if [ ! -f "$EXTRACT_DIR/raw_features.parquet" ]; then
           --input-dir "$GFF_DIR" \
           --species-id "$sid" \
           --output "$out_file" \
+          --skip-exon-features "$GFF_SKIP_EXON" \
           "${SPECIES_CONFIG_ARG[@]}"
       ) &
 
@@ -903,6 +914,7 @@ PY
       --input-dir "$GFF_DIR" \
       --species-id $SPECIES_IDS \
       --output "$EXTRACT_DIR/raw_features.parquet" \
+      --skip-exon-features "$GFF_SKIP_EXON" \
       "${SPECIES_CONFIG_ARG[@]}"
   fi
   echo "  Created: raw_features.parquet"

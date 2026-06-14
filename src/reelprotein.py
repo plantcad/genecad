@@ -110,11 +110,9 @@ def build_cds_string_for_gene(gene, chrom_seq):
         raw_seq = chrom_seq[a - 1 : b]
         seq_str = str(raw_seq).upper()
         if strand == "+":
-            trimmed = seq_str[cds["phase"] :]
+            parts.append(seq_str)
         else:
-            rc = str(Seq(seq_str).reverse_complement())
-            trimmed = rc[cds["phase"] :]
-        parts.append(trimmed)
+            parts.append(str(Seq(seq_str).reverse_complement()))
 
     return "".join(parts)
 

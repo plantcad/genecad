@@ -216,26 +216,87 @@ def _extract_gff_features(
                 # For now, we use the longest transcript as the canonical transcript
                 transcript_is_canonical = is_longest_transcript(transcript)
 
-                # Process each feature
+                # Collect sub-features by type for this transcript
+                exon_sub_features: list[SeqFeature] = []
+                cds_sub_features: list[SeqFeature] = []
+                utr_sub_features: list[SeqFeature] = []
                 for feature in transcript.sub_features:
-                    # Skip exon features if requested (they are structural, not modeling features)
-                    if skip_exon_features and feature.type == "exon":
-                        continue
-
-                    if feature.type not in [
+                    if feature.type == "exon":
+                        exon_sub_features.append(feature)
+                    elif feature.type == GffFeatureType.CDS:
+                        cds_sub_features.append(feature)
+                    elif feature.type in (
                         GffFeatureType.FIVE_PRIME_UTR,
-                        GffFeatureType.CDS,
                         GffFeatureType.THREE_PRIME_UTR,
-                    ]:
+                    ):
+                        utr_sub_features.append(feature)
+                    else:
                         raise ValueError(
                             f"Found unexpected transcript feature type: {feature.type}"
                         )
 
+                # Derive UTRs from exon-CDS when explicit UTR features are absent
+                derived_utr_features: list[tuple[int, int, GffFeatureType]] = []
+                if (
+                    not skip_exon_features
+                    and exon_sub_features
+                    and cds_sub_features
+                    and not utr_sub_features
+                ):
+                    cds_coords = [
+                        (int(f.location.start), int(f.location.end))
+                        for f in cds_sub_features
+                    ]
+                    cds_min = min(s for s, _ in cds_coords)
+                    cds_max = max(e for _, e in cds_coords)
+                    strand = transcript_info.strand
+                    for ef in exon_sub_features:
+                        es = int(ef.location.start)
+                        ee = int(ef.location.end)
+                        if strand == 1:
+                            if es < cds_min:
+                                derived_utr_features.append(
+                                    (
+                                        es,
+                                        min(ee, cds_min),
+                                        GffFeatureType.FIVE_PRIME_UTR,
+                                    )
+                                )
+                            if ee > cds_max:
+                                derived_utr_features.append(
+                                    (
+                                        max(es, cds_max),
+                                        ee,
+                                        GffFeatureType.THREE_PRIME_UTR,
+                                    )
+                                )
+                        else:
+                            if ee > cds_max:
+                                derived_utr_features.append(
+                                    (
+                                        max(es, cds_max),
+                                        ee,
+                                        GffFeatureType.FIVE_PRIME_UTR,
+                                    )
+                                )
+                            if es < cds_min:
+                                derived_utr_features.append(
+                                    (
+                                        es,
+                                        min(ee, cds_min),
+                                        GffFeatureType.THREE_PRIME_UTR,
+                                    )
+                                )
+
+                # Process CDS and UTR features (explicit or derived)
+                modeling_features: list[SeqFeature] = (
+                    cds_sub_features + utr_sub_features
+                )
+                for feature in modeling_features:
                     feature_id = get_feature_id(feature)
                     feature_info = get_position_info(feature)
                     feature_name = get_feature_name(feature)
 
-                    # Create a validated GeneFeatureData object
                     feature_data = SequenceFeature(
                         species_id=species_id,
                         species_name=species_name,
@@ -259,6 +320,38 @@ def _extract_gff_features(
                         feature_type=feature.type,
                         feature_start=feature_info.start,
                         feature_stop=feature_info.stop,
+                        filename=filename,
+                    )
+                    features_data.append(feature_data)
+
+                for feat_start, feat_stop, feat_type in derived_utr_features:
+                    if feat_start >= feat_stop:
+                        continue
+                    strand_char = "+" if transcript_info.strand == 1 else "-"
+                    derived_id = f"{feat_type}:{transcript_id}:{feat_start}:{feat_stop}:{strand_char}"
+                    feature_data = SequenceFeature(
+                        species_id=species_id,
+                        species_name=species_name,
+                        chromosome_id=chrom_id,
+                        chromosome_name=chrom_name,
+                        chromosome_length=chrom_length,
+                        gene_id=gene_id,
+                        gene_name=gene_name,
+                        gene_strand=gene_info.strand,
+                        gene_start=gene_info.start,
+                        gene_stop=gene_info.stop,
+                        transcript_id=transcript_id,
+                        transcript_name=transcript_name,
+                        transcript_strand=transcript_info.strand,
+                        transcript_is_canonical=transcript_is_canonical,
+                        transcript_start=transcript_info.start,
+                        transcript_stop=transcript_info.stop,
+                        feature_id=derived_id,
+                        feature_name=None,
+                        feature_strand=transcript_info.strand,
+                        feature_type=feat_type,
+                        feature_start=feat_start,
+                        feature_stop=feat_stop,
                         filename=filename,
                     )
                     features_data.append(feature_data)
