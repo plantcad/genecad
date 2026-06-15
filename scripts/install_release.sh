@@ -8,7 +8,7 @@ set -euo pipefail
 #   GENECAD_VERSION=0.2.0
 #   PYTORCH_CUDA_INDEX=https://download.pytorch.org/whl/cu128
 
-GENECAD_VERSION="${GENECAD_VERSION:-0.2.0}"
+GENECAD_VERSION="${GENECAD_VERSION:-0.2.2}"
 PYTORCH_CUDA_INDEX="${PYTORCH_CUDA_INDEX:-https://download.pytorch.org/whl/cu128}"
 WHEEL_URL="https://github.com/plantcad/genecad/releases/download/v${GENECAD_VERSION}/genecad-${GENECAD_VERSION}-py3-none-any.whl"
 

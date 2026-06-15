@@ -81,6 +81,7 @@ MIN_TRANSCRIPT_LENGTH="3"
 CPU_WORKERS="1"
 LAUNCHER_ARG="${LAUNCHER:-}"
 MODEL_CHECKPOINT_ARG=""
+BASE_MODEL_ARG=""
 
 while [[ $# -gt 0 ]]; do
   case $1 in
@@ -95,6 +96,7 @@ while [[ $# -gt 0 ]]; do
     -g|--gpus)       GPUS_ARG="$2";       shift 2 ;;
     --launcher)      LAUNCHER_ARG="$2";   shift 2 ;;
     --model-checkpoint) MODEL_CHECKPOINT_ARG="$2"; shift 2 ;;
+    --base-model)    BASE_MODEL_ARG="$2"; shift 2 ;;
     -h|--help) usage ;;
     *) echo "Unknown option: $1"; usage ;;
   esac
@@ -151,6 +153,10 @@ esac
 
 if [[ -n "$MODEL_CHECKPOINT_ARG" ]]; then
     HEAD_MODEL="$MODEL_CHECKPOINT_ARG"
+fi
+if [[ -n "$BASE_MODEL_ARG" ]]; then
+    BASE_MODEL="$BASE_MODEL_ARG"
+    TOKENIZER_PATH="$BASE_MODEL"
 fi
 
 # =================================================================
