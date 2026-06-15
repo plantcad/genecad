@@ -150,6 +150,50 @@ def get_species_config(species_id: str) -> SpeciesConfig:
     return SPECIES_CONFIGS[species_id]
 
 
+def register_species_configs_from_yaml(path: str) -> None:
+    """Load species configs from a YAML file and register them into SPECIES_CONFIGS.
+
+    YAML format (list of species entries)::
+
+        - id: MySpecies
+          name: My Species Name
+          gff:
+            filename: my_species.gff.gz
+          fasta:
+            filename: my_species.fna.gz
+          split:
+            use_in_training: true
+            use_in_validation: true
+            use_in_evaluation: false
+          chromosome_map:
+            "NC_000001.1": chr1
+            "NC_000002.1": chr2
+    """
+    import yaml
+
+    with open(path) as f:
+        data = yaml.safe_load(f)
+
+    entries = data if isinstance(data, list) else data.get("species", [])
+    for entry in entries:
+        config = SpeciesConfig(
+            id=entry["id"],
+            name=entry["name"],
+            chromosome_map={str(k): str(v) for k, v in entry["chromosome_map"].items()},
+            gff=SpeciesGffConfig(
+                filename=entry["gff"]["filename"],
+                attributes_to_drop=entry["gff"].get("attributes_to_drop"),
+            ),
+            fasta=SpeciesFastaConfig(filename=entry["fasta"]["filename"]),
+            split=DataSplitConfig(
+                use_in_training=bool(entry["split"]["use_in_training"]),
+                use_in_validation=bool(entry["split"]["use_in_validation"]),
+                use_in_evaluation=bool(entry["split"]["use_in_evaluation"]),
+            ),
+        )
+        SPECIES_CONFIGS[config.id] = config
+
+
 # -------------------------------------------------------------------------------------------------
 # Evaluation species configurations
 # -------------------------------------------------------------------------------------------------

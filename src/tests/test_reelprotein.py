@@ -174,3 +174,86 @@ def test_generate_final_gff_keeps_unmerged_genes(tmp_path):
     assert "ID=gene1\n" not in output_text or "ID=gene1;" not in output_text.replace(
         "concat_gene1_gene2", ""
     )
+
+
+def test_merge_group_transcripts_recalculates_phases(tmp_path):
+    # Prepare input GFF3 with two genes on forward strand, where first CDS is length 7 (10..16) and second is length 9 (30..38)
+    gff_path = tmp_path / "input_fwd.gff3"
+    gff_path.write_text(
+        "\n".join(
+            [
+                "##gff-version 3",
+                "chr1\tsrc\tgene\t10\t16\t.\t+\t.\tID=gene1",
+                "chr1\tsrc\tmRNA\t10\t16\t.\t+\t.\tID=gene1.t1;Parent=gene1",
+                "chr1\tsrc\tCDS\t10\t16\t.\t+\t0\tID=cds1;Parent=gene1.t1",
+                "chr1\tsrc\tgene\t30\t38\t.\t+\t.\tID=gene2",
+                "chr1\tsrc\tmRNA\t30\t38\t.\t+\t.\tID=gene2.t1;Parent=gene2",
+                "chr1\tsrc\tCDS\t30\t38\t.\t+\t0\tID=cds2;Parent=gene2.t1",
+            ]
+        )
+    )
+
+    header, gene_entries = reelprotein.read_gff_raw(gff_path)
+
+    # We call merge_group_transcripts for gene1 and gene2
+    grp_keys = [("chr1", "gene1"), ("chr1", "gene2")]
+    synthetic_mrna_id = "concat_gene1_gene2.t1"
+
+    mrna_fields, merged_children = reelprotein.merge_group_transcripts(
+        grp_keys, gene_entries, synthetic_mrna_id
+    )
+
+    # Find the CDS features in merged_children
+    cds_features = [child for child, attrs in merged_children if child[2] == "CDS"]
+    assert len(cds_features) == 2
+
+    # cds1 start=10, end=16 (length 7). Phase should be 0.
+    assert cds_features[0][3] == "10"
+    assert cds_features[0][4] == "16"
+    assert cds_features[0][7] == "0"
+
+    # cds2 start=30, end=38 (length 9). Phase should be recalculated: (-7)%3 = 2.
+    assert cds_features[1][3] == "30"
+    assert cds_features[1][4] == "38"
+    assert cds_features[1][7] == "2"
+
+    # Prepare input GFF3 with two genes on reverse strand
+    # First transcribed/translated CDS (higher coordinates): cds1 30..36 (length 7). Phase 0.
+    # Second transcribed/translated CDS (lower coordinates): cds2 10..18 (length 9). Original phase 0.
+    # Recalculated phase for cds2 should be (-7)%3 = 2.
+    gff_path_rev = tmp_path / "input_rev.gff3"
+    gff_path_rev.write_text(
+        "\n".join(
+            [
+                "##gff-version 3",
+                "chr1\tsrc\tgene\t30\t36\t.\t-\t.\tID=gene1",
+                "chr1\tsrc\tmRNA\t30\t36\t.\t-\t.\tID=gene1.t1;Parent=gene1",
+                "chr1\tsrc\tCDS\t30\t36\t.\t-\t0\tID=cds1;Parent=gene1.t1",
+                "chr1\tsrc\tgene\t10\t18\t.\t-\t.\tID=gene2",
+                "chr1\tsrc\tmRNA\t10\t18\t.\t-\t.\tID=gene2.t1;Parent=gene2",
+                "chr1\tsrc\tCDS\t10\t18\t.\t-\t0\tID=cds2;Parent=gene2.t1",
+            ]
+        )
+    )
+
+    header_rev, gene_entries_rev = reelprotein.read_gff_raw(gff_path_rev)
+    grp_keys_rev = [("chr1", "gene1"), ("chr1", "gene2")]
+
+    mrna_fields_rev, merged_children_rev = reelprotein.merge_group_transcripts(
+        grp_keys_rev, gene_entries_rev, synthetic_mrna_id
+    )
+
+    cds_features_rev = [
+        child for child, attrs in merged_children_rev if child[2] == "CDS"
+    ]
+    assert len(cds_features_rev) == 2
+
+    # On negative strand, features are sorted in descending order of coordinate
+    # So 30..36 is index 0, 10..18 is index 1.
+    assert cds_features_rev[0][3] == "30"
+    assert cds_features_rev[0][4] == "36"
+    assert cds_features_rev[0][7] == "0"
+
+    assert cds_features_rev[1][3] == "10"
+    assert cds_features_rev[1][4] == "18"
+    assert cds_features_rev[1][7] == "2"

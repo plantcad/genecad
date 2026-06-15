@@ -773,6 +773,20 @@ def merge_group_transcripts(grp, gene_entries, synthetic_mrna_id):
         fields[8] = format_attributes(attrs)
         merged_children.append((fields, attrs))
 
+    # Recalculate phases for all CDS features in the merged mRNA in 5'->3' order
+    cds_items = [item for item in merged_children if item[0][2] == "CDS"]
+    if cds_items:
+        if strand == "+":
+            cds_items.sort(key=lambda item: int(item[0][3]))
+        else:
+            cds_items.sort(key=lambda item: int(item[0][3]), reverse=True)
+
+        cumulative_cds_bases = 0
+        for fields, _ in cds_items:
+            fields[7] = str((-cumulative_cds_bases) % 3)
+            cds_len = int(fields[4]) - int(fields[3]) + 1
+            cumulative_cds_bases += cds_len
+
     merged_children.sort(key=lambda item: int(item[0][3]), reverse=(strand == "-"))
     return synthetic_fields, merged_children
 

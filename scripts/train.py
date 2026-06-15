@@ -9,7 +9,7 @@ from torch import set_float32_matmul_precision
 import xarray as xr
 import lightning as L
 from lightning.pytorch.loggers import WandbLogger, CSVLogger
-from lightning.pytorch.callbacks import ModelCheckpoint, LearningRateMonitor
+from lightning.pytorch.callbacks import ModelCheckpoint, LearningRateMonitor, Callback
 from argparse import Namespace as Args
 from typing import Optional
 from transformers import AutoConfig
@@ -27,6 +27,32 @@ from src.visualization import set_visualization_save_dir
 import numpy as np
 
 logger = rank_zero_logger(logging.getLogger(__name__))
+
+
+class CheckpointAtValidation(Callback):
+    """Save a checkpoint at every validation so select_best_checkpoint always finds an exact match.
+
+    Lightning saves periodic checkpoints on optimizer-step boundaries and validation runs on
+    batch-count boundaries; with gradient accumulation these rarely coincide. This callback
+    fills the gap by saving a checkpoint (using the same filename convention as ModelCheckpoint)
+    after every non-sanity validation epoch, guaranteeing the validated model state is on disk.
+    """
+
+    def __init__(self, dirpath: str) -> None:
+        self._dirpath = dirpath
+
+    def on_validation_epoch_end(
+        self, trainer: L.Trainer, pl_module: L.LightningModule
+    ) -> None:
+        if trainer.sanity_checking:
+            return
+        os.makedirs(self._dirpath, exist_ok=True)
+        path = os.path.join(
+            self._dirpath,
+            f"epoch_{trainer.current_epoch:02d}-step_{trainer.global_step:06d}.ckpt",
+        )
+        if not os.path.exists(path):
+            trainer.save_checkpoint(path)
 
 
 def parse_args(args: Optional[list[str]] = None) -> Args:
@@ -437,10 +463,19 @@ def train(args: Args) -> None:
         auto_insert_metric_name=False,
     )
 
+    val_checkpoint_callback = CheckpointAtValidation(
+        dirpath=os.path.join(args.output_dir, "checkpoints"),
+    )
+
     lr_monitor_callback = LearningRateMonitor(logging_interval="step")
 
     throughput_monitor_callback = ThroughputMonitor()
-    callbacks = [checkpoint_callback, lr_monitor_callback, throughput_monitor_callback]
+    callbacks = [
+        checkpoint_callback,
+        val_checkpoint_callback,
+        lr_monitor_callback,
+        throughput_monitor_callback,
+    ]
 
     strategy = args.strategy
     if config.use_head_encoder and strategy == "ddp":

@@ -32,6 +32,12 @@
 #   --base-model ID         Override base encoder model ID
 #   --animal-input-dir DIR  Animal FASTA source dir (default: <output>/pipeline/data/animal/fasta/training)
 #   --animal-gff-dir DIR    Animal GFF source dir (default: <output>/pipeline/data/animal/gff/training)
+#   --plant-input-dir DIR   Plant FASTA source dir; skips HF download when set
+#   --plant-gff-dir DIR     Plant GFF source dir; skips HF download when set
+#   --species-ids IDS       Space-separated species IDs to override the domain default
+#                           Example: --species-ids "Hsapiens Mmusculus"
+#   --species-config PATH   YAML file with custom species configs (see src/config.py for format)
+#                           Required when --species-ids references IDs not in src/config.py
 #   --hf-upload-repo ID     Upload artifacts to Hugging Face repo (optional)
 #   --hf-upload-type TYPE   model or dataset repo type (default: model)
 #   --hf-upload-path PATH   Path inside HF repo (default: run name)
@@ -49,7 +55,7 @@ cd "$SCRIPT_DIR"
 
 # ── Argument parsing ──────────────────────────────────────────────────────────
 usage() {
-  sed -n '3,36p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '3,45p' "$0" | sed 's/^# \{0,1\}//'
     exit 0
 }
 
@@ -78,6 +84,10 @@ MIN_CORE_CLASS_TOKENS=100
 
 ANIMAL_INPUT_DIR=""
 ANIMAL_GFF_DIR=""
+PLANT_INPUT_DIR=""
+PLANT_GFF_DIR=""
+SPECIES_IDS_OVERRIDE=""
+SPECIES_CONFIG_FILE=""
 
 HF_UPLOAD_REPO=""
 HF_UPLOAD_TYPE="model"
@@ -105,6 +115,10 @@ while [[ $# -gt 0 ]]; do
     --min-core-class-tokens) MIN_CORE_CLASS_TOKENS="$2"; shift 2 ;;
     --animal-input-dir) ANIMAL_INPUT_DIR="$2"; shift 2 ;;
     --animal-gff-dir) ANIMAL_GFF_DIR="$2"; shift 2 ;;
+    --plant-input-dir) PLANT_INPUT_DIR="$2"; shift 2 ;;
+    --plant-gff-dir) PLANT_GFF_DIR="$2"; shift 2 ;;
+    --species-ids)     SPECIES_IDS_OVERRIDE="$2"; shift 2 ;;
+    --species-config)  SPECIES_CONFIG_FILE="$2"; shift 2 ;;
     --hf-upload-repo) HF_UPLOAD_REPO="$2"; shift 2 ;;
     --hf-upload-type) HF_UPLOAD_TYPE="$2"; shift 2 ;;
     --hf-upload-path) HF_UPLOAD_PATH="$2"; shift 2 ;;
@@ -148,6 +162,16 @@ else
   VALID_PROPORTION=0.02
   RUN_NAME="${RUN_NAME:-genecad-animal-multispecies}"
 fi
+
+if [[ -n "$SPECIES_CONFIG_FILE" && ! -f "$SPECIES_CONFIG_FILE" ]]; then
+  echo "ERROR: --species-config file not found: $SPECIES_CONFIG_FILE"
+  exit 1
+fi
+
+if [[ -n "$SPECIES_IDS_OVERRIDE" ]]; then
+  SPECIES_IDS="$SPECIES_IDS_OVERRIDE"
+fi
+# If --species-config given but no --species-ids, auto-read IDs later (after PYTHON_CMD is set)
 
 if [[ -z "$HF_UPLOAD_PATH" ]]; then
   HF_UPLOAD_PATH="$RUN_NAME"
@@ -309,6 +333,11 @@ if [[ -z "$ANIMAL_GFF_DIR" ]]; then
   ANIMAL_GFF_DIR="$GFF_DIR"
 fi
 
+if [[ "$DOMAIN" == "plant" ]]; then
+  if [[ -n "$PLANT_INPUT_DIR" ]]; then FASTA_DIR="$PLANT_INPUT_DIR"; fi
+  if [[ -n "$PLANT_GFF_DIR" ]]; then GFF_DIR="$PLANT_GFF_DIR"; fi
+fi
+
 if [[ -n "${GENECAD_PYTHON:-}" && -x "$GENECAD_PYTHON" ]]; then
   PYTHON_CMD=("$GENECAD_PYTHON")
 elif [[ -n "${VIRTUAL_ENV:-}" && -x "${VIRTUAL_ENV}/bin/python" ]]; then
@@ -325,6 +354,22 @@ run_python() {
   "${PYTHON_CMD[@]}" "$@"
 }
 export PYTHONPATH="$SCRIPT_DIR${PYTHONPATH:+:$PYTHONPATH}"
+
+# Auto-read species IDs from YAML if --species-ids was not given
+if [[ -z "$SPECIES_IDS_OVERRIDE" && -n "$SPECIES_CONFIG_FILE" ]]; then
+  SPECIES_IDS=$(SPECIES_CONFIG_PATH="$SPECIES_CONFIG_FILE" run_python -c "
+import os, yaml
+with open(os.environ['SPECIES_CONFIG_PATH']) as f:
+    data = yaml.safe_load(f)
+entries = data if isinstance(data, list) else data.get('species', [])
+print(' '.join(e['id'] for e in entries))
+" 2>/dev/null) || true
+  if [[ -z "$SPECIES_IDS" ]]; then
+    echo "ERROR: could not read species IDs from --species-config $SPECIES_CONFIG_FILE"
+    exit 1
+  fi
+  echo "Auto-detected species from YAML: $SPECIES_IDS"
+fi
 
 # Download a single file from a HuggingFace dataset repo using the Python API
 # Usage: hf_download <repo_id> <remote_path> <local_dir>
@@ -557,6 +602,9 @@ echo " GeneCAD Fine-Tuning"
 echo " Domain:      $DOMAIN"
 echo " Base model:  $BASE_MODEL"
 echo " Species:     $SPECIES_IDS"
+if [[ -n "$SPECIES_CONFIG_FILE" ]]; then
+  echo " Species cfg: $SPECIES_CONFIG_FILE"
+fi
 echo " Output:      $OUTPUT_DIR"
 echo " GPUs:        $NUM_GPUS"
 if [[ -n "$CUDA_VISIBLE_DEVICES_TRAIN" ]]; then
@@ -572,138 +620,195 @@ echo "============================================"
 mkdir -p "$EXTRACT_DIR" "$TRANSFORM_DIR" "$PREP_DIR/splits" \
          "$GFF_DIR" "$FASTA_DIR" "$CHECKPOINT_DIR" "$QC_DIR"
 
+# Build optional --species-config flag passed through to Python scripts
+SPECIES_CONFIG_ARG=()
+if [[ -n "$SPECIES_CONFIG_FILE" ]]; then
+  SPECIES_CONFIG_ARG=(--species-config "$SPECIES_CONFIG_FILE")
+fi
+
 # =============================================================================
 # Step 0: Prepare training data
 # =============================================================================
 echo ""
 if [[ "$DOMAIN" == "plant" ]]; then
-  echo "[0/8] Downloading training data from HuggingFace..."
+  if [[ -n "$PLANT_INPUT_DIR" || -n "$PLANT_GFF_DIR" ]]; then
+    echo "[0/8] Using local plant data (skipping HF download)..."
+    echo "  GFF dir:   $GFF_DIR"
+    echo "  FASTA dir: $FASTA_DIR"
+  else
+    echo "[0/8] Downloading training data from HuggingFace..."
 
-  HF_REPO="plantcad/genecad-dev"
+    HF_REPO="plantcad/genecad-dev"
 
-  for species in Athaliana Osativa Gmax Hvulgare Ptrichocarpa; do
-    dst="$GFF_DIR/${species}_top_transcript.gff3"
-    if [ ! -f "$dst" ]; then
-      echo "  Downloading GFF: $species"
-      hf_download "$HF_REPO" \
-        "data/plant/gff/training/${species}_top_transcript.gff3" \
-        "$GFF_DIR"
-      # hf_hub_download preserves the remote path structure; flatten to dst
-      mv "$GFF_DIR/data/plant/gff/training/${species}_top_transcript.gff3" "$dst" 2>/dev/null || true
-    else
-      echo "  Skipped (exists): $species GFF"
-    fi
-  done
+    for species in Athaliana Osativa Gmax Hvulgare Ptrichocarpa; do
+      dst="$GFF_DIR/${species}_top_transcript.gff3"
+      if [ ! -f "$dst" ]; then
+        echo "  Downloading GFF: $species"
+        hf_download "$HF_REPO" \
+          "data/plant/gff/training/${species}_top_transcript.gff3" \
+          "$GFF_DIR"
+        # hf_hub_download preserves the remote path structure; flatten to dst
+        mv "$GFF_DIR/data/plant/gff/training/${species}_top_transcript.gff3" "$dst" 2>/dev/null || true
+      else
+        echo "  Skipped (exists): $species GFF"
+      fi
+    done
 
-  declare -A FASTA_FILES
-  FASTA_FILES["Athaliana_447_TAIR10.fa.gz"]="data/plant/fasta/training/Athaliana_447_TAIR10.fa.gz"
-  FASTA_FILES["Osativa_323_v7.0.fa.gz"]="data/plant/fasta/training/Osativa_323_v7.0.fa.gz"
-  FASTA_FILES["Gmax_880_v6.0.fa.gz"]="data/plant/fasta/training/Gmax_880_v6.0.fa.gz"
-  FASTA_FILES["Hvulgare_462_r1.fa.gz"]="data/plant/fasta/training/Hvulgare_462_r1.fa.gz"
-  FASTA_FILES["Ptrichocarpa_533_v4.0.fa.gz"]="data/plant/fasta/training/Ptrichocarpa_533_v4.0.fa.gz"
+    declare -A FASTA_FILES
+    FASTA_FILES["Athaliana_447_TAIR10.fa.gz"]="data/plant/fasta/training/Athaliana_447_TAIR10.fa.gz"
+    FASTA_FILES["Osativa_323_v7.0.fa.gz"]="data/plant/fasta/training/Osativa_323_v7.0.fa.gz"
+    FASTA_FILES["Gmax_880_v6.0.fa.gz"]="data/plant/fasta/training/Gmax_880_v6.0.fa.gz"
+    FASTA_FILES["Hvulgare_462_r1.fa.gz"]="data/plant/fasta/training/Hvulgare_462_r1.fa.gz"
+    FASTA_FILES["Ptrichocarpa_533_v4.0.fa.gz"]="data/plant/fasta/training/Ptrichocarpa_533_v4.0.fa.gz"
 
-  for fname in "${!FASTA_FILES[@]}"; do
-    dst="$FASTA_DIR/$fname"
-    hf_path="${FASTA_FILES[$fname]}"
-    if [ ! -f "$dst" ]; then
-      echo "  Downloading FASTA: $fname"
-      hf_download "$HF_REPO" "$hf_path" "$FASTA_DIR"
-      mv "$FASTA_DIR/$hf_path" "$dst" 2>/dev/null || true
-    else
-      echo "  Skipped (exists): $fname"
-    fi
-  done
+    for fname in "${!FASTA_FILES[@]}"; do
+      dst="$FASTA_DIR/$fname"
+      hf_path="${FASTA_FILES[$fname]}"
+      if [ ! -f "$dst" ]; then
+        echo "  Downloading FASTA: $fname"
+        hf_download "$HF_REPO" "$hf_path" "$FASTA_DIR"
+        mv "$FASTA_DIR/$hf_path" "$dst" 2>/dev/null || true
+      else
+        echo "  Skipped (exists): $fname"
+      fi
+    done
+  fi
 else
   echo "[0/8] Preparing animal training inputs..."
 
   HF_REPO="plantcad/genecad-dev"
-  mkdir -p "$ANIMAL_GFF_DIR" "$ANIMAL_INPUT_DIR"
 
-  # Download raw animal files from HF if they're missing locally.
-  declare -A ANIMAL_GFF_REMOTE
-  ANIMAL_GFF_REMOTE["Danio_rerio.GRCz11.115.chr.gff3.gz"]="data/animal/gff/training/Danio_rerio.GRCz11.115.chr.gff3.gz"
-  ANIMAL_GFF_REMOTE["Gallus_gallus.bGalGal1.mat.broiler.GRCg7b.115.chr.gff3.gz"]="data/animal/gff/training/Gallus_gallus.bGalGal1.mat.broiler.GRCg7b.115.chr.gff3.gz"
-  ANIMAL_GFF_REMOTE["Homo_sapiens.GRCh38.115.chr.gff3.gz"]="data/animal/gff/training/Homo_sapiens.GRCh38.115.chr.gff3.gz"
-  ANIMAL_GFF_REMOTE["Xenopus_tropicalis.UCB_Xtro_10.0.115.chr.gff3.gz"]="data/animal/gff/training/Xenopus_tropicalis.UCB_Xtro_10.0.115.chr.gff3.gz"
-  ANIMAL_GFF_REMOTE["Mus_musculus.GRCm39.115.chr.gff3.gz"]="data/animal/gff/training/Mus_musculus.GRCm39.115.chr.gff3.gz"
-
-  declare -A ANIMAL_FASTA_REMOTE
-  ANIMAL_FASTA_REMOTE["Danio_rerio.GRCz11.dna.toplevel.fa.gz"]="data/animal/fasta/training/Danio_rerio.GRCz11.dna.toplevel.fa.gz"
-  ANIMAL_FASTA_REMOTE["Gallus_gallus.bGalGal1.mat.broiler.GRCg7b.dna.toplevel.fa.gz"]="data/animal/fasta/training/Gallus_gallus.bGalGal1.mat.broiler.GRCg7b.dna.toplevel.fa.gz"
-  ANIMAL_FASTA_REMOTE["Homo_sapiens.GRCh38.dna.toplevel.fa.gz"]="data/animal/fasta/training/Homo_sapiens.GRCh38.dna.toplevel.fa.gz"
-  ANIMAL_FASTA_REMOTE["Xenopus_tropicalis.UCB_Xtro_10.0.dna.toplevel.fa.gz"]="data/animal/fasta/training/Xenopus_tropicalis.UCB_Xtro_10.0.dna.toplevel.fa.gz"
-  ANIMAL_FASTA_REMOTE["Mus_musculus.GRCm39.dna.toplevel.fa.gz"]="data/animal/fasta/training/Mus_musculus.GRCm39.dna.toplevel.fa.gz"
-
-  for fname in "${!ANIMAL_GFF_REMOTE[@]}"; do
-    if [ ! -f "$ANIMAL_GFF_DIR/$fname" ]; then
-      echo "  Downloading animal GFF: $fname"
-      hf_download "$HF_REPO" "${ANIMAL_GFF_REMOTE[$fname]}" "$ANIMAL_GFF_DIR"
-      mv "$ANIMAL_GFF_DIR/${ANIMAL_GFF_REMOTE[$fname]}" "$ANIMAL_GFF_DIR/$fname" 2>/dev/null || true
+  # Check whether any of the 5 built-in Ensembl species are requested.
+  contains_ensembl=0
+  for eid in Drerio Ggallus Hsapiens Xtropicalis Mmusculus; do
+    if [[ " $SPECIES_IDS " == *" $eid "* ]]; then
+      contains_ensembl=1; break
     fi
   done
 
-  for fname in "${!ANIMAL_FASTA_REMOTE[@]}"; do
-    if [ ! -f "$ANIMAL_INPUT_DIR/$fname" ]; then
-      echo "  Downloading animal FASTA: $fname"
-      hf_download "$HF_REPO" "${ANIMAL_FASTA_REMOTE[$fname]}" "$ANIMAL_INPUT_DIR"
-      mv "$ANIMAL_INPUT_DIR/${ANIMAL_FASTA_REMOTE[$fname]}" "$ANIMAL_INPUT_DIR/$fname" 2>/dev/null || true
-    fi
-  done
+  if [[ $contains_ensembl -eq 1 ]]; then
+    mkdir -p "$ANIMAL_GFF_DIR" "$ANIMAL_INPUT_DIR"
 
-  # Prefer pre-processed names when present; otherwise use raw Ensembl names.
-  DRERIO_GFF="$ANIMAL_GFF_DIR/Drerio_GRCz11.gene.gff3.gz"
-  [ -f "$DRERIO_GFF" ] || DRERIO_GFF="$ANIMAL_GFF_DIR/Danio_rerio.GRCz11.115.chr.gff3.gz"
-  GGALLUS_GFF="$ANIMAL_GFF_DIR/Ggallus_GRCg7b.gene.gff3.gz"
-  [ -f "$GGALLUS_GFF" ] || GGALLUS_GFF="$ANIMAL_GFF_DIR/Gallus_gallus.bGalGal1.mat.broiler.GRCg7b.115.chr.gff3.gz"
-  HSAPIENS_GFF="$ANIMAL_GFF_DIR/Hsapiens_GRCh38.gene.gff3.gz"
-  [ -f "$HSAPIENS_GFF" ] || HSAPIENS_GFF="$ANIMAL_GFF_DIR/Homo_sapiens.GRCh38.115.chr.gff3.gz"
-  XTROP_GFF="$ANIMAL_GFF_DIR/Xtropicalis_UCBXtro10.gene.gff3.gz"
-  [ -f "$XTROP_GFF" ] || XTROP_GFF="$ANIMAL_GFF_DIR/Xenopus_tropicalis.UCB_Xtro_10.0.115.chr.gff3.gz"
-  MMUSCULUS_GFF="$ANIMAL_GFF_DIR/Mmusculus_GRCm39.gene.gff3.gz"
-  [ -f "$MMUSCULUS_GFF" ] || MMUSCULUS_GFF="$ANIMAL_GFF_DIR/Mus_musculus.GRCm39.115.chr.gff3.gz"
+    # Download raw animal files from HF if they're missing locally.
+    declare -A ANIMAL_GFF_REMOTE
+    ANIMAL_GFF_REMOTE["Danio_rerio.GRCz11.115.chr.gff3.gz"]="data/animal/gff/training/Danio_rerio.GRCz11.115.chr.gff3.gz"
+    ANIMAL_GFF_REMOTE["Gallus_gallus.bGalGal1.mat.broiler.GRCg7b.115.chr.gff3.gz"]="data/animal/gff/training/Gallus_gallus.bGalGal1.mat.broiler.GRCg7b.115.chr.gff3.gz"
+    ANIMAL_GFF_REMOTE["Homo_sapiens.GRCh38.115.chr.gff3.gz"]="data/animal/gff/training/Homo_sapiens.GRCh38.115.chr.gff3.gz"
+    ANIMAL_GFF_REMOTE["Xenopus_tropicalis.UCB_Xtro_10.0.115.chr.gff3.gz"]="data/animal/gff/training/Xenopus_tropicalis.UCB_Xtro_10.0.115.chr.gff3.gz"
+    ANIMAL_GFF_REMOTE["Mus_musculus.GRCm39.115.chr.gff3.gz"]="data/animal/gff/training/Mus_musculus.GRCm39.115.chr.gff3.gz"
 
-  DRERIO_FASTA="$ANIMAL_INPUT_DIR/Drerio_GRCz11.fa.gz"
-  [ -f "$DRERIO_FASTA" ] || DRERIO_FASTA="$ANIMAL_INPUT_DIR/Danio_rerio.GRCz11.dna.toplevel.fa.gz"
-  GGALLUS_FASTA="$ANIMAL_INPUT_DIR/Ggallus_GRCg7b.fa.gz"
-  [ -f "$GGALLUS_FASTA" ] || GGALLUS_FASTA="$ANIMAL_INPUT_DIR/Gallus_gallus.bGalGal1.mat.broiler.GRCg7b.dna.toplevel.fa.gz"
-  HSAPIENS_FASTA="$ANIMAL_INPUT_DIR/Hsapiens_GRCh38.fa.gz"
-  [ -f "$HSAPIENS_FASTA" ] || HSAPIENS_FASTA="$ANIMAL_INPUT_DIR/Homo_sapiens.GRCh38.dna.toplevel.fa.gz"
-  XTROP_FASTA="$ANIMAL_INPUT_DIR/Xtropicalis_UCBXtro10.fa.gz"
-  [ -f "$XTROP_FASTA" ] || XTROP_FASTA="$ANIMAL_INPUT_DIR/Xenopus_tropicalis.UCB_Xtro_10.0.dna.toplevel.fa.gz"
-  MMUSCULUS_FASTA="$ANIMAL_INPUT_DIR/Mmusculus_GRCm39.fa.gz"
-  [ -f "$MMUSCULUS_FASTA" ] || MMUSCULUS_FASTA="$ANIMAL_INPUT_DIR/Mus_musculus.GRCm39.dna.toplevel.fa.gz"
+    declare -A ANIMAL_FASTA_REMOTE
+    ANIMAL_FASTA_REMOTE["Danio_rerio.GRCz11.dna.toplevel.fa.gz"]="data/animal/fasta/training/Danio_rerio.GRCz11.dna.toplevel.fa.gz"
+    ANIMAL_FASTA_REMOTE["Gallus_gallus.bGalGal1.mat.broiler.GRCg7b.dna.toplevel.fa.gz"]="data/animal/fasta/training/Gallus_gallus.bGalGal1.mat.broiler.GRCg7b.dna.toplevel.fa.gz"
+    ANIMAL_FASTA_REMOTE["Homo_sapiens.GRCh38.dna.toplevel.fa.gz"]="data/animal/fasta/training/Homo_sapiens.GRCh38.dna.toplevel.fa.gz"
+    ANIMAL_FASTA_REMOTE["Xenopus_tropicalis.UCB_Xtro_10.0.dna.toplevel.fa.gz"]="data/animal/fasta/training/Xenopus_tropicalis.UCB_Xtro_10.0.dna.toplevel.fa.gz"
+    ANIMAL_FASTA_REMOTE["Mus_musculus.GRCm39.dna.toplevel.fa.gz"]="data/animal/fasta/training/Mus_musculus.GRCm39.dna.toplevel.fa.gz"
 
-  for f in \
-      "$DRERIO_GFF" "$DRERIO_FASTA" \
-      "$GGALLUS_GFF" "$GGALLUS_FASTA" \
-      "$HSAPIENS_GFF" "$HSAPIENS_FASTA" \
-      "$XTROP_GFF" "$XTROP_FASTA" \
-      "$MMUSCULUS_GFF" "$MMUSCULUS_FASTA"; do
-      if [ ! -f "$f" ]; then
-          echo "ERROR: File not found: $f"
-          exit 1
+    for fname in "${!ANIMAL_GFF_REMOTE[@]}"; do
+      if [ ! -f "$ANIMAL_GFF_DIR/$fname" ]; then
+        echo "  Downloading animal GFF: $fname"
+        hf_download "$HF_REPO" "${ANIMAL_GFF_REMOTE[$fname]}" "$ANIMAL_GFF_DIR"
+        mv "$ANIMAL_GFF_DIR/${ANIMAL_GFF_REMOTE[$fname]}" "$ANIMAL_GFF_DIR/$fname" 2>/dev/null || true
       fi
-  done
+    done
 
-  # Build canonical training GFFs expected by src/config.py and extractor.
-  normalize_animal_gff "$DRERIO_GFF" "$GFF_DIR/Drerio_GRCz11.gene.gff3.gz"
-  normalize_animal_gff "$GGALLUS_GFF" "$GFF_DIR/Ggallus_GRCg7b.gene.gff3.gz"
-  normalize_animal_gff "$HSAPIENS_GFF" "$GFF_DIR/Hsapiens_GRCh38.gene.gff3.gz"
-  normalize_animal_gff "$XTROP_GFF" "$GFF_DIR/Xtropicalis_UCBXtro10.gene.gff3.gz"
-  normalize_animal_gff "$MMUSCULUS_GFF" "$GFF_DIR/Mmusculus_GRCm39.gene.gff3.gz"
+    for fname in "${!ANIMAL_FASTA_REMOTE[@]}"; do
+      if [ ! -f "$ANIMAL_INPUT_DIR/$fname" ]; then
+        echo "  Downloading animal FASTA: $fname"
+        hf_download "$HF_REPO" "${ANIMAL_FASTA_REMOTE[$fname]}" "$ANIMAL_INPUT_DIR"
+        mv "$ANIMAL_INPUT_DIR/${ANIMAL_FASTA_REMOTE[$fname]}" "$ANIMAL_INPUT_DIR/$fname" 2>/dev/null || true
+      fi
+    done
 
-  DRERIO_GFF="$GFF_DIR/Drerio_GRCz11.gene.gff3.gz"
-  GGALLUS_GFF="$GFF_DIR/Ggallus_GRCg7b.gene.gff3.gz"
-  HSAPIENS_GFF="$GFF_DIR/Hsapiens_GRCh38.gene.gff3.gz"
-  XTROP_GFF="$GFF_DIR/Xtropicalis_UCBXtro10.gene.gff3.gz"
-  MMUSCULUS_GFF="$GFF_DIR/Mmusculus_GRCm39.gene.gff3.gz"
+    # Prefer pre-processed names when present; otherwise use raw Ensembl names.
+    DRERIO_GFF="$ANIMAL_GFF_DIR/Drerio_GRCz11.gene.gff3.gz"
+    [ -f "$DRERIO_GFF" ] || DRERIO_GFF="$ANIMAL_GFF_DIR/Danio_rerio.GRCz11.115.chr.gff3.gz"
+    GGALLUS_GFF="$ANIMAL_GFF_DIR/Ggallus_GRCg7b.gene.gff3.gz"
+    [ -f "$GGALLUS_GFF" ] || GGALLUS_GFF="$ANIMAL_GFF_DIR/Gallus_gallus.bGalGal1.mat.broiler.GRCg7b.115.chr.gff3.gz"
+    HSAPIENS_GFF="$ANIMAL_GFF_DIR/Hsapiens_GRCh38.gene.gff3.gz"
+    [ -f "$HSAPIENS_GFF" ] || HSAPIENS_GFF="$ANIMAL_GFF_DIR/Homo_sapiens.GRCh38.115.chr.gff3.gz"
+    XTROP_GFF="$ANIMAL_GFF_DIR/Xtropicalis_UCBXtro10.gene.gff3.gz"
+    [ -f "$XTROP_GFF" ] || XTROP_GFF="$ANIMAL_GFF_DIR/Xenopus_tropicalis.UCB_Xtro_10.0.115.chr.gff3.gz"
+    MMUSCULUS_GFF="$ANIMAL_GFF_DIR/Mmusculus_GRCm39.gene.gff3.gz"
+    [ -f "$MMUSCULUS_GFF" ] || MMUSCULUS_GFF="$ANIMAL_GFF_DIR/Mus_musculus.GRCm39.115.chr.gff3.gz"
 
-  # Resolve FASTA paths to absolute to avoid relative-link surprises.
-  DRERIO_FASTA="$(readlink -f "$DRERIO_FASTA")"
-  GGALLUS_FASTA="$(readlink -f "$GGALLUS_FASTA")"
-  HSAPIENS_FASTA="$(readlink -f "$HSAPIENS_FASTA")"
-  XTROP_FASTA="$(readlink -f "$XTROP_FASTA")"
-  MMUSCULUS_FASTA="$(readlink -f "$MMUSCULUS_FASTA")"
+    DRERIO_FASTA="$ANIMAL_INPUT_DIR/Drerio_GRCz11.fa.gz"
+    [ -f "$DRERIO_FASTA" ] || DRERIO_FASTA="$ANIMAL_INPUT_DIR/Danio_rerio.GRCz11.dna.toplevel.fa.gz"
+    GGALLUS_FASTA="$ANIMAL_INPUT_DIR/Ggallus_GRCg7b.fa.gz"
+    [ -f "$GGALLUS_FASTA" ] || GGALLUS_FASTA="$ANIMAL_INPUT_DIR/Gallus_gallus.bGalGal1.mat.broiler.GRCg7b.dna.toplevel.fa.gz"
+    HSAPIENS_FASTA="$ANIMAL_INPUT_DIR/Hsapiens_GRCh38.fa.gz"
+    [ -f "$HSAPIENS_FASTA" ] || HSAPIENS_FASTA="$ANIMAL_INPUT_DIR/Homo_sapiens.GRCh38.dna.toplevel.fa.gz"
+    XTROP_FASTA="$ANIMAL_INPUT_DIR/Xtropicalis_UCBXtro10.fa.gz"
+    [ -f "$XTROP_FASTA" ] || XTROP_FASTA="$ANIMAL_INPUT_DIR/Xenopus_tropicalis.UCB_Xtro_10.0.dna.toplevel.fa.gz"
+    MMUSCULUS_FASTA="$ANIMAL_INPUT_DIR/Mmusculus_GRCm39.fa.gz"
+    [ -f "$MMUSCULUS_FASTA" ] || MMUSCULUS_FASTA="$ANIMAL_INPUT_DIR/Mus_musculus.GRCm39.dna.toplevel.fa.gz"
+
+    for f in \
+        "$DRERIO_GFF" "$DRERIO_FASTA" \
+        "$GGALLUS_GFF" "$GGALLUS_FASTA" \
+        "$HSAPIENS_GFF" "$HSAPIENS_FASTA" \
+        "$XTROP_GFF" "$XTROP_FASTA" \
+        "$MMUSCULUS_GFF" "$MMUSCULUS_FASTA"; do
+        if [ ! -f "$f" ]; then
+            echo "ERROR: File not found: $f"
+            exit 1
+        fi
+    done
+
+    # Build canonical training GFFs expected by src/config.py and extractor.
+    normalize_animal_gff "$DRERIO_GFF" "$GFF_DIR/Drerio_GRCz11.gene.gff3.gz"
+    normalize_animal_gff "$GGALLUS_GFF" "$GFF_DIR/Ggallus_GRCg7b.gene.gff3.gz"
+    normalize_animal_gff "$HSAPIENS_GFF" "$GFF_DIR/Hsapiens_GRCh38.gene.gff3.gz"
+    normalize_animal_gff "$XTROP_GFF" "$GFF_DIR/Xtropicalis_UCBXtro10.gene.gff3.gz"
+    normalize_animal_gff "$MMUSCULUS_GFF" "$GFF_DIR/Mmusculus_GRCm39.gene.gff3.gz"
+
+    DRERIO_GFF="$GFF_DIR/Drerio_GRCz11.gene.gff3.gz"
+    GGALLUS_GFF="$GFF_DIR/Ggallus_GRCg7b.gene.gff3.gz"
+    HSAPIENS_GFF="$GFF_DIR/Hsapiens_GRCh38.gene.gff3.gz"
+    XTROP_GFF="$GFF_DIR/Xtropicalis_UCBXtro10.gene.gff3.gz"
+    MMUSCULUS_GFF="$GFF_DIR/Mmusculus_GRCm39.gene.gff3.gz"
+
+    # Resolve FASTA paths to absolute to avoid relative-link surprises.
+    DRERIO_FASTA="$(readlink -f "$DRERIO_FASTA")"
+    GGALLUS_FASTA="$(readlink -f "$GGALLUS_FASTA")"
+    HSAPIENS_FASTA="$(readlink -f "$HSAPIENS_FASTA")"
+    XTROP_FASTA="$(readlink -f "$XTROP_FASTA")"
+    MMUSCULUS_FASTA="$(readlink -f "$MMUSCULUS_FASTA")"
+  else
+    echo "  No built-in Ensembl species — normalizing custom species GFFs..."
+    mkdir -p "$GFF_DIR" "$ANIMAL_GFF_DIR" "$ANIMAL_INPUT_DIR"
+
+    if [[ -z "$SPECIES_CONFIG_FILE" ]]; then
+      echo "ERROR: --species-config is required when using non-Ensembl species"
+      exit 1
+    fi
+
+    # For each custom species: normalize GFF (picks one transcript per gene, writes longest=1)
+    # so that extract.py can identify canonical transcripts.
+    for sid in $SPECIES_IDS; do
+      gff_file=$(SPEC_ID="$sid" SPEC_CONFIG="$SPECIES_CONFIG_FILE" run_python -c "
+import os, yaml
+sid = os.environ['SPEC_ID']
+with open(os.environ['SPEC_CONFIG']) as f:
+    data = yaml.safe_load(f)
+entries = data if isinstance(data, list) else data.get('species', [])
+for e in entries:
+    if e['id'] == sid:
+        print(e['gff']['filename'])
+        break
+")
+      src="$ANIMAL_GFF_DIR/$gff_file"
+      dst="$GFF_DIR/$gff_file"
+      if [ ! -f "$src" ]; then
+        echo "ERROR: GFF file not found: $src"
+        exit 1
+      fi
+      normalize_animal_gff "$src" "$dst"
+    done
+
+    # FASTA files are read directly from the user-provided dir by their original filenames.
+    FASTA_DIR="$ANIMAL_INPUT_DIR"
+  fi
 fi
 
 # =============================================================================
@@ -712,26 +817,31 @@ fi
 echo ""
 echo "[1/8] Setting up species data links..."
 if [[ "$DOMAIN" == "plant" ]]; then
-  ln -sf "Athaliana_top_transcript.gff3"   "$GFF_DIR/Athaliana_447_Araport11.gene.gff3"   2>/dev/null || true
-  ln -sf "Athaliana_447_TAIR10.fa.gz"      "$FASTA_DIR/Athaliana_447.fasta"               2>/dev/null || true
+  if [[ -z "$PLANT_INPUT_DIR" && -z "$PLANT_GFF_DIR" ]]; then
+    # Using HF-downloaded data: create name-aliasing symlinks expected by config.py
+    ln -sf "Athaliana_top_transcript.gff3"   "$GFF_DIR/Athaliana_447_Araport11.gene.gff3"   2>/dev/null || true
+    ln -sf "Athaliana_447_TAIR10.fa.gz"      "$FASTA_DIR/Athaliana_447.fasta"               2>/dev/null || true
 
-  ln -sf "Osativa_top_transcript.gff3"     "$GFF_DIR/Osativa_323_v7.0.gene.gff3"          2>/dev/null || true
-  ln -sf "Osativa_323_v7.0.fa.gz"          "$FASTA_DIR/Osativa_323.fasta"                  2>/dev/null || true
+    ln -sf "Osativa_top_transcript.gff3"     "$GFF_DIR/Osativa_323_v7.0.gene.gff3"          2>/dev/null || true
+    ln -sf "Osativa_323_v7.0.fa.gz"          "$FASTA_DIR/Osativa_323.fasta"                  2>/dev/null || true
 
-  ln -sf "Gmax_top_transcript.gff3"        "$GFF_DIR/Gmax_880_Wm82.a6.v1.gene.gff3"       2>/dev/null || true
+    ln -sf "Gmax_top_transcript.gff3"        "$GFF_DIR/Gmax_880_Wm82.a6.v1.gene.gff3"       2>/dev/null || true
 
-  ln -sf "Hvulgare_top_transcript.gff3"    "$GFF_DIR/HvulgareMorex_702_V3.gene.gff3"       2>/dev/null || true
-  ln -sf "Hvulgare_462_r1.fa.gz"           "$FASTA_DIR/HvulgareMorex_702_V3.fa.gz"         2>/dev/null || true
+    ln -sf "Hvulgare_top_transcript.gff3"    "$GFF_DIR/HvulgareMorex_702_V3.gene.gff3"       2>/dev/null || true
+    ln -sf "Hvulgare_462_r1.fa.gz"           "$FASTA_DIR/HvulgareMorex_702_V3.fa.gz"         2>/dev/null || true
 
-  ln -sf "Ptrichocarpa_top_transcript.gff3" "$GFF_DIR/Ptrichocarpa_533_v4.1.gene.gff3"    2>/dev/null || true
+    ln -sf "Ptrichocarpa_top_transcript.gff3" "$GFF_DIR/Ptrichocarpa_533_v4.1.gene.gff3"    2>/dev/null || true
+  fi
 else
   # GFF files are already materialized as canonical files in Step 0.
 
-  ln -sf "$DRERIO_FASTA"    "$FASTA_DIR/Drerio_GRCz11.fa.gz"         2>/dev/null || true
-  ln -sf "$GGALLUS_FASTA"   "$FASTA_DIR/Ggallus_GRCg7b.fa.gz"        2>/dev/null || true
-  ln -sf "$HSAPIENS_FASTA"  "$FASTA_DIR/Hsapiens_GRCh38.fa.gz"       2>/dev/null || true
-  ln -sf "$XTROP_FASTA"     "$FASTA_DIR/Xtropicalis_UCBXtro10.fa.gz" 2>/dev/null || true
-  ln -sf "$MMUSCULUS_FASTA" "$FASTA_DIR/Mmusculus_GRCm39.fa.gz"      2>/dev/null || true
+  if [[ $contains_ensembl -eq 1 ]]; then
+    ln -sf "$DRERIO_FASTA"    "$FASTA_DIR/Drerio_GRCz11.fa.gz"         2>/dev/null || true
+    ln -sf "$GGALLUS_FASTA"   "$FASTA_DIR/Ggallus_GRCg7b.fa.gz"        2>/dev/null || true
+    ln -sf "$HSAPIENS_FASTA"  "$FASTA_DIR/Hsapiens_GRCh38.fa.gz"       2>/dev/null || true
+    ln -sf "$XTROP_FASTA"     "$FASTA_DIR/Xtropicalis_UCBXtro10.fa.gz" 2>/dev/null || true
+    ln -sf "$MMUSCULUS_FASTA" "$FASTA_DIR/Mmusculus_GRCm39.fa.gz"      2>/dev/null || true
+  fi
 fi
 
 echo "  Done."
@@ -756,7 +866,8 @@ if [ ! -f "$EXTRACT_DIR/raw_features.parquet" ]; then
         run_python scripts/extract_train.py extract_gff_features \
           --input-dir "$GFF_DIR" \
           --species-id "$sid" \
-          --output "$out_file"
+          --output "$out_file" \
+          "${SPECIES_CONFIG_ARG[@]}"
       ) &
 
       active_jobs=$((active_jobs + 1))
@@ -791,7 +902,8 @@ PY
     run_python scripts/extract_train.py extract_gff_features \
       --input-dir "$GFF_DIR" \
       --species-id $SPECIES_IDS \
-      --output "$EXTRACT_DIR/raw_features.parquet"
+      --output "$EXTRACT_DIR/raw_features.parquet" \
+      "${SPECIES_CONFIG_ARG[@]}"
   fi
   echo "  Created: raw_features.parquet"
 else
@@ -808,7 +920,8 @@ if [ ! -d "$EXTRACT_DIR/tokens.zarr" ]; then
     --input-dir "$FASTA_DIR" \
     --species-id $SPECIES_IDS \
     --tokenizer-path "$BASE_MODEL" \
-    --output "$EXTRACT_DIR/tokens.zarr"
+    --output "$EXTRACT_DIR/tokens.zarr" \
+    "${SPECIES_CONFIG_ARG[@]}"
   echo "  Created: tokens.zarr"
 else
   echo "  Skipped (already exists)"
@@ -894,7 +1007,8 @@ if [ ! -d "$PREP_DIR/splits/train.zarr" ]; then
     --input "$TRANSFORM_DIR/windows.zarr" \
     --train-output "$PREP_DIR/splits/train.zarr" \
     --valid-output "$PREP_DIR/splits/valid.zarr" \
-    --valid-proportion $VALID_PROPORTION
+    --valid-proportion $VALID_PROPORTION \
+    "${SPECIES_CONFIG_ARG[@]}"
   echo "  Created: train.zarr + valid.zarr"
 else
   echo "  Skipped (already exists)"
