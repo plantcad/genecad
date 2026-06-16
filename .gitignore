@@ -10,3 +10,4 @@ logs/train*
 .specstory/
 data/
 genecad_result/
+/.idea

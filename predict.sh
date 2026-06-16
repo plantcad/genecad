@@ -14,10 +14,10 @@ Run the complete GeneCAD annotation pipeline on a genomic FASTA file.
 Models are downloaded automatically from Hugging Face on first run.
 
 Options:
-  -i, --input PATH      Input genome FASTA file
+  -i, --input-fasta PATH      Input genome FASTA file
                         (default: downloads Arabidopsis thaliana TAIR12 example)
-  -o, --output DIR      Output directory (default: genecad_result/Athaliana_predictions)
-  -s, --species NAME    Species label prefixed on output filenames (default: Athaliana)
+  -o, --output-dir DIR      Output directory (default: genecad_result/Athaliana_predictions)
+  -s, --species-id NAME    Species label prefixed on output filenames (default: Athaliana)
   -m, --mode MODE       Model to use: plant | animal  (default: plant)
   -n, --top-n-contigs N Predict only the N longest FASTA sequences (default: all)
     -l, --min-transcript-length N
@@ -85,9 +85,9 @@ BASE_MODEL_ARG=""
 
 while [[ $# -gt 0 ]]; do
   case $1 in
-    -i|--input)      INPUT_FILE="$2";      shift 2 ;;
-    -o|--output)     OUTPUT_DIR="$2";      shift 2 ;;
-    -s|--species)    SPECIES_ID="$2";      shift 2 ;;
+    -i|--input-fasta)      INPUT_FILE="$2";      shift 2 ;;
+    -o|--output-dir)     OUTPUT_DIR="$2";      shift 2 ;;
+    -s|--species-id)    SPECIES_ID="$2";      shift 2 ;;
     -m|--mode)       MODE="$2";            shift 2 ;;
     -n|--top-n-contigs) TOP_N_CONTIGS="$2"; shift 2 ;;
     -l|--min-transcript-length) MIN_TRANSCRIPT_LENGTH="$2"; shift 2 ;;
@@ -375,30 +375,36 @@ process_chromosome() {
     local LOG_PREFIX="[${CHR_ID}@GPU${GPU_ID}]"
 
     local CHR_OUTPUT_DIR="${OUTPUT_DIR}/${CHR_ID}"
-    local PIPELINE_DIR="${CHR_OUTPUT_DIR}/pipeline"
-    mkdir -p "$PIPELINE_DIR"
 
-    if [[ -f "$CHR_OUTPUT_DIR/predictions_recall.gff" ]]; then
+    # Files to be produced
+    local SEQUENCES_ZARR="$CHR_OUTPUT_DIR/sequences_$CHR_ID.zarr"
+    local PREDICTIONS_DIR="$CHR_OUTPUT_DIR/predictions_$CHR_ID"
+    local INTERVALS_ZARR="$CHR_OUTPUT_DIR/intervals_$CHR_ID.zarr"
+    local RAW_GENECAD_GFF="$CHR_OUTPUT_DIR/predictions_raw_$CHR_ID.gff"
+    local FILTERED_GENECAD_GFF="$CHR_OUTPUT_DIR/predictions_filtered_$CHR_ID.gff"
+
+
+    if [[ -f $FILTERED_GENECAD_GFF ]]; then
         echo "${LOG_PREFIX} Already complete — skipping (delete $CHR_OUTPUT_DIR to rerun)"
         return 0
     fi
 
     # --- Step 1: Extract Sequences ---
-    if [[ -e "$PIPELINE_DIR/sequences.zarr" ]]; then
-        echo "${LOG_PREFIX} [1/6] Skipping — sequences.zarr already exists"
+    if [[ -e $SEQUENCES_ZARR ]]; then
+        echo "${LOG_PREFIX} [1/7] Skipping — sequences.zarr already exists"
     else
-        echo "${LOG_PREFIX} [1/6] Extracting sequences..."
-        $PYTHON "$SCRIPT_DIR/scripts/extract.py" extract_fasta_file \
+        echo "${LOG_PREFIX} [1/7] Extracting sequences..."
+        $PYTHON "$SCRIPT_DIR/scripts/extract_fasta.py" \
             --species-id "$SPECIES_ID" \
-            --fasta-file "$INPUT_FILE" \
+            --input-fasta "$INPUT_FILE" \
             --chrom-map "${CHR_ID}:${CHR_ID}" \
-            --tokenizer-path "$TOKENIZER_PATH" \
-            --output "$PIPELINE_DIR/sequences.zarr"
+            --model-path "$TOKENIZER_PATH" \
+            --output-zarr $SEQUENCES_ZARR
     fi
 
     # --- Step 2: Predict ---
-    if [[ -e "$PIPELINE_DIR/predictions.zarr" ]]; then
-        echo "${LOG_PREFIX} [2/6] Skipping — predictions.zarr already exists"
+    if [[ -e $PREDICTIONS_DIR ]]; then
+        echo "${LOG_PREFIX} [2/7] Skipping — predictions dir already exists"
     else
         local gpu_id="$GPU_ID"
         local bs="$BATCH_SIZE"
@@ -408,13 +414,13 @@ process_chromosome() {
         while [[ $attempt -lt $max_attempts ]]; do
             local exit_code=0
             if [[ "$PREDICT_MODE" == "ddp" ]]; then
-                echo "${LOG_PREFIX} [2/6] Prediction via DDP (batch=${bs}/GPU, attempt $((attempt+1))/${max_attempts})..."
+                echo "${LOG_PREFIX} [2/7] Prediction via DDP (batch=${bs}/GPU, attempt $((attempt+1))/${max_attempts})..."
                 CUDA_VISIBLE_DEVICES="$GPU_LIST_STR" \
                 $PY_LAUNCHER \
-                    "$SCRIPT_DIR/scripts/predict.py" create_predictions \
+                    "$SCRIPT_DIR/scripts/predict.py" \
                     --chromosome-id "$CHR_ID" \
-                    --input "$PIPELINE_DIR/sequences.zarr" \
-                    --output-dir "$PIPELINE_DIR/predictions.zarr" \
+                    --input-zarr $SEQUENCES_ZARR \
+                    --output-dir $PREDICTIONS_DIR \
                     --model-path "$BASE_MODEL" \
                     --model-checkpoint "$HEAD_MODEL" \
                     --species-id "$SPECIES_ID" \
@@ -423,11 +429,11 @@ process_chromosome() {
                     --window-size 8192 \
                     --stride 4096 || exit_code=$?
             elif [[ "$PREDICT_MODE" == "ddp_slurm" ]]; then
-                echo "${LOG_PREFIX} [2/6] Prediction via SLURM distributed (batch=${bs}/GPU, attempt $((attempt+1))/${max_attempts})..."
-                $PY_LAUNCHER "$SCRIPT_DIR/scripts/predict.py" create_predictions \
+                echo "${LOG_PREFIX} [2/7] Prediction via SLURM distributed (batch=${bs}/GPU, attempt $((attempt+1))/${max_attempts})..."
+                $PY_LAUNCHER "$SCRIPT_DIR/scripts/predict.py" \
                     --chromosome-id "$CHR_ID" \
-                    --input "$PIPELINE_DIR/sequences.zarr" \
-                    --output-dir "$PIPELINE_DIR/predictions.zarr" \
+                    --input-zarr $SEQUENCES_ZARR \
+                    --output-dir $PREDICTIONS_DIR \
                     --model-path "$BASE_MODEL" \
                     --model-checkpoint "$HEAD_MODEL" \
                     --species-id "$SPECIES_ID" \
@@ -436,12 +442,12 @@ process_chromosome() {
                     --window-size 8192 \
                     --stride 4096 || exit_code=$?
             else
-                echo "${LOG_PREFIX} [2/6] Prediction on GPU ${gpu_id} (batch=${bs}, attempt $((attempt+1))/${max_attempts})..."
+                echo "${LOG_PREFIX} [2/7] Prediction on GPU ${gpu_id} (batch=${bs}, attempt $((attempt+1))/${max_attempts})..."
                 CUDA_VISIBLE_DEVICES="$gpu_id" \
-                $PY_LAUNCHER "$SCRIPT_DIR/scripts/predict.py" create_predictions \
+                $PY_LAUNCHER "$SCRIPT_DIR/scripts/predict.py" \
                     --chromosome-id "$CHR_ID" \
-                    --input "$PIPELINE_DIR/sequences.zarr" \
-                    --output-dir "$PIPELINE_DIR/predictions.zarr" \
+                    --input-zarr $SEQUENCES_ZARR \
+                    --output-dir $PREDICTIONS_DIR \
                     --model-path "$BASE_MODEL" \
                     --model-checkpoint "$HEAD_MODEL" \
                     --species-id "$SPECIES_ID" \
@@ -454,7 +460,7 @@ process_chromosome() {
             if [[ $exit_code -eq 0 ]]; then
                 success=1
                 if [[ $attempt -gt 0 ]]; then
-                    echo "${LOG_PREFIX} [2/6] Succeeded with batch size ${bs} after ${attempt} retry(s)."
+                    echo "${LOG_PREFIX} [2/7] Succeeded with batch size ${bs} after ${attempt} retry(s)."
                     echo "${LOG_PREFIX}   TIP: Add '-b ${bs}' to future runs to skip probing."
                 fi
                 break
@@ -462,9 +468,9 @@ process_chromosome() {
             local next_bs=$(( bs * 4 / 5 ))   # reduce by 20%
             [[ $next_bs -ge $bs ]] && next_bs=$(( bs - 1 ))  # guard against bs<5 rounding to same value
             [[ $next_bs -lt 1 ]] && next_bs=1
-            echo "${LOG_PREFIX} [2/6] Failed (exit ${exit_code}). Reducing batch size by 20%%: ${bs} → ${next_bs}..."
+            echo "${LOG_PREFIX} [2/7] Failed (exit ${exit_code}). Reducing batch size by 20%%: ${bs} → ${next_bs}..."
             bs=$next_bs
-            rm -rf "$PIPELINE_DIR/predictions.zarr"
+            rm -rf $PREDICTIONS_DIR
             attempt=$(( attempt + 1 ))
         done
         if [[ $success -ne 1 ]]; then
@@ -475,71 +481,44 @@ process_chromosome() {
     fi
 
     # --- Step 3: Detect Intervals ---
-    if [[ -e "$PIPELINE_DIR/intervals.zarr" ]]; then
-        echo "${LOG_PREFIX} [3/6] Skipping — intervals.zarr already exists"
+    if [[ -e $INTERVALS_ZARR ]]; then
+        echo "${LOG_PREFIX} [3/7] Skipping — intervals.zarr already exists"
     else
-        echo "${LOG_PREFIX} [3/6] Detecting intervals (Viterbi decoding)..."
-        $PYTHON "$SCRIPT_DIR/scripts/predict.py" detect_intervals \
-            --input-dir "$PIPELINE_DIR/predictions.zarr" \
-            --output "$PIPELINE_DIR/intervals.zarr" \
-            --decoding-methods "viterbi" \
-            --remove-incomplete-features yes \
+        echo "${LOG_PREFIX} [3/7] Detecting intervals (Viterbi decoding)..."
+        $PYTHON "$SCRIPT_DIR/scripts/detect_intervals.py" \
+            --input-dir $PREDICTIONS_DIR \
+            --output-zarr $INTERVALS_ZARR \
             --domain "$MODE"
     fi
 
     # --- Step 4: Export Raw GFF ---
-    if [[ -f "$PIPELINE_DIR/predictions__raw.gff" ]]; then
-        echo "${LOG_PREFIX} [4/6] Skipping — predictions__raw.gff already exists"
+    if [[ -f $RAW_GENECAD_GFF ]]; then
+        echo "${LOG_PREFIX} [4/7] Skipping — predictions_raw.gff already exists"
     else
-        echo "${LOG_PREFIX} [4/6] Exporting raw GFF..."
+        echo "${LOG_PREFIX} [4/7] Exporting raw GFF..."
         local export_tqdm_args=()
         if [[ -n "$gpu_id" ]]; then
             export_tqdm_args=(--tqdm-position "$gpu_id")
         fi
-        $PYTHON "$SCRIPT_DIR/scripts/predict.py" export_gff \
-            --input "$PIPELINE_DIR/intervals.zarr" \
-            --output "$PIPELINE_DIR/predictions__raw.gff" \
-            --decoding-method viterbi \
+        $PYTHON "$SCRIPT_DIR/scripts/export_gff.py" \
+            --input-zarr $INTERVALS_ZARR \
+            --output-gff $RAW_GENECAD_GFF \
             --min-transcript-length "$MIN_TRANSCRIPT_LENGTH" \
             --cpu-workers "$CPU_WORKERS" \
-            --strip-introns yes \
             "${export_tqdm_args[@]}"
     fi
 
     # --- Step 5: Post-processing Filters ---
-    echo "${LOG_PREFIX} [5/6] Filtering features..."
+    echo "${LOG_PREFIX} [5/7] Filtering features..."
 
-    if [[ -f "$PIPELINE_DIR/predictions__raw__feat_len_2.gff" ]]; then
+    if [[ -f $FILTERED_GENECAD_GFF ]]; then
         echo "${LOG_PREFIX}   Skipping feature-length filter — output already exists"
     else
-        $PYTHON "$SCRIPT_DIR/scripts/gff.py" filter_to_min_feature_length \
-            --input "$PIPELINE_DIR/predictions__raw.gff" \
-            --output "$PIPELINE_DIR/predictions__raw__feat_len_2.gff" \
-            --feature-types "five_prime_UTR,three_prime_UTR,CDS" \
-            --min-length 2
+        $PYTHON "$SCRIPT_DIR/scripts/filter_raw_gff.py" \
+            --input-gff $RAW_GENECAD_GFF \
+            --output-gff $FILTERED_GENECAD_GFF
     fi
 
-    if [[ -f "$PIPELINE_DIR/predictions__raw__feat_len_2__gene_len_30.gff" ]]; then
-        echo "${LOG_PREFIX}   Skipping gene-length filter — output already exists"
-    else
-        $PYTHON "$SCRIPT_DIR/scripts/gff.py" filter_to_min_gene_length \
-            --input "$PIPELINE_DIR/predictions__raw__feat_len_2.gff" \
-            --output "$PIPELINE_DIR/predictions__raw__feat_len_2__gene_len_30.gff" \
-            --min-length 30
-    fi
-
-    if [[ -f "$PIPELINE_DIR/predictions_recall__raw.gff" ]]; then
-        echo "${LOG_PREFIX}   Skipping valid-gene filter — output already exists"
-    else
-        $PYTHON "$SCRIPT_DIR/scripts/gff.py" filter_to_valid_genes \
-            --input "$PIPELINE_DIR/predictions__raw__feat_len_2__gene_len_30.gff" \
-            --output "$PIPELINE_DIR/predictions_recall__raw.gff" \
-            --require-utrs "no"
-    fi
-
-    # --- Step 6: Copy final output ---
-    echo "${LOG_PREFIX} [6/6] Saving results..."
-    cp "$PIPELINE_DIR/predictions_recall__raw.gff" "$CHR_OUTPUT_DIR/predictions_recall.gff"
     echo "${LOG_PREFIX} Done!"
 }
 
@@ -645,7 +624,7 @@ fi
 
 RECALL_GFFS=()
 for CHR_ID in "${CHR_ARRAY[@]}"; do
-    RECALL_GFFS=("${RECALL_GFFS[@]}" "${OUTPUT_DIR}/${CHR_ID}/predictions_recall.gff")
+    RECALL_GFFS=("${RECALL_GFFS[@]}" "${OUTPUT_DIR}/${CHR_ID}/predictions_filtered_$CHR_ID.gff")
 done
 
 # =================================================================
@@ -653,7 +632,7 @@ done
 # =================================================================
 echo ""
 echo "================================================================="
-echo "Merging per-chromosome GFFs into single files..."
+echo "[6/7] Merging per-chromosome GFFs into single files..."
 echo "================================================================="
 
 RAW_GFF="$OUTPUT_DIR/${SPECIES_ID}_GeneCAD_raw.gff"
@@ -663,22 +642,22 @@ if [[ -f "$RAW_GFF" ]]; then
     echo "Skipping merge — ${SPECIES_ID}_GeneCAD_raw.gff already exists"
 else
     $PYTHON "$MERGE_SCRIPT" \
-        --output "$RAW_GFF" \
-        --inputs "${RECALL_GFFS[@]}"
+        --output-gff "$RAW_GFF" \
+        --input-gffs "${RECALL_GFFS[@]}"
 fi
 
 echo ""
 echo "================================================================="
-echo "Running protein refinement on merged predictions..."
+echo "[7/7] Running protein refinement on merged predictions..."
 echo "================================================================="
 
 if [[ -f "$FINAL_GFF" ]]; then
     echo "Skipping refinement — ${SPECIES_ID}_GeneCAD_final.gff already exists"
 else
     $PYTHON "$SCRIPT_DIR/scripts/refine.py" \
-        --gff "$RAW_GFF" \
-        --genome "$INPUT_FILE" \
-        --out "$FINAL_GFF" \
+        --input-gff "$RAW_GFF" \
+        --input-fasta "$INPUT_FILE" \
+        --output-gff "$FINAL_GFF" \
         --gpus "$GPU_LIST_STR"
 fi
 

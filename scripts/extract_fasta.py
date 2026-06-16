@@ -1,17 +1,19 @@
+import json
 import os
 import gzip
 import argparse
 import logging
 import numpy.typing as npt
 from typing import Any, Callable
-from src.naming import get_species_data_dir
+
+from huggingface_hub import hf_hub_download
+
 import xarray as xr
 import pandas as pd
 import numpy as np
 from Bio import SeqIO
 from Bio.SeqFeature import SeqFeature
 from src.gff_parser import parse as parse_gff
-from src.gff_pandas import read_gff3
 from src.dataset import (
     DEFAULT_SEQUENCE_CHUNK_SIZE,
     info_str,
@@ -19,12 +21,7 @@ from src.dataset import (
     set_dimension_chunks,
 )
 from src.schema import GffFeatureType, SequenceFeature, PositionInfo
-from src.config import (
-    SPECIES_CONFIGS,
-    SpeciesConfig,
-    get_species_configs,
-    register_species_configs_from_yaml,
-)
+from src.config import SpeciesConfig, get_species_configs
 
 logger = logging.getLogger(__name__)
 
@@ -216,87 +213,26 @@ def _extract_gff_features(
                 # For now, we use the longest transcript as the canonical transcript
                 transcript_is_canonical = is_longest_transcript(transcript)
 
-                # Collect sub-features by type for this transcript
-                exon_sub_features: list[SeqFeature] = []
-                cds_sub_features: list[SeqFeature] = []
-                utr_sub_features: list[SeqFeature] = []
+                # Process each feature
                 for feature in transcript.sub_features:
-                    if feature.type == "exon":
-                        exon_sub_features.append(feature)
-                    elif feature.type == GffFeatureType.CDS:
-                        cds_sub_features.append(feature)
-                    elif feature.type in (
+                    # Skip exon features if requested (they are structural, not modeling features)
+                    if skip_exon_features and feature.type == "exon":
+                        continue
+
+                    if feature.type not in [
                         GffFeatureType.FIVE_PRIME_UTR,
+                        GffFeatureType.CDS,
                         GffFeatureType.THREE_PRIME_UTR,
-                    ):
-                        utr_sub_features.append(feature)
-                    else:
+                    ]:
                         raise ValueError(
                             f"Found unexpected transcript feature type: {feature.type}"
                         )
 
-                # Derive UTRs from exon-CDS when explicit UTR features are absent
-                derived_utr_features: list[tuple[int, int, GffFeatureType]] = []
-                if (
-                    not skip_exon_features
-                    and exon_sub_features
-                    and cds_sub_features
-                    and not utr_sub_features
-                ):
-                    cds_coords = [
-                        (int(f.location.start), int(f.location.end))
-                        for f in cds_sub_features
-                    ]
-                    cds_min = min(s for s, _ in cds_coords)
-                    cds_max = max(e for _, e in cds_coords)
-                    strand = transcript_info.strand
-                    for ef in exon_sub_features:
-                        es = int(ef.location.start)
-                        ee = int(ef.location.end)
-                        if strand == 1:
-                            if es < cds_min:
-                                derived_utr_features.append(
-                                    (
-                                        es,
-                                        min(ee, cds_min),
-                                        GffFeatureType.FIVE_PRIME_UTR,
-                                    )
-                                )
-                            if ee > cds_max:
-                                derived_utr_features.append(
-                                    (
-                                        max(es, cds_max),
-                                        ee,
-                                        GffFeatureType.THREE_PRIME_UTR,
-                                    )
-                                )
-                        else:
-                            if ee > cds_max:
-                                derived_utr_features.append(
-                                    (
-                                        max(es, cds_max),
-                                        ee,
-                                        GffFeatureType.FIVE_PRIME_UTR,
-                                    )
-                                )
-                            if es < cds_min:
-                                derived_utr_features.append(
-                                    (
-                                        es,
-                                        min(ee, cds_min),
-                                        GffFeatureType.THREE_PRIME_UTR,
-                                    )
-                                )
-
-                # Process CDS and UTR features (explicit or derived)
-                modeling_features: list[SeqFeature] = (
-                    cds_sub_features + utr_sub_features
-                )
-                for feature in modeling_features:
                     feature_id = get_feature_id(feature)
                     feature_info = get_position_info(feature)
                     feature_name = get_feature_name(feature)
 
+                    # Create a validated GeneFeatureData object
                     feature_data = SequenceFeature(
                         species_id=species_id,
                         species_name=species_name,
@@ -320,38 +256,6 @@ def _extract_gff_features(
                         feature_type=feature.type,
                         feature_start=feature_info.start,
                         feature_stop=feature_info.stop,
-                        filename=filename,
-                    )
-                    features_data.append(feature_data)
-
-                for feat_start, feat_stop, feat_type in derived_utr_features:
-                    if feat_start >= feat_stop:
-                        continue
-                    strand_char = "+" if transcript_info.strand == 1 else "-"
-                    derived_id = f"{feat_type}:{transcript_id}:{feat_start}:{feat_stop}:{strand_char}"
-                    feature_data = SequenceFeature(
-                        species_id=species_id,
-                        species_name=species_name,
-                        chromosome_id=chrom_id,
-                        chromosome_name=chrom_name,
-                        chromosome_length=chrom_length,
-                        gene_id=gene_id,
-                        gene_name=gene_name,
-                        gene_strand=gene_info.strand,
-                        gene_start=gene_info.start,
-                        gene_stop=gene_info.stop,
-                        transcript_id=transcript_id,
-                        transcript_name=transcript_name,
-                        transcript_strand=transcript_info.strand,
-                        transcript_is_canonical=transcript_is_canonical,
-                        transcript_start=transcript_info.start,
-                        transcript_stop=transcript_info.stop,
-                        feature_id=derived_id,
-                        feature_name=None,
-                        feature_strand=transcript_info.strand,
-                        feature_type=feat_type,
-                        feature_start=feat_start,
-                        feature_stop=feat_stop,
                         filename=filename,
                     )
                     features_data.append(feature_data)
@@ -520,7 +424,7 @@ FASTA_OOV_TOKENS = "MRWSYKVHDBXN"
 def extract_fasta_file(
     species_id: str,
     fasta_file: str,
-    chrom_map_str: str,
+    chrom_map_str: str | None,
     output_path: str,
     chunk_size: int = DEFAULT_SEQUENCE_CHUNK_SIZE,
     tokenizer_path: str | None = None,
@@ -543,12 +447,16 @@ def extract_fasta_file(
         Path to tokenizer if tokenizing sequences
     """
     # Parse chromosome map from string
-    chrom_map = {}
-    for mapping in chrom_map_str.split(","):
-        src, dst = mapping.split(":")
-        chrom_map[src.strip()] = dst.strip()
-
-    logger.info(f"Parsed chromosome mapping: {chrom_map}")
+    if chrom_map_str is not None:
+        chrom_map = {}
+        for mapping in chrom_map_str.split(","):
+            src, dst = mapping.split(":")
+            chrom_map[src.strip()] = dst.strip()
+        logger.info(f"Parsed chromosome mapping: {chrom_map}")
+    else:
+        logger.info(
+            "No chromosome mapping provided. All chromosomes will retain their original names."
+        )
 
     # Create output directory if it doesn't exist
     output_dir = os.path.dirname(output_path)
@@ -575,64 +483,7 @@ def extract_fasta_file(
     logger.info("Done")
 
 
-def extract_fasta_sequences(
-    input_dir: str,
-    species_ids: list[str],
-    output_path: str,
-    chunk_size: int = DEFAULT_SEQUENCE_CHUNK_SIZE,
-    tokenizer_path: str | None = None,
-) -> None:
-    """Extract sequences from FASTA file(s) into a structured format.
-
-    Parameters
-    ----------
-    input_dir : str
-        Directory containing input FASTA files
-    species_ids : list[str]
-        List of species IDs to process
-    output_path : str
-        Path to output file
-    chunk_size : int, optional
-        Size of chunks to write to Zarr
-    tokenizer_path : str, optional
-        Path to tokenizer if tokenizing sequences
-    """
-    # Create output directory if it doesn't exist
-    output_dir = os.path.dirname(output_path)
-    if output_dir and not os.path.exists(output_dir):
-        os.makedirs(output_dir)
-
-    # Get configs for all specified species
-    species_configs = get_species_configs(species_ids)
-
-    logger.info(
-        f"Extracting sequences for {len(species_configs)} species: {species_ids}"
-    )
-
-    # Load tokenizer if path provided
-    tokenizer = None
-    if tokenizer_path:
-        tokenizer = _load_tokenizer(tokenizer_path)
-
-    # Extract sequences for each species
-    for species_config in species_configs:
-        fasta_file = os.path.join(input_dir, species_config.fasta.filename)
-        fasta_file = _resolve_file_path(fasta_file)
-        chrom_map = species_config.chromosome_map
-        _extract_fasta_sequences(
-            species_id=species_config.id,
-            fasta_file=fasta_file,
-            chrom_map=chrom_map,
-            output_path=output_path,
-            chunk_size=chunk_size,
-            tokenizer=tokenizer,
-        )
-
-    dt = open_datatree(output_path)
-    logger.info(f"Final data tree:\n{dt}")
-    logger.info("Done")
-
-
+# TODO: duplicated - move to dedicated utils file in src
 def _load_tokenizer(tokenizer_path: str) -> Tokenizer:
     from transformers import AutoTokenizer
 
@@ -652,7 +503,7 @@ def _extract_fasta_sequences(
     *,
     species_id: str,
     fasta_file: str,
-    chrom_map: dict[str, str],
+    chrom_map: dict[str, str] | None,
     output_path: str,
     chunk_size: int,
     tokenizer: Tokenizer | None = None,
@@ -673,12 +524,16 @@ def _extract_fasta_sequences(
     with open_func(fasta_file, mode) as file:
         for record in SeqIO.parse(file, "fasta"):
             raw_id = record.id
-            if raw_id not in chrom_map:
-                logger.debug(
-                    f"[species={species_id}] Skipping unmapped chromosome record: {raw_id}"
-                )
-                continue
-            chrom_id = chrom_map[raw_id]
+
+            if chrom_map is not None:
+                if raw_id not in chrom_map:
+                    logger.debug(
+                        f"[species={species_id}] Skipping unmapped chromosome record: {raw_id}"
+                    )
+                    continue
+                chrom_id = chrom_map[raw_id]
+            else:
+                chrom_id = raw_id
             sequence_records[(species_id, chrom_id)] = record
             logger.info(
                 f"[species={species_id}] Added {chrom_id} (from {raw_id}), length: {len(record.seq)}"
@@ -800,182 +655,6 @@ def create_token_map(
 
 
 # -------------------------------------------------------------------------------------------------
-# Config validation
-# -------------------------------------------------------------------------------------------------
-
-
-def validate_configs(data_dir: str) -> None:
-    """Validate that the sequence IDs in GFF and FASTA files match and have the same ordering as config.
-
-    Parameters
-    ----------
-    data_dir : str
-        Base directory containing training_data/ and testing_data/ subdirectories
-    """
-    logger.info("Validating species configurations")
-
-    # Get all species configs
-    species_configs = list(SPECIES_CONFIGS.values())
-    logger.info(f"Found {len(species_configs)} species configurations")
-
-    for config in species_configs:
-        species_id = config.id
-        logger.info(f"[species={species_id}] Validating configuration")
-
-        species_data_dir = get_species_data_dir(config)
-
-        # Get expected chromosome map
-        chrom_map = config.chromosome_map
-        expected_seq_ids = list(chrom_map.keys())
-        logger.info(f"[species={species_id}] Expected sequence IDs: {expected_seq_ids}")
-
-        # Get GFF file path and extract sequence IDs
-        gff_path = os.path.join(data_dir, species_data_dir, "gff", config.gff.filename)
-        gff_path = _resolve_file_path(gff_path)
-        if not os.path.exists(gff_path):
-            raise ValueError(f"[species={species_id}] GFF file not found: {gff_path}")
-
-        logger.info(f"[species={species_id}] Checking GFF file: {gff_path}")
-        gff_seq_ids = _extract_gff_seq_ids(gff_path)
-
-        # Get FASTA file path and extract sequence IDs
-        fasta_path = os.path.join(
-            data_dir, species_data_dir, "fasta", config.fasta.filename
-        )
-        fasta_path = _resolve_file_path(fasta_path)
-        if not os.path.exists(fasta_path):
-            raise ValueError(
-                f"[species={species_id}] FASTA file not found: {fasta_path}"
-            )
-
-        logger.info(f"[species={species_id}] Checking FASTA file: {fasta_path}")
-        fasta_seq_ids = _extract_fasta_seq_ids(fasta_path)
-
-        # Filter to only sequence IDs that are in the config
-        mapped_gff_seq_ids = [
-            seq_id for seq_id in gff_seq_ids if seq_id in expected_seq_ids
-        ]
-        if len(mapped_gff_seq_ids) == 0:
-            raise ValueError(
-                f"[species={species_id}] No mapped sequence IDs found in GFF file"
-            )
-        logger.info(
-            f"[species={species_id}] Found {len(mapped_gff_seq_ids)} mapped sequence IDs in GFF file"
-        )
-
-        mapped_fasta_seq_ids = [
-            seq_id for seq_id in fasta_seq_ids if seq_id in expected_seq_ids
-        ]
-        if len(mapped_fasta_seq_ids) == 0:
-            raise ValueError(
-                f"[species={species_id}] No mapped sequence IDs found in FASTA file"
-            )
-        logger.info(
-            f"[species={species_id}] Found {len(mapped_fasta_seq_ids)} mapped sequence IDs in FASTA file"
-        )
-
-        # Log warnings for any mapped IDs that aren't in both files
-        gff_only_ids = set(mapped_gff_seq_ids) - set(mapped_fasta_seq_ids)
-        fasta_only_ids = set(mapped_fasta_seq_ids) - set(mapped_gff_seq_ids)
-
-        if gff_only_ids:
-            logger.warning(
-                f"[species={species_id}] {len(gff_only_ids)} sequence IDs in GFF only: {gff_only_ids}"
-            )
-
-        if fasta_only_ids:
-            logger.warning(
-                f"[species={species_id}] {len(fasta_only_ids)} sequence IDs in FASTA only: {fasta_only_ids}"
-            )
-
-        # Check that lexical sort of chrom_map keys matches numerical sort of values;
-        # This is not strictly necessary, but the warning here is helpful to identify
-        # new genomes that might become problematic (particularly for the deprecated
-        # MultisampleSequenceDatasetLabeled torch Dataset)
-        logger.info(f"[species={species_id}] Checking chromosome id ordering")
-
-        # Filter to only keys with numeric components in their chromosome IDs
-        numeric_keys = []
-        for key in chrom_map:
-            num = config.get_chromosome_number(key)
-            if num is not None:
-                numeric_keys.append(key)
-
-        # Raise an error if no numeric chromosome IDs are found
-        if len(numeric_keys) == 0:
-            raise ValueError(
-                f"[species={species_id}] No numeric chromosome IDs found in config"
-            )
-
-        # Sort keys lexically vs numerically (by chromosome number in the value)
-        def extract_chrom_num(key):
-            num = config.get_chromosome_number(key)
-            assert num is not None, (
-                f"Expected numeric chromosome ID for {key}, got None"
-            )
-            return num
-
-        lexical_sort = sorted(numeric_keys)
-        numerical_sort = sorted(numeric_keys, key=extract_chrom_num)
-
-        if lexical_sort != numerical_sort:
-            logger.warning(
-                f"[species={species_id}] lexical sort of keys does not match numerical sort of values. "
-                f"Lexical sort: {lexical_sort}\n"
-                f"Numerical sort: {numerical_sort}"
-            )
-
-    logger.info("Configuration validation complete")
-
-
-def _extract_gff_seq_ids(path: str) -> list[str]:
-    """Extract sequence IDs from a GFF file.
-
-    Parameters
-    ----------
-    path : str
-        Path to GFF file
-
-    Returns
-    -------
-    list[str]
-        List of sequence IDs
-    """
-    # Read GFF file using pandas
-    df = read_gff3(path)
-
-    # Extract and return unique sequence IDs
-    return df["seq_id"].unique().tolist()
-
-
-def _extract_fasta_seq_ids(path: str) -> list[str]:
-    """Extract sequence IDs from a FASTA file.
-
-    Parameters
-    ----------
-    path : str
-        Path to FASTA file
-
-    Returns
-    -------
-    list[str]
-        List of sequence IDs
-    """
-    # Determine file opening method based on extension of the real file
-    real_path = os.path.realpath(path)
-    open_func = gzip.open if real_path.endswith(".gz") else open
-    mode = "rt" if real_path.endswith(".gz") else "r"
-
-    # Parse FASTA file and extract sequence IDs
-    seq_ids = []
-    with open_func(path, mode) as in_handle:
-        for record in SeqIO.parse(in_handle, "fasta"):
-            seq_ids.append(record.id)
-
-    return seq_ids
-
-
-# -------------------------------------------------------------------------------------------------
 # Main
 # -------------------------------------------------------------------------------------------------
 
@@ -985,118 +664,64 @@ def main():
         level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
     )
     parser = argparse.ArgumentParser(
-        description="Extract data from genomic files into structured formats"
-    )
-    subparsers = parser.add_subparsers(
-        dest="command", required=True, help="Command to execute"
+        description="Extract data from fasta files for inference of gene models"
     )
 
-    # Extract GFF features command
-    gff_parser = subparsers.add_parser(
-        "extract_gff_features",
-        help="Extract data from GFF file(s) into a structured DataFrame",
-    )
-    gff_parser.add_argument(
-        "--input-dir", required=True, help="Directory containing input GFF files"
-    )
-    gff_parser.add_argument(
-        "--species-id", required=True, nargs="+", help="Species IDs to process"
-    )
-    gff_parser.add_argument(
-        "--output", required=True, help="Path to output parquet file"
-    )
-    gff_parser.add_argument(
-        "--species-config",
-        help="Path to a YAML file defining additional species configs (see src/config.py for format)",
-    )
-    gff_parser.add_argument(
-        "--skip-exon-features",
-        choices=["yes", "no"],
-        default="yes",
-        help="Skip exon features during extraction (default: yes). Exon features are structural and not used for sequence modeling.",
-    )
-
-    # Extract FASTA sequences command
-    fasta_parser = subparsers.add_parser(
-        "extract_fasta_sequences", help="Extract sequences from FASTA file(s)"
-    )
-    fasta_parser.add_argument(
-        "--input-dir", required=True, help="Directory containing input FASTA files"
-    )
-    fasta_parser.add_argument(
-        "--species-id", required=True, nargs="+", help="Species IDs to process"
-    )
-    fasta_parser.add_argument("--output", required=True, help="Path to output file")
-    fasta_parser.add_argument(
-        "--tokenizer-path", help="Path to the tokenizer model for tokenizing sequences"
-    )
-    fasta_parser.add_argument(
-        "--species-config",
-        help="Path to a YAML file defining additional species configs (see src/config.py for format)",
-    )
-
-    # Extract single FASTA sequence command
-    fasta_single_parser = subparsers.add_parser(
-        "extract_fasta_file", help="Extract sequences from a single FASTA file"
-    )
-    fasta_single_parser.add_argument("--species-id", required=True, help="Species ID")
-    fasta_single_parser.add_argument(
-        "--fasta-file", required=True, help="Path to FASTA file"
-    )
-    fasta_single_parser.add_argument(
+    parser.add_argument("--species-id", required=True, help="Species ID")
+    parser.add_argument("--input-fasta", "-i", required=True, help="Path to FASTA file")
+    parser.add_argument(
         "--chrom-map",
-        required=True,
-        help="Chromosome mapping as 'src1:dst1,src2:dst2,...'",
+        help="Rename chromosomes and/or select a subset of chromosomes to process. Format "
+        "chromosome mapping as 'src1:dst1,src2:dst2,...'. Optional.",
     )
-    fasta_single_parser.add_argument(
-        "--output", required=True, help="Path to output file"
+    parser.add_argument(
+        "--output-zarr", "-o", required=True, help="Path to output file"
     )
-    fasta_single_parser.add_argument(
-        "--tokenizer-path", help="Path to the tokenizer model for tokenizing sequences"
+    parser.add_argument(
+        "--model-checkpoint",
+        type=str,
+        default=None,
+        help="Path to classifier checkpoint. This or --model-path is required.",
     )
-
-    # Validate configs command
-    validate_parser = subparsers.add_parser(
-        "validate_configs",
-        help="Validate sequence IDs in GFF and FASTA files match configs",
-    )
-    validate_parser.add_argument(
-        "--data-dir",
-        required=True,
-        help="Directory containing training_data/ and testing_data/ subdirectories",
+    parser.add_argument(
+        "--model-path",
+        type=str,
+        default=None,
+        help="Path to the base PlantCAD model for tokenizing sequences. This or --model-checkpoint is required.",
     )
 
     args = parser.parse_args()
 
-    if getattr(args, "species_config", None):
-        register_species_configs_from_yaml(args.species_config)
+    base_model_path = args.model_path
 
-    if args.command == "extract_gff_features":
-        extract_gff_features(
-            args.input_dir,
-            args.species_id,
-            args.output,
-            args.skip_exon_features == "yes",
-        )
-    elif args.command == "extract_fasta_sequences":
-        extract_fasta_sequences(
-            args.input_dir,
-            args.species_id,
-            args.output,
-            tokenizer_path=args.tokenizer_path,
-        )
-    elif args.command == "extract_fasta_file":
-        extract_fasta_file(
-            args.species_id,
-            args.fasta_file,
-            args.chrom_map,
-            args.output,
-            tokenizer_path=args.tokenizer_path,
-        )
-    elif args.command == "validate_configs":
-        validate_configs(args.data_dir)
-    else:
-        parser.print_help()
+    if base_model_path is None:
+        if args.model_checkpoint is None:
+            logger.error(
+                "Error: must specify either --model-checkpoint or --model-path"
+            )
+            raise RuntimeError
+
+        config_local = hf_hub_download(args.model_checkpoint, filename="config.json")
+
+        with open(config_local) as file:
+            config_dict = json.load(file)
+
+        if "base_encoder_path" in config_dict.keys():
+            base_model_path = config_dict["base_encoder_path"]
+        else:
+            logger.error(
+                "Error: could not infer base model from --model-checkpoint. Please specify the base "
+                "model path using --model-path instead"
+            )
+            raise RuntimeError
+
+    extract_fasta_file(
+        args.species_id,
+        args.input_fasta,
+        args.chrom_map,
+        args.output_zarr,
+        tokenizer_path=base_model_path,
+    )
 
 
 if __name__ == "__main__":

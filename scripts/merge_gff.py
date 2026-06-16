@@ -12,6 +12,7 @@ ID transformation examples:
 """
 
 import argparse
+import json
 import re
 import sys
 from pathlib import Path
@@ -95,14 +96,51 @@ def main():
         description="Merge per-chromosome GFF files with unique chromosome-prefixed IDs"
     )
     parser.add_argument(
-        "--output", required=True, help="Path to the merged output GFF file"
+        "--output-gff", "-o", required=True, help="Path to the merged output GFF file"
     )
     parser.add_argument(
-        "--inputs", nargs="+", required=True, help="Paths to per-chromosome GFF files"
+        "--input-gffs",
+        "-i",
+        nargs="+",
+        default=None,
+        help="Paths to per-chromosome GFF files",
     )
+    parser.add_argument(
+        "--manifest",
+        default=None,
+        type=str,
+        help="Manifest json, alternative to --input-gffs. Key 'filtered_gff' is required, or "
+        "'raw_gff' if --use-raw-gffs flag is set.",
+    )
+
+    parser.add_argument(
+        "--use-raw-gffs",
+        action="store_true",
+        help="Set this flag to use the 'raw_gff' files in the manifest instead of 'filtered_gff'.",
+    )
+
     args = parser.parse_args()
 
-    merge_gff_files(args.inputs, args.output)
+    if args.manifest is None:
+        if args.input_gffs is None:
+            print(
+                "Error: one of the following must be provided:\n"
+                "--manifest\n OR \n --input-gffs"
+            )
+            raise RuntimeError
+
+        merge_gff_files(args.input_gffs, args.output_gff)
+
+    else:
+        with open(args.manifest) as fh:
+            entries = json.load(fh)
+
+        if args.use_raw_gffs:
+            input_gffs = [entry["raw_gff"] for entry in entries]
+        else:
+            input_gffs = [entry["filtered_gff"] for entry in entries]
+
+        merge_gff_files(input_gffs, args.output_gff)
 
 
 if __name__ == "__main__":
