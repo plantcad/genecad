@@ -74,6 +74,9 @@ explicit = true
 
 [tool.uv]
 no-build-isolation-package = ["mamba-ssm", "causal-conv1d", "flash-attn"]
+override-dependencies = [
+  "triton; platform_machine == 'x86_64'",
+]
 
 [[tool.uv.dependency-metadata]]
 name = "mamba-ssm"
