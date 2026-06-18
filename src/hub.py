@@ -9,36 +9,19 @@ logger = logging.getLogger(__name__)
 
 # flash_attn may be absent on ARM64 or CPU-only environments.
 # transformers' check_imports raises ImportError before even loading the module,
-# even when the remote file guards flash_attn with try/except. Patch it to allow
-# flash_attn to be missing; the attn_implementation env var handles the rest.
-def _check_imports_allow_flash_attn(filename):
-    """Reimplementation of check_imports that treats flash_attn as optional."""
-    import re
-    import importlib as _importlib
-    try:
-        with open(filename, "r", encoding="utf-8") as f:
-            content = f.read()
-        imports = re.findall(r"^\s*(?:from|import)\s+(\S+)", content, flags=re.MULTILINE)
-        imports = [imp.split(".")[0] for imp in imports]
-        imports = list(dict.fromkeys(imports))
-        missing = []
-        for imp in imports:
-            if not imp or imp.startswith("."):
-                continue
-            try:
-                _importlib.import_module(imp)
-            except ImportError:
-                if imp != "flash_attn":
-                    missing.append(imp)
-        if missing:
-            raise ImportError(
-                f"This modeling file requires the following packages that were not found in your "
-                f"environment: {', '.join(missing)}. Run `pip install {' '.join(missing)}`"
-            )
-        return missing
-    except FileNotFoundError:
-        return []
+# even when the remote file guards flash_attn with try/except. Wrap it to catch
+# only flash_attn ImportErrors and still return the relative imports list that
+# get_cached_module_file needs to download sibling .py files from HuggingFace.
+_orig_check_imports = _dmu.check_imports
 
+def _check_imports_allow_flash_attn(filename):
+    try:
+        return _orig_check_imports(filename)
+    except ImportError as e:
+        if "flash_attn" in str(e):
+            from transformers.dynamic_module_utils import get_relative_imports
+            return get_relative_imports(filename)
+        raise
 
 _dmu.check_imports = _check_imports_allow_flash_attn
 
