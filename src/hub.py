@@ -28,32 +28,38 @@ if platform.machine() == "aarch64":
                 self.num_stages = num_stages
                 self.num_ctas = num_ctas
 
-        class _TritonStub(ModuleType):
-            """Stub: any attribute access returns another _TritonStub."""
-            def __getattr__(self, name):
-                child = _TritonStub(f"{self.__name__}.{name}")
-                object.__setattr__(self, name, child)
-                return child
-            def __call__(self, *a, **kw):
-                return _TritonStub(f"{self.__name__}()")
+        _STUB_PKGS = ("triton", "flash_attn")
 
-        class _TritonLoader(importlib.abc.Loader):
+        class _Stub(ModuleType):
+            """Stub module/object: CapitalCase attrs → inheritable class; others → child stub."""
+            def __getattr__(self, name):
+                if name and name[0].isupper():
+                    val = type(name, (), {"__init__": lambda s, *a, **kw: None})
+                else:
+                    val = _Stub(f"{self.__name__}.{name}")
+                object.__setattr__(self, name, val)
+                return val
+            def __call__(self, *a, **kw):
+                return None
+
+        class _StubLoader(importlib.abc.Loader):
             def create_module(self, spec):
-                return _TritonStub(spec.name)
+                return _Stub(spec.name)
             def exec_module(self, module):
                 pass
 
-        class _TritonFinder(importlib.abc.MetaPathFinder):
+        class _StubFinder(importlib.abc.MetaPathFinder):
             def find_spec(self, fullname, path, target=None):
-                if fullname == "triton" or fullname.startswith("triton."):
-                    return importlib.machinery.ModuleSpec(
-                        fullname, _TritonLoader(), is_package=True
-                    )
+                for pkg in _STUB_PKGS:
+                    if fullname == pkg or fullname.startswith(pkg + "."):
+                        return importlib.machinery.ModuleSpec(
+                            fullname, _StubLoader(), is_package=True
+                        )
                 return None
 
-        sys.meta_path.insert(0, _TritonFinder())
+        sys.meta_path.insert(0, _StubFinder())
 
-        _triton = _TritonStub("triton")
+        _triton = _Stub("triton")
         _triton.__version__ = "3.3.0"
         _triton.Config = _TritonConfig
         _triton.jit = lambda fn=None, **kw: ((lambda f: f) if fn is None else fn)
