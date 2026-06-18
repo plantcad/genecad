@@ -25,8 +25,13 @@ if platform.machine() == "aarch64":
                 self.num_stages = num_stages
                 self.num_ctas = num_ctas
 
-        _tl = ModuleType("triton.language")
-        _triton = ModuleType("triton")
+        class _TritonModule(ModuleType):
+            """Stub triton module: returns None for any unknown attribute."""
+            def __getattr__(self, name):
+                return None
+
+        _tl = _TritonModule("triton.language")
+        _triton = _TritonModule("triton")
         _triton.language = _tl
         _triton.Config = _TritonConfig
         _triton.jit = lambda fn=None, **kw: ((lambda f: f) if fn is None else fn)
