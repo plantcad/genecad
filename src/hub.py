@@ -10,13 +10,16 @@ import transformers.dynamic_module_utils as _dmu
 
 logger = logging.getLogger(__name__)
 
-# On ARM64, triton is not available (no wheels). Create a minimal stub so
-# mamba_ssm can be imported — it detects missing triton ops and falls back
-# to compiled CUDA C++ kernels at runtime.
+# On ARM64, triton is not available (no wheels). Install a meta path finder
+# that intercepts ALL triton.* imports and returns stub modules, so mamba_ssm
+# can be imported. mamba_ssm falls back to compiled CUDA C++ kernels at runtime.
 if platform.machine() == "aarch64":
     try:
         import triton  # noqa: F401
     except ImportError:
+        import importlib.abc
+        import importlib.machinery
+
         class _TritonConfig:
             def __init__(self, kwargs, num_warps=4, num_stages=2, num_ctas=1,
                          pre_hook=None, **kw):
@@ -25,21 +28,39 @@ if platform.machine() == "aarch64":
                 self.num_stages = num_stages
                 self.num_ctas = num_ctas
 
-        class _TritonModule(ModuleType):
-            """Stub triton module: returns None for any unknown attribute."""
+        class _TritonStub(ModuleType):
+            """Stub: any attribute access returns another _TritonStub."""
             def __getattr__(self, name):
+                child = _TritonStub(f"{self.__name__}.{name}")
+                object.__setattr__(self, name, child)
+                return child
+            def __call__(self, *a, **kw):
+                return _TritonStub(f"{self.__name__}()")
+
+        class _TritonLoader(importlib.abc.Loader):
+            def create_module(self, spec):
+                return _TritonStub(spec.name)
+            def exec_module(self, module):
+                pass
+
+        class _TritonFinder(importlib.abc.MetaPathFinder):
+            def find_spec(self, fullname, path, target=None):
+                if fullname == "triton" or fullname.startswith("triton."):
+                    return importlib.machinery.ModuleSpec(
+                        fullname, _TritonLoader(), is_package=True
+                    )
                 return None
 
-        _tl = _TritonModule("triton.language")
-        _triton = _TritonModule("triton")
-        _triton.language = _tl
+        sys.meta_path.insert(0, _TritonFinder())
+
+        _triton = _TritonStub("triton")
+        _triton.__version__ = "3.3.0"
         _triton.Config = _TritonConfig
         _triton.jit = lambda fn=None, **kw: ((lambda f: f) if fn is None else fn)
         _triton.autotune = lambda configs, key, **kw: (lambda fn: fn)
         _triton.heuristics = lambda values: (lambda fn: fn)
         _triton.cdiv = lambda a, b: (a + b - 1) // b
         sys.modules["triton"] = _triton
-        sys.modules["triton.language"] = _tl
 
 # flash_attn may be absent on ARM64 or CPU-only environments.
 # transformers' check_imports raises ImportError before even loading the module,
