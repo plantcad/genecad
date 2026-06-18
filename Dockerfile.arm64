@@ -1,28 +1,23 @@
-FROM pytorch/pytorch:2.7.1-cuda12.8-cudnn9-devel
+FROM nvidia/cuda:12.8.0-cudnn-devel-ubuntu24.04
 
-# Install curl, git, and uv package manager
-RUN apt-get update && apt-get install -y curl git wget && \
+RUN apt-get update && apt-get install -y \
+    python3.12 python3.12-venv python3.12-dev \
+    build-essential \
+    curl git wget && \
     curl -LsSf https://astral.sh/uv/install.sh | sh && \
     rm -rf /var/lib/apt/lists/*
 ENV PATH="/root/.local/bin:$PATH"
 
-# Set working directory
 WORKDIR /build
 
-# Copy files required for dependency resolution and local package build metadata
 COPY pyproject.toml LICENSE README.md predict.sh train.sh ./
 COPY scripts ./scripts
 COPY src ./src
 
-# Install dependencies (without flash-attn, not available for ARM64)
 RUN uv sync --extra torch-no-flash --extra mamba
 
-# Use eager attention since flash-attn is not installed
 ENV GENECAD_ATTN_IMPL=eager
 
-# Create entrypoint script to source environment and add
-# source dynamically from working directory rather than
-# embedding it in the container itself
 RUN echo '#!/bin/bash\n\
 source /build/.venv/bin/activate\n\
 export PYTHONPATH="$(pwd):$PYTHONPATH"\n\
