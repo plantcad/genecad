@@ -18,7 +18,7 @@ try:
     import flash_attn  # noqa: F401
     _ATTN_IMPL = "flash_attention_2"
 except (ImportError, OSError):
-    _ATTN_IMPL = "eager"
+    _ATTN_IMPL = "sdpa"
 _ATTN_IMPL = os.environ.get("GENECAD_ATTN_IMPL", _ATTN_IMPL)
 from src.sequence import (
     N_BILUO_TAGS,

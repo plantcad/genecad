@@ -16,7 +16,7 @@ COPY src ./src
 
 RUN uv sync --extra torch-no-flash --extra mamba
 
-ENV GENECAD_ATTN_IMPL=eager
+ENV GENECAD_ATTN_IMPL=sdpa
 
 RUN echo '#!/bin/bash\n\
 source /build/.venv/bin/activate\n\
