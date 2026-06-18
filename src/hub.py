@@ -3,8 +3,27 @@ import torch
 import torch.nn as nn
 from dataclasses import dataclass
 from transformers import AutoModel, AutoConfig
+import transformers.dynamic_module_utils as _dmu
 
 logger = logging.getLogger(__name__)
+
+# flash_attn may be absent on ARM64 or CPU-only environments.
+# transformers' check_imports raises ImportError before even loading the module,
+# even when the remote file guards flash_attn with try/except. Patch it to allow
+# flash_attn to be missing; the attn_implementation env var handles the rest.
+_orig_check_imports = _dmu.check_imports
+
+
+def _check_imports_allow_flash_attn(filename):
+    try:
+        return _orig_check_imports(filename)
+    except ImportError as exc:
+        if "flash_attn" not in str(exc):
+            raise
+        return []
+
+
+_dmu.check_imports = _check_imports_allow_flash_attn
 
 
 def fix_and_register_ties(model, fwd_pattern="fwd", rev_pattern="rev"):
