@@ -11,15 +11,32 @@ logger = logging.getLogger(__name__)
 # transformers' check_imports raises ImportError before even loading the module,
 # even when the remote file guards flash_attn with try/except. Patch it to allow
 # flash_attn to be missing; the attn_implementation env var handles the rest.
-_orig_check_imports = _dmu.check_imports
-
-
 def _check_imports_allow_flash_attn(filename):
+    """Reimplementation of check_imports that treats flash_attn as optional."""
+    import re
+    import importlib as _importlib
     try:
-        return _orig_check_imports(filename)
-    except ImportError as exc:
-        if "flash_attn" not in str(exc):
-            raise
+        with open(filename, "r", encoding="utf-8") as f:
+            content = f.read()
+        imports = re.findall(r"^\s*(?:from|import)\s+(\S+)", content, flags=re.MULTILINE)
+        imports = [imp.split(".")[0] for imp in imports]
+        imports = list(dict.fromkeys(imports))
+        missing = []
+        for imp in imports:
+            if imp.startswith("."):
+                continue
+            try:
+                _importlib.import_module(imp)
+            except ImportError:
+                if imp != "flash_attn":
+                    missing.append(imp)
+        if missing:
+            raise ImportError(
+                f"This modeling file requires the following packages that were not found in your "
+                f"environment: {', '.join(missing)}. Run `pip install {' '.join(missing)}`"
+            )
+        return imports
+    except FileNotFoundError:
         return []
 
 
