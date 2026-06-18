@@ -1,11 +1,32 @@
 import logging
+import platform
+import sys
 import torch
 import torch.nn as nn
 from dataclasses import dataclass
+from types import ModuleType
 from transformers import AutoModel, AutoConfig
 import transformers.dynamic_module_utils as _dmu
 
 logger = logging.getLogger(__name__)
+
+# On ARM64, triton is not available (no wheels). Create a minimal stub so
+# mamba_ssm can be imported — it detects missing triton ops and falls back
+# to compiled CUDA C++ kernels at runtime.
+if platform.machine() == "aarch64":
+    try:
+        import triton  # noqa: F401
+    except ImportError:
+        _tl = ModuleType("triton.language")
+        _triton = ModuleType("triton")
+        _triton.language = _tl
+        _triton.jit = lambda fn=None, **kw: ((lambda f: f) if fn is None else fn)
+        _triton.autotune = lambda configs, key, **kw: (lambda fn: fn)
+        _triton.heuristics = lambda values: (lambda fn: fn)
+        _triton.cdiv = lambda a, b: (a + b - 1) // b
+        _triton.Config = type("Config", (), {"__init__": lambda s, *a, **kw: None})
+        sys.modules["triton"] = _triton
+        sys.modules["triton.language"] = _tl
 
 # flash_attn may be absent on ARM64 or CPU-only environments.
 # transformers' check_imports raises ImportError before even loading the module,
