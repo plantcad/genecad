@@ -17,14 +17,22 @@ if platform.machine() == "aarch64":
     try:
         import triton  # noqa: F401
     except ImportError:
+        class _TritonConfig:
+            def __init__(self, kwargs, num_warps=4, num_stages=2, num_ctas=1,
+                         pre_hook=None, **kw):
+                self.kwargs = kwargs
+                self.num_warps = num_warps
+                self.num_stages = num_stages
+                self.num_ctas = num_ctas
+
         _tl = ModuleType("triton.language")
         _triton = ModuleType("triton")
         _triton.language = _tl
+        _triton.Config = _TritonConfig
         _triton.jit = lambda fn=None, **kw: ((lambda f: f) if fn is None else fn)
         _triton.autotune = lambda configs, key, **kw: (lambda fn: fn)
         _triton.heuristics = lambda values: (lambda fn: fn)
         _triton.cdiv = lambda a, b: (a + b - 1) // b
-        _triton.Config = type("Config", (), {"__init__": lambda s, *a, **kw: None})
         sys.modules["triton"] = _triton
         sys.modules["triton.language"] = _tl
 
