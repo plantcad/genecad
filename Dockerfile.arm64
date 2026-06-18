@@ -14,7 +14,7 @@ COPY pyproject.toml LICENSE README.md predict.sh train.sh ./
 COPY scripts ./scripts
 COPY src ./src
 
-RUN uv sync --extra torch-no-flash --extra mamba
+RUN uv sync --extra torch-no-flash --extra mamba && uv cache clean
 
 ENV GENECAD_ATTN_IMPL=sdpa
 

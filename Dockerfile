@@ -15,7 +15,7 @@ COPY scripts ./scripts
 COPY src ./src
 
 # Install dependencies
-RUN uv sync --extra torch --extra mamba
+RUN uv sync --extra torch --extra mamba && uv cache clean
 
 # Create entrypoint script to source environment and add
 # source dynamically from working directory rather than

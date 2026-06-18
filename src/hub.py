@@ -23,7 +23,7 @@ def _check_imports_allow_flash_attn(filename):
         imports = list(dict.fromkeys(imports))
         missing = []
         for imp in imports:
-            if imp.startswith("."):
+            if not imp or imp.startswith("."):
                 continue
             try:
                 _importlib.import_module(imp)
@@ -35,7 +35,7 @@ def _check_imports_allow_flash_attn(filename):
                 f"This modeling file requires the following packages that were not found in your "
                 f"environment: {', '.join(missing)}. Run `pip install {' '.join(missing)}`"
             )
-        return imports
+        return missing
     except FileNotFoundError:
         return []
 
