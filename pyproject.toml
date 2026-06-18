@@ -39,6 +39,11 @@ torch = [
   "torchmetrics~=1.7.0",
   "flash-attn>=2.8.3",
 ]
+torch-no-flash = [
+  "torch==2.7.1",
+  "lightning~=2.5.1",
+  "torchmetrics~=1.7.0",
+]
 mamba = [
   "causal-conv1d==1.5.0.post8",
   "mamba-ssm==2.2.4",

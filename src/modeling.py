@@ -11,7 +11,15 @@ from typing import Any, Literal, Optional, cast as cast_type
 from torchmetrics.functional.classification import multiclass_f1_score
 from lightning.pytorch.utilities import grad_norm
 from lightning.pytorch.callbacks import Callback
+import os
 from transformers import ModernBertConfig, ModernBertModel, AutoModel
+
+try:
+    import flash_attn  # noqa: F401
+    _ATTN_IMPL = "flash_attention_2"
+except (ImportError, OSError):
+    _ATTN_IMPL = "eager"
+_ATTN_IMPL = os.environ.get("GENECAD_ATTN_IMPL", _ATTN_IMPL)
 from src.sequence import (
     N_BILUO_TAGS,
     create_entity_evaluation_intervals,
@@ -369,7 +377,7 @@ class GeneClassifier(L.LightningModule):
                 attention_dropout=self.config.dropout,
                 mlp_dropout=self.config.dropout,
                 dtype=torch.bfloat16,
-                attn_implementation="flash_attention_2",
+                attn_implementation=_ATTN_IMPL,
             )
             self.head_encoder = ModernBertModel(self.head_config)
 
