@@ -155,6 +155,19 @@ if platform.machine() == "aarch64":
         import triton  # noqa: F401
         import triton.runtime.autotuner as _triton_autotuner
 
+        # torch 2.7.1 expects triton.compiler.compiler.triton_key, which doesn't
+        # exist in triton 3.5.0. Provide a shim so torch.inductor can JIT-compile
+        # standard ops (attention, MLP) via triton on GH200.
+        try:
+            import triton.compiler.compiler as _tcc
+            if not hasattr(_tcc, "triton_key"):
+                import hashlib as _hashlib
+                def _triton_key():
+                    return _hashlib.sha256(triton.__version__.encode()).hexdigest()[:16]
+                _tcc.triton_key = _triton_key
+        except Exception:
+            pass
+
         # GH200 (SM90a): mamba_ssm 2.2.4's default autotune configs all trigger
         # CUDA illegal memory access. Fix by:
         # 1. Replacing triton.autotune to emit only a single conservative config
