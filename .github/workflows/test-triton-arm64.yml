@@ -1,0 +1,27 @@
+name: Test triton aarch64
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+
+      - name: Install triton 3.5.0 on aarch64
+        run: |
+          uv venv --python 3.12
+          uv pip install triton==3.5.0
+
+      - name: Verify triton import and version
+        run: |
+          .venv/bin/python -c "
+          import triton
+          import triton.language as tl
+          print(f'triton version: {triton.__version__}')
+          print('triton.language import: OK')
+          print('SUCCESS')
+          "
