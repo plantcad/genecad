@@ -61,6 +61,9 @@ if platform.machine() == "aarch64":
 
         _triton = _Stub("triton")
         _triton.__version__ = "3.3.0"
+        _triton.__spec__ = importlib.machinery.ModuleSpec(
+            "triton", _StubLoader(), is_package=True
+        )
         _triton.Config = _TritonConfig
         _triton.jit = lambda fn=None, **kw: ((lambda f: f) if fn is None else fn)
         _triton.autotune = lambda configs, key, **kw: (lambda fn: fn)
