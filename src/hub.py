@@ -35,7 +35,75 @@ class _FlashAttnLoader(importlib.abc.Loader):
     def create_module(self, spec):
         return _Stub(spec.name)
     def exec_module(self, module):
-        if module.__name__ == "flash_attn.ops.activations":
+        if module.__name__ == "flash_attn":
+            import torch as _torch
+            import torch.nn.functional as _F
+
+            def flash_attn_qkvpacked_func(qkv, dropout_p=0.0, softmax_scale=None,
+                                           causal=False, **kw):
+                """qkv: (batch, seqlen, 3, nheads, headdim)"""
+                q, k, v = qkv.unbind(2)
+                return _F.scaled_dot_product_attention(
+                    q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2),
+                    dropout_p=dropout_p, scale=softmax_scale, is_causal=causal,
+                ).transpose(1, 2)
+
+            def flash_attn_varlen_qkvpacked_func(qkv, cu_seqlens, max_seqlen,
+                                                  dropout_p=0.0, softmax_scale=None,
+                                                  causal=False, **kw):
+                """qkv: (total_tokens, 3, nheads, headdim)"""
+                q, k, v = qkv.unbind(1)
+                batch = len(cu_seqlens) - 1
+                outs = []
+                for i in range(batch):
+                    s, e = cu_seqlens[i].item(), cu_seqlens[i + 1].item()
+                    qi = q[s:e].unsqueeze(0).transpose(1, 2)
+                    ki = k[s:e].unsqueeze(0).transpose(1, 2)
+                    vi = v[s:e].unsqueeze(0).transpose(1, 2)
+                    oi = _F.scaled_dot_product_attention(
+                        qi, ki, vi, dropout_p=dropout_p,
+                        scale=softmax_scale, is_causal=causal,
+                    )
+                    outs.append(oi.squeeze(0).transpose(0, 1))
+                return _torch.cat(outs, dim=0)
+
+            def flash_attn_kvpacked_func(q, kv, dropout_p=0.0, softmax_scale=None,
+                                          causal=False, **kw):
+                """kv: (batch, seqlen_k, 2, nheads, headdim)"""
+                k, v = kv.unbind(2)
+                return _F.scaled_dot_product_attention(
+                    q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2),
+                    dropout_p=dropout_p, scale=softmax_scale, is_causal=causal,
+                ).transpose(1, 2)
+
+            def flash_attn_varlen_kvpacked_func(q, kv, cu_seqlens_q, cu_seqlens_k,
+                                                 max_seqlen_q, max_seqlen_k,
+                                                 dropout_p=0.0, softmax_scale=None,
+                                                 causal=False, **kw):
+                k, v = kv.unbind(2)
+                return _F.scaled_dot_product_attention(
+                    q.unsqueeze(0).transpose(1, 2),
+                    k.unsqueeze(0).transpose(1, 2),
+                    v.unsqueeze(0).transpose(1, 2),
+                    dropout_p=dropout_p, scale=softmax_scale, is_causal=causal,
+                ).transpose(1, 2).squeeze(0)
+
+            def flash_attn_with_kvcache(q, k_cache, v_cache, k=None, v=None,
+                                         softmax_scale=None, causal=False, **kw):
+                k_use = k if k is not None else k_cache
+                v_use = v if v is not None else v_cache
+                return _F.scaled_dot_product_attention(
+                    q.transpose(1, 2), k_use.transpose(1, 2), v_use.transpose(1, 2),
+                    scale=softmax_scale, is_causal=causal,
+                ).transpose(1, 2)
+
+            module.flash_attn_qkvpacked_func = flash_attn_qkvpacked_func
+            module.flash_attn_varlen_qkvpacked_func = flash_attn_varlen_qkvpacked_func
+            module.flash_attn_kvpacked_func = flash_attn_kvpacked_func
+            module.flash_attn_varlen_kvpacked_func = flash_attn_varlen_kvpacked_func
+            module.flash_attn_with_kvcache = flash_attn_with_kvcache
+
+        elif module.__name__ == "flash_attn.ops.activations":
             import torch.nn.functional as _F
             def swiglu(gate, x):
                 return x * _F.silu(gate)
