@@ -147,6 +147,10 @@ if platform.machine() == "aarch64":
             _ref_params = set(_inspect.signature(_ref_fn).parameters)
 
             def _compat_ref(*args, **kwargs):
+                # selective_scan_cuda.fwd requires dt_bias (positional arg 3) to be float32
+                args = list(args)
+                if len(args) > 3 and args[3] is not None:
+                    args[3] = args[3].float()
                 return _ref_fn(*args, **{k: v for k, v in kwargs.items() if k in _ref_params})
 
             _mamba2_mod.mamba_split_conv1d_scan_combined = _compat_ref
