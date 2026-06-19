@@ -141,15 +141,41 @@ if platform.machine() == "aarch64":
         # in mamba2's module namespace so the call at forward:31 gets the ref.
         try:
             import inspect as _inspect
+            import torch.nn.functional as _F
             import mamba_ssm.ops.triton.ssd_combined as _ssd_comb
             import mamba_ssm.ops.selective_scan_interface as _scan_iface
             import mamba_ssm.modules.mamba2 as _mamba2_mod
 
-            # selective_scan_cuda.fwd (Mamba1 CUDA extension) also causes illegal
-            # memory access on GH200. Replace it with the pure-PyTorch ref so the
-            # entire Mamba2 forward pass uses no CUDA extensions or triton.
+            # selective_scan_cuda.fwd also fails on GH200 — replace with pure PyTorch ref.
             if hasattr(_scan_iface, "selective_scan_ref"):
                 _ssd_comb.selective_scan_fn = _scan_iface.selective_scan_ref
+
+            # layernorm_gated._layer_norm_fwd_1pass_kernel also fails at execution on
+            # GH200. Replace rmsnorm_fn in ssd_combined's namespace with pure PyTorch.
+            def _pure_rmsnorm_fn(x, weight, bias, z=None, eps=1e-5, group_size=None,
+                                   norm_before_gate=True, is_rms_norm=True):
+                _dtype = x.dtype
+                x = x.float()
+                if z is not None:
+                    z = z.float()
+                if norm_before_gate or z is None:
+                    x_n = x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + eps)
+                    if weight is not None:
+                        x_n = x_n * weight.float()
+                    if bias is not None:
+                        x_n = x_n + bias.float()
+                    if z is not None:
+                        x_n = x_n * _F.silu(z)
+                else:
+                    x = x * _F.silu(z)
+                    x_n = x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + eps)
+                    if weight is not None:
+                        x_n = x_n * weight.float()
+                    if bias is not None:
+                        x_n = x_n + bias.float()
+                return x_n.to(_dtype)
+
+            _ssd_comb.rmsnorm_fn = _pure_rmsnorm_fn
 
             _ref_fn = _ssd_comb.mamba_split_conv1d_scan_ref
             _ref_params = set(_inspect.signature(_ref_fn).parameters)
