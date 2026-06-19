@@ -35,7 +35,13 @@ class _FlashAttnLoader(importlib.abc.Loader):
     def create_module(self, spec):
         return _Stub(spec.name)
     def exec_module(self, module):
-        if module.__name__ == "flash_attn.ops.triton.layer_norm":
+        if module.__name__ == "flash_attn.ops.activations":
+            import torch.nn.functional as _F
+            def swiglu(gate, x):
+                return x * _F.silu(gate)
+            module.swiglu = swiglu
+
+        elif module.__name__ == "flash_attn.ops.triton.layer_norm":
             import torch as _torch
             import torch.nn as _nn
 
