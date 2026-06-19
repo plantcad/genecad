@@ -10,6 +10,11 @@ ENV PATH="/root/.local/bin:$PATH"
 
 WORKDIR /build
 
+# Build mamba-ssm and causal-conv1d CUDA extensions for SM90a (GH200/Hopper).
+# Without this, extensions compile for a generic arch and run via PTX JIT
+# compatibility mode on GH200, which is slower.
+ENV TORCH_CUDA_ARCH_LIST="9.0a"
+
 COPY pyproject.toml LICENSE README.md predict.sh train.sh ./
 COPY scripts ./scripts
 COPY src ./src
