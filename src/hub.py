@@ -233,9 +233,8 @@ if platform.machine() == "aarch64":
             import mamba_ssm.ops.selective_scan_interface as _scan_iface
             import mamba_ssm.modules.mamba2 as _mamba2_mod
 
-            # selective_scan_cuda.fwd also fails on GH200 — replace with pure PyTorch ref.
-            if hasattr(_scan_iface, "selective_scan_ref"):
-                _ssd_comb.selective_scan_fn = _scan_iface.selective_scan_ref
+            # selective_scan_cuda works on GH200 — keep the CUDA ext (faster).
+            # Only mamba2's triton-fused combined kernel fails; ref path uses CUDA ext.
 
             # layernorm_gated._layer_norm_fwd_1pass_kernel also fails at execution on
             # GH200. Replace rmsnorm_fn in ssd_combined's namespace with pure PyTorch.
