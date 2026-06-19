@@ -79,17 +79,28 @@ except ImportError:
 if platform.machine() == "aarch64":
     try:
         import triton  # noqa: F401
-        # Some mamba_ssm triton kernel configs cause illegal memory access on GH200
-        # (SM90a). Patch the autotuner to skip bad configs instead of crashing.
         import triton.runtime.autotuner as _triton_autotuner
-        _orig_bench = _triton_autotuner.Autotuner._bench
 
+        # GH200 (SM90a): mamba_ssm 2.2.4's default autotune configs all trigger
+        # CUDA illegal memory access. Fix by:
+        # 1. Replacing triton.autotune to emit only a single conservative config
+        #    for any kernel decorated *after* this point (covers mamba_ssm imports
+        #    that happen later, via model loading).
+        # 2. Clearing configs on any mamba_ssm Autotuner objects already imported.
+        # 3. Wrapping _bench to recover gracefully if a config still errors.
+        _safe_cfg = triton.Config({}, num_warps=4, num_stages=1)
+
+        _orig_autotune = triton.autotune
+        def _conservative_autotune(configs, key, **kwargs):
+            return _orig_autotune([_safe_cfg], key, **kwargs)
+        triton.autotune = _conservative_autotune
+
+        _orig_bench = _triton_autotuner.Autotuner._bench
         def _safe_bench(self, *args, config=None, **kwargs):
             try:
                 return _orig_bench(self, *args, config=config, **kwargs)
             except (RuntimeError, Exception) as _e:
                 if any(x in str(_e) for x in ("CUDA", "illegal memory", "Triton Error")):
-                    logger.debug("Triton autotune config caused CUDA error, skipping: %s", config)
                     try:
                         import torch as _t
                         _t.cuda.synchronize()
@@ -97,8 +108,22 @@ if platform.machine() == "aarch64":
                         pass
                     return float("inf")
                 raise
-
         _triton_autotuner.Autotuner._bench = _safe_bench
+
+        def _repatch_existing_autotuners():
+            for _mod in list(sys.modules.values()):
+                if _mod is None:
+                    continue
+                _mname = getattr(_mod, "__name__", "") or ""
+                if "mamba_ssm.ops.triton" not in _mname:
+                    continue
+                for _attr in dir(_mod):
+                    _obj = getattr(_mod, _attr, None)
+                    if isinstance(_obj, _triton_autotuner.Autotuner):
+                        _obj.configs = [_safe_cfg]
+                        if hasattr(_obj, "cache"):
+                            _obj.cache.clear()
+        _repatch_existing_autotuners()
 
     except ImportError:
         class _TritonConfig:
