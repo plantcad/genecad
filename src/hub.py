@@ -168,6 +168,23 @@ if platform.machine() == "aarch64":
         except Exception:
             pass
 
+        # GH200 reports SM90. ptxas/LLVM converts SM90 → sm_90a (Hopper wgmma mode),
+        # but mamba_ssm 2.2.4's triton kernels weren't written for wgmma and fail at
+        # load_binary. Patch triton to report SM89 (Ada Lovelace) instead: SM90 is
+        # backward-compatible with SM89 MMA instructions, so kernels compile and run.
+        try:
+            import triton.backends.nvidia.driver as _tnvd
+            from triton.backends.driver import GPUTarget as _GPUTarget
+            _orig_get_target = _tnvd.CudaDriver.get_current_target
+            def _sm89_target(self):
+                t = _orig_get_target(self)
+                if getattr(t, "arch", 0) == 90:
+                    return _GPUTarget(t.backend, 89, t.warp_size)
+                return t
+            _tnvd.CudaDriver.get_current_target = _sm89_target
+        except Exception:
+            pass
+
         # GH200 (SM90a): mamba_ssm 2.2.4's default autotune configs all trigger
         # CUDA illegal memory access. Fix by:
         # 1. Replacing triton.autotune to emit only a single conservative config
@@ -265,6 +282,9 @@ if platform.machine() == "aarch64":
                 _pure_rmsnorm_fn, dynamic=True, fullgraph=False
             )
 
+            # Save the original triton-fused combined kernel before any replacement.
+            _orig_combined = _ssd_comb.mamba_split_conv1d_scan_combined
+
             _ref_fn = _ssd_comb.mamba_split_conv1d_scan_ref
             _ref_params = set(_inspect.signature(_ref_fn).parameters)
 
@@ -275,12 +295,17 @@ if platform.machine() == "aarch64":
                     args[3] = args[3].float()
                 return _ref_fn(*args, **{k: v for k, v in kwargs.items() if k in _ref_params})
 
-            # torch.compile lets inductor fuse the SSD scan's pure-PyTorch ops into
-            # optimised triton kernels, recovering most of the speed vs the combined
-            # fused kernel (which crashes on SM90a).
-            _compat_ref_fast = torch.compile(_compat_ref, dynamic=True, fullgraph=False)
-            _mamba2_mod.mamba_split_conv1d_scan_combined = _compat_ref_fast
-            _ssd_comb.mamba_split_conv1d_scan_combined = _compat_ref_fast
+            # With SM89 target patch above, triton compiles for Ada MMA (no wgmma),
+            # which SM90 runs in compatibility mode. Try the original fused kernel;
+            # on failure fall back to the pure-PyTorch ref.
+            def _safe_combined(*args, **kwargs):
+                try:
+                    return _orig_combined(*args, **kwargs)
+                except Exception:
+                    return _compat_ref(*args, **kwargs)
+
+            _mamba2_mod.mamba_split_conv1d_scan_combined = _safe_combined
+            _ssd_comb.mamba_split_conv1d_scan_combined = _safe_combined
         except (ImportError, AttributeError):
             pass
 
