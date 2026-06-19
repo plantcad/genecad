@@ -44,7 +44,7 @@ torch-no-flash = [
   "torch==2.7.1",
   "lightning~=2.5.1",
   "torchmetrics~=1.7.0",
-  "triton",
+  "triton==3.5.0",
 ]
 mamba = [
   "causal-conv1d==1.5.0.post8",
@@ -64,7 +64,6 @@ packages = ["src"]
 
 [tool.uv.sources]
 torch = { index = "pytorch-cu128" }
-triton = { index = "pytorch-cu128" }
 
 # Force build from source for mamba and causal-conv1d
 mamba-ssm = { git = "https://github.com/state-spaces/mamba", tag = "v2.2.4" }
