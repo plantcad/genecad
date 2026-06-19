@@ -13,13 +13,73 @@ logger = logging.getLogger(__name__)
 # On ARM64, triton is not available (no wheels). Install a meta path finder
 # that intercepts ALL triton.* imports and returns stub modules, so mamba_ssm
 # can be imported. mamba_ssm falls back to compiled CUDA C++ kernels at runtime.
+import importlib.abc
+import importlib.machinery
+
+class _Stub(ModuleType):
+    """Stub module: CapitalCase attrs → empty class; others → child stub."""
+    _NONE_ATTRS = frozenset({"__file__", "__cached__", "__path__", "__package__"})
+    def __getattr__(self, name):
+        if name in self._NONE_ATTRS:
+            return None
+        if name and name[0].isupper():
+            val = type(name, (), {"__init__": lambda s, *a, **kw: None})
+        else:
+            val = _Stub(f"{self.__name__}.{name}")
+        object.__setattr__(self, name, val)
+        return val
+    def __call__(self, *a, **kw):
+        return None
+
+class _FlashAttnLoader(importlib.abc.Loader):
+    def create_module(self, spec):
+        return _Stub(spec.name)
+    def exec_module(self, module):
+        if module.__name__ == "flash_attn.ops.triton.layer_norm":
+            import torch as _torch
+            import torch.nn as _nn
+
+            class RMSNorm(_nn.Module):
+                """Pure-PyTorch RMSNorm replacing flash_attn triton kernel on ARM64."""
+                def __init__(self, hidden_size, eps=1e-5, dropout_p=0.0,
+                             device=None, dtype=None, **kw):
+                    super().__init__()
+                    self.weight = _nn.Parameter(
+                        _torch.ones(hidden_size, device=device, dtype=dtype)
+                    )
+                    self.eps = eps
+
+                def forward(self, x, residual=None, prenorm=False,
+                            residual_in_fp32=False, **kw):
+                    if residual is not None:
+                        x = x + residual.to(x.dtype)
+                    res = x.float() if residual_in_fp32 else x
+                    x_f = x.float()
+                    x_norm = x_f * _torch.rsqrt(
+                        x_f.pow(2).mean(-1, keepdim=True) + self.eps
+                    )
+                    out = self.weight * x_norm.to(self.weight.dtype)
+                    return (out, res) if prenorm else out
+
+            module.RMSNorm = RMSNorm
+
+class _FlashAttnFinder(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path, target=None):
+        if fullname == "flash_attn" or fullname.startswith("flash_attn."):
+            return importlib.machinery.ModuleSpec(
+                fullname, _FlashAttnLoader(), is_package=True
+            )
+        return None
+
+try:
+    import flash_attn  # noqa: F401
+except ImportError:
+    sys.meta_path.insert(0, _FlashAttnFinder())
+
 if platform.machine() == "aarch64":
     try:
         import triton  # noqa: F401
     except ImportError:
-        import importlib.abc
-        import importlib.machinery
-
         class _TritonConfig:
             def __init__(self, kwargs, num_warps=4, num_stages=2, num_ctas=1,
                          pre_hook=None, **kw):
@@ -28,70 +88,26 @@ if platform.machine() == "aarch64":
                 self.num_stages = num_stages
                 self.num_ctas = num_ctas
 
-        _STUB_PKGS = ("triton", "flash_attn")
-
-        class _Stub(ModuleType):
-            """Stub module/object: CapitalCase attrs → inheritable class; others → child stub."""
-            _NONE_ATTRS = frozenset({"__file__", "__cached__", "__path__", "__package__"})
-            def __getattr__(self, name):
-                if name in self._NONE_ATTRS:
-                    return None
-                if name and name[0].isupper():
-                    val = type(name, (), {"__init__": lambda s, *a, **kw: None})
-                else:
-                    val = _Stub(f"{self.__name__}.{name}")
-                object.__setattr__(self, name, val)
-                return val
-            def __call__(self, *a, **kw):
-                return None
-
-        class _StubLoader(importlib.abc.Loader):
+        class _TritonLoader(importlib.abc.Loader):
             def create_module(self, spec):
                 return _Stub(spec.name)
             def exec_module(self, module):
-                if module.__name__ == "flash_attn.ops.triton.layer_norm":
-                    import torch as _torch
-                    import torch.nn as _nn
+                pass
 
-                    class RMSNorm(_nn.Module):
-                        """Pure-PyTorch RMSNorm replacing flash_attn triton kernel on ARM64."""
-                        def __init__(self, hidden_size, eps=1e-5, dropout_p=0.0,
-                                     device=None, dtype=None, **kw):
-                            super().__init__()
-                            self.weight = _nn.Parameter(
-                                _torch.ones(hidden_size, device=device, dtype=dtype)
-                            )
-                            self.eps = eps
-
-                        def forward(self, x, residual=None, prenorm=False,
-                                    residual_in_fp32=False, **kw):
-                            if residual is not None:
-                                x = x + residual.to(x.dtype)
-                            res = x.float() if residual_in_fp32 else x
-                            x_f = x.float()
-                            x_norm = x_f * _torch.rsqrt(
-                                x_f.pow(2).mean(-1, keepdim=True) + self.eps
-                            )
-                            out = self.weight * x_norm.to(self.weight.dtype)
-                            return (out, res) if prenorm else out
-
-                    module.RMSNorm = RMSNorm
-
-        class _StubFinder(importlib.abc.MetaPathFinder):
+        class _TritonFinder(importlib.abc.MetaPathFinder):
             def find_spec(self, fullname, path, target=None):
-                for pkg in _STUB_PKGS:
-                    if fullname == pkg or fullname.startswith(pkg + "."):
-                        return importlib.machinery.ModuleSpec(
-                            fullname, _StubLoader(), is_package=True
-                        )
+                if fullname == "triton" or fullname.startswith("triton."):
+                    return importlib.machinery.ModuleSpec(
+                        fullname, _TritonLoader(), is_package=True
+                    )
                 return None
 
-        sys.meta_path.insert(0, _StubFinder())
+        sys.meta_path.insert(0, _TritonFinder())
 
         _triton = _Stub("triton")
         _triton.__version__ = "3.3.0"
         _triton.__spec__ = importlib.machinery.ModuleSpec(
-            "triton", _StubLoader(), is_package=True
+            "triton", _TritonLoader(), is_package=True
         )
         _triton.Config = _TritonConfig
         _triton.jit = lambda fn=None, **kw: ((lambda f: f) if fn is None else fn)
