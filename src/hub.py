@@ -79,6 +79,27 @@ except ImportError:
 if platform.machine() == "aarch64":
     try:
         import triton  # noqa: F401
+        # Some mamba_ssm triton kernel configs cause illegal memory access on GH200
+        # (SM90a). Patch the autotuner to skip bad configs instead of crashing.
+        import triton.runtime.autotuner as _triton_autotuner
+        _orig_bench = _triton_autotuner.Autotuner._bench
+
+        def _safe_bench(self, *args, config=None, **kwargs):
+            try:
+                return _orig_bench(self, *args, config=config, **kwargs)
+            except (RuntimeError, Exception) as _e:
+                if any(x in str(_e) for x in ("CUDA", "illegal memory", "Triton Error")):
+                    logger.debug("Triton autotune config caused CUDA error, skipping: %s", config)
+                    try:
+                        import torch as _t
+                        _t.cuda.synchronize()
+                    except RuntimeError:
+                        pass
+                    return float("inf")
+                raise
+
+        _triton_autotuner.Autotuner._bench = _safe_bench
+
     except ImportError:
         class _TritonConfig:
             def __init__(self, kwargs, num_warps=4, num_stages=2, num_ctas=1,
