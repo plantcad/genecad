@@ -134,6 +134,26 @@ if platform.machine() == "aarch64":
                             _obj.cache.clear()
         _repatch_existing_autotuners()
 
+        # GH200: multiple mamba_ssm triton kernels fail at load_binary (tl.dot /
+        # wgmma paths can't be loaded on SM90a). Force Mamba2 to the slow path
+        # which calls pure-PyTorch mamba_chunk_scan_combined_ref instead of the
+        # fused triton implementation.
+        try:
+            import mamba_ssm.modules.mamba2 as _mamba2_mod
+            _orig_m2_fwd = _mamba2_mod.Mamba2.forward
+
+            def _gh200_mamba2_fwd(self, *args, **kwargs):
+                _prev = self.use_fast_path
+                self.use_fast_path = False
+                try:
+                    return _orig_m2_fwd(self, *args, **kwargs)
+                finally:
+                    self.use_fast_path = _prev
+
+            _mamba2_mod.Mamba2.forward = _gh200_mamba2_fwd
+        except (ImportError, AttributeError):
+            pass
+
     except ImportError:
         class _TritonConfig:
             def __init__(self, kwargs, num_warps=4, num_stages=2, num_ctas=1,
