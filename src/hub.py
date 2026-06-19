@@ -49,7 +49,33 @@ if platform.machine() == "aarch64":
             def create_module(self, spec):
                 return _Stub(spec.name)
             def exec_module(self, module):
-                pass
+                if module.__name__ == "flash_attn.ops.triton.layer_norm":
+                    import torch as _torch
+                    import torch.nn as _nn
+
+                    class RMSNorm(_nn.Module):
+                        """Pure-PyTorch RMSNorm replacing flash_attn triton kernel on ARM64."""
+                        def __init__(self, hidden_size, eps=1e-5, dropout_p=0.0,
+                                     device=None, dtype=None, **kw):
+                            super().__init__()
+                            self.weight = _nn.Parameter(
+                                _torch.ones(hidden_size, device=device, dtype=dtype)
+                            )
+                            self.eps = eps
+
+                        def forward(self, x, residual=None, prenorm=False,
+                                    residual_in_fp32=False, **kw):
+                            if residual is not None:
+                                x = x + residual.to(x.dtype)
+                            res = x.float() if residual_in_fp32 else x
+                            x_f = x.float()
+                            x_norm = x_f * _torch.rsqrt(
+                                x_f.pow(2).mean(-1, keepdim=True) + self.eps
+                            )
+                            out = self.weight * x_norm.to(self.weight.dtype)
+                            return (out, res) if prenorm else out
+
+                    module.RMSNorm = RMSNorm
 
         class _StubFinder(importlib.abc.MetaPathFinder):
             def find_spec(self, fullname, path, target=None):
