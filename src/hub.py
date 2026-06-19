@@ -142,12 +142,20 @@ if platform.machine() == "aarch64":
         try:
             import inspect as _inspect
             import mamba_ssm.ops.triton.ssd_combined as _ssd_comb
+            import mamba_ssm.ops.selective_scan_interface as _scan_iface
             import mamba_ssm.modules.mamba2 as _mamba2_mod
+
+            # selective_scan_cuda.fwd (Mamba1 CUDA extension) also causes illegal
+            # memory access on GH200. Replace it with the pure-PyTorch ref so the
+            # entire Mamba2 forward pass uses no CUDA extensions or triton.
+            if hasattr(_scan_iface, "selective_scan_ref"):
+                _ssd_comb.selective_scan_fn = _scan_iface.selective_scan_ref
+
             _ref_fn = _ssd_comb.mamba_split_conv1d_scan_ref
             _ref_params = set(_inspect.signature(_ref_fn).parameters)
 
             def _compat_ref(*args, **kwargs):
-                # selective_scan_cuda.fwd requires dt_bias (positional arg 3) to be float32
+                # dt_bias (positional arg 3) must be float32 for the ref impl
                 args = list(args)
                 if len(args) > 3 and args[3] is not None:
                     args[3] = args[3].float()
