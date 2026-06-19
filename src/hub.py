@@ -278,6 +278,12 @@ if platform.machine() == "aarch64":
         except (ImportError, AttributeError):
             pass
 
+        # Restore triton.autotune so torch.inductor can use normal autotuning for
+        # its generated kernels. mamba_ssm autotuners are already patched above,
+        # and mamba2's triton combined kernel is replaced with the ref so it won't
+        # be called — the global override is no longer needed.
+        triton.autotune = _orig_autotune
+
     except ImportError:
         class _TritonConfig:
             def __init__(self, kwargs, num_warps=4, num_stages=2, num_ctas=1,
