@@ -32,7 +32,10 @@ if platform.machine() == "aarch64":
 
         class _Stub(ModuleType):
             """Stub module/object: CapitalCase attrs → inheritable class; others → child stub."""
+            _NONE_ATTRS = frozenset({"__file__", "__cached__", "__path__", "__package__"})
             def __getattr__(self, name):
+                if name in self._NONE_ATTRS:
+                    return None
                 if name and name[0].isupper():
                     val = type(name, (), {"__init__": lambda s, *a, **kw: None})
                 else:
