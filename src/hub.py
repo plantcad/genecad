@@ -152,6 +152,13 @@ except ImportError:
 
 if platform.machine() == "aarch64":
     try:
+        import os as _os
+        # Vista (TACC) loads CC=nvc from the NVIDIA HPC SDK module. nvc doesn't
+        # accept -Wno-psabi, which triton passes when building its launcher .c file.
+        # Force gcc so triton's C launcher compilation succeeds.
+        if _os.environ.get("CC", "").endswith("nvc"):
+            _os.environ["CC"] = "gcc"
+
         import triton  # noqa: F401
         import triton.runtime.autotuner as _triton_autotuner
 
@@ -168,24 +175,7 @@ if platform.machine() == "aarch64":
         except Exception:
             pass
 
-        # GH200 reports SM90. ptxas/LLVM converts SM90 → sm_90a (Hopper wgmma mode),
-        # but mamba_ssm 2.2.4's triton kernels weren't written for wgmma and fail at
-        # load_binary. Patch triton to report SM89 (Ada Lovelace) instead: SM90 is
-        # backward-compatible with SM89 MMA instructions, so kernels compile and run.
-        try:
-            import triton.backends.nvidia.driver as _tnvd
-            from triton.backends.driver import GPUTarget as _GPUTarget
-            _orig_get_target = _tnvd.CudaDriver.get_current_target
-            def _sm89_target(self):
-                t = _orig_get_target(self)
-                if getattr(t, "arch", 0) == 90:
-                    return _GPUTarget(t.backend, 89, t.warp_size)
-                return t
-            _tnvd.CudaDriver.get_current_target = _sm89_target
-        except Exception:
-            pass
-
-        # GH200 (SM90a): mamba_ssm 2.2.4's default autotune configs all trigger
+# GH200 (SM90a): mamba_ssm 2.2.4's default autotune configs all trigger
         # CUDA illegal memory access. Fix by:
         # 1. Replacing triton.autotune to emit only a single conservative config
         #    for any kernel decorated *after* this point (covers mamba_ssm imports
@@ -206,8 +196,6 @@ if platform.machine() == "aarch64":
             return _orig_autotune([safe], key, **kwargs)
         triton.autotune = _conservative_autotune
 
-        _safe_cfg = triton.Config({}, num_warps=4, num_stages=1)
-
         _orig_bench = _triton_autotuner.Autotuner._bench
         def _safe_bench(self, *args, config=None, **kwargs):
             try:
@@ -223,21 +211,6 @@ if platform.machine() == "aarch64":
                 raise
         _triton_autotuner.Autotuner._bench = _safe_bench
 
-        def _repatch_existing_autotuners():
-            for _mod in list(sys.modules.values()):
-                if _mod is None:
-                    continue
-                _mname = getattr(_mod, "__name__", "") or ""
-                if "mamba_ssm.ops.triton" not in _mname:
-                    continue
-                for _attr in dir(_mod):
-                    _obj = getattr(_mod, _attr, None)
-                    if isinstance(_obj, _triton_autotuner.Autotuner):
-                        _obj.configs = [_safe_cfg]
-                        if hasattr(_obj, "cache"):
-                            _obj.cache.clear()
-        _repatch_existing_autotuners()
-
         # GH200 (SM90a): mamba_ssm 2.2.4's triton kernels fail at load_binary
         # (wgmma / tl.dot paths can't be loaded). Mamba2.forward checks
         # self.use_mem_eff_path (not use_fast_path) to decide between the fused
@@ -247,14 +220,14 @@ if platform.machine() == "aarch64":
             import inspect as _inspect
             import torch.nn.functional as _F
             import mamba_ssm.ops.triton.ssd_combined as _ssd_comb
-            import mamba_ssm.ops.selective_scan_interface as _scan_iface
             import mamba_ssm.modules.mamba2 as _mamba2_mod
 
-            # selective_scan_cuda works on GH200 — keep the CUDA ext (faster).
-            # Only mamba2's triton-fused combined kernel fails; ref path uses CUDA ext.
+            # mamba_ssm 2.2.4 triton kernels (tl.dot, tl.cumsum, tl.associative_scan)
+            # all cause CUDA illegal memory access on SM90a (GH200) with triton 3.5.0,
+            # corrupting the CUDA context. Use the ref path which relies on
+            # causal_conv1d and selective_scan_cuda CUDA extensions that work on GH200.
 
-            # layernorm_gated._layer_norm_fwd_1pass_kernel also fails at execution on
-            # GH200. Replace rmsnorm_fn in ssd_combined's namespace with pure PyTorch.
+            # rmsnorm_fn's triton kernel also fails on SM90a — replace with PyTorch.
             def _pure_rmsnorm_fn(x, weight, bias, z=None, eps=1e-5, group_size=None,
                                    norm_before_gate=True, is_rms_norm=True):
                 _dtype = x.dtype
@@ -282,9 +255,6 @@ if platform.machine() == "aarch64":
                 _pure_rmsnorm_fn, dynamic=True, fullgraph=False
             )
 
-            # Save the original triton-fused combined kernel before any replacement.
-            _orig_combined = _ssd_comb.mamba_split_conv1d_scan_combined
-
             _ref_fn = _ssd_comb.mamba_split_conv1d_scan_ref
             _ref_params = set(_inspect.signature(_ref_fn).parameters)
 
@@ -295,17 +265,8 @@ if platform.machine() == "aarch64":
                     args[3] = args[3].float()
                 return _ref_fn(*args, **{k: v for k, v in kwargs.items() if k in _ref_params})
 
-            # With SM89 target patch above, triton compiles for Ada MMA (no wgmma),
-            # which SM90 runs in compatibility mode. Try the original fused kernel;
-            # on failure fall back to the pure-PyTorch ref.
-            def _safe_combined(*args, **kwargs):
-                try:
-                    return _orig_combined(*args, **kwargs)
-                except Exception:
-                    return _compat_ref(*args, **kwargs)
-
-            _mamba2_mod.mamba_split_conv1d_scan_combined = _safe_combined
-            _ssd_comb.mamba_split_conv1d_scan_combined = _safe_combined
+            _mamba2_mod.mamba_split_conv1d_scan_combined = _compat_ref
+            _ssd_comb.mamba_split_conv1d_scan_combined = _compat_ref
         except (ImportError, AttributeError):
             pass
 
