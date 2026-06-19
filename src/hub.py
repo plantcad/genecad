@@ -261,7 +261,9 @@ if platform.machine() == "aarch64":
                         x_n = x_n + bias.float()
                 return x_n.to(_dtype)
 
-            _ssd_comb.rmsnorm_fn = _pure_rmsnorm_fn
+            _ssd_comb.rmsnorm_fn = torch.compile(
+                _pure_rmsnorm_fn, dynamic=True, fullgraph=False
+            )
 
             _ref_fn = _ssd_comb.mamba_split_conv1d_scan_ref
             _ref_params = set(_inspect.signature(_ref_fn).parameters)
@@ -273,8 +275,12 @@ if platform.machine() == "aarch64":
                     args[3] = args[3].float()
                 return _ref_fn(*args, **{k: v for k, v in kwargs.items() if k in _ref_params})
 
-            _mamba2_mod.mamba_split_conv1d_scan_combined = _compat_ref
-            _ssd_comb.mamba_split_conv1d_scan_combined = _compat_ref
+            # torch.compile lets inductor fuse the SSD scan's pure-PyTorch ops into
+            # optimised triton kernels, recovering most of the speed vs the combined
+            # fused kernel (which crashes on SM90a).
+            _compat_ref_fast = torch.compile(_compat_ref, dynamic=True, fullgraph=False)
+            _mamba2_mod.mamba_split_conv1d_scan_combined = _compat_ref_fast
+            _ssd_comb.mamba_split_conv1d_scan_combined = _compat_ref_fast
         except (ImportError, AttributeError):
             pass
 
