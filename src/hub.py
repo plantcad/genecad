@@ -134,23 +134,17 @@ if platform.machine() == "aarch64":
                             _obj.cache.clear()
         _repatch_existing_autotuners()
 
-        # GH200: multiple mamba_ssm triton kernels fail at load_binary (tl.dot /
-        # wgmma paths can't be loaded on SM90a). Force Mamba2 to the slow path
-        # which calls pure-PyTorch mamba_chunk_scan_combined_ref instead of the
-        # fused triton implementation.
+        # GH200 (SM90a): mamba_ssm 2.2.4's triton kernels fail at load_binary
+        # (wgmma / tl.dot paths can't be loaded). Mamba2.forward checks
+        # self.use_mem_eff_path (not use_fast_path) to decide between the fused
+        # triton path and the pure-PyTorch reference. Replace the fused function
+        # in mamba2's module namespace so the call at forward:31 gets the ref.
         try:
+            import mamba_ssm.ops.triton.ssd_combined as _ssd_comb
             import mamba_ssm.modules.mamba2 as _mamba2_mod
-            _orig_m2_fwd = _mamba2_mod.Mamba2.forward
-
-            def _gh200_mamba2_fwd(self, *args, **kwargs):
-                _prev = self.use_fast_path
-                self.use_fast_path = False
-                try:
-                    return _orig_m2_fwd(self, *args, **kwargs)
-                finally:
-                    self.use_fast_path = _prev
-
-            _mamba2_mod.Mamba2.forward = _gh200_mamba2_fwd
+            _ref_fn = _ssd_comb.mamba_split_conv1d_scan_ref
+            _mamba2_mod.mamba_split_conv1d_scan_combined = _ref_fn
+            _ssd_comb.mamba_split_conv1d_scan_combined = _ref_fn
         except (ImportError, AttributeError):
             pass
 
