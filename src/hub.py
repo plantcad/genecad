@@ -88,12 +88,21 @@ if platform.machine() == "aarch64":
         #    that happen later, via model loading).
         # 2. Clearing configs on any mamba_ssm Autotuner objects already imported.
         # 3. Wrapping _bench to recover gracefully if a config still errors.
-        _safe_cfg = triton.Config({}, num_warps=4, num_stages=1)
-
         _orig_autotune = triton.autotune
         def _conservative_autotune(configs, key, **kwargs):
-            return _orig_autotune([_safe_cfg], key, **kwargs)
+            # Keep original constexpr kwargs (BLOCK_SIZE_H etc.) from the first
+            # config but drop to a single, conservative warp/stage count.
+            # An empty Config({}) loses required kernel constexprs on GH200.
+            first = configs[0] if configs else triton.Config({})
+            safe = triton.Config(
+                dict(getattr(first, "kwargs", {}) or {}),
+                num_warps=4,
+                num_stages=1,
+            )
+            return _orig_autotune([safe], key, **kwargs)
         triton.autotune = _conservative_autotune
+
+        _safe_cfg = triton.Config({}, num_warps=4, num_stages=1)
 
         _orig_bench = _triton_autotuner.Autotuner._bench
         def _safe_bench(self, *args, config=None, **kwargs):
