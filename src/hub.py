@@ -140,11 +140,17 @@ if platform.machine() == "aarch64":
         # triton path and the pure-PyTorch reference. Replace the fused function
         # in mamba2's module namespace so the call at forward:31 gets the ref.
         try:
+            import inspect as _inspect
             import mamba_ssm.ops.triton.ssd_combined as _ssd_comb
             import mamba_ssm.modules.mamba2 as _mamba2_mod
             _ref_fn = _ssd_comb.mamba_split_conv1d_scan_ref
-            _mamba2_mod.mamba_split_conv1d_scan_combined = _ref_fn
-            _ssd_comb.mamba_split_conv1d_scan_combined = _ref_fn
+            _ref_params = set(_inspect.signature(_ref_fn).parameters)
+
+            def _compat_ref(*args, **kwargs):
+                return _ref_fn(*args, **{k: v for k, v in kwargs.items() if k in _ref_params})
+
+            _mamba2_mod.mamba_split_conv1d_scan_combined = _compat_ref
+            _ssd_comb.mamba_split_conv1d_scan_combined = _compat_ref
         except (ImportError, AttributeError):
             pass
 
