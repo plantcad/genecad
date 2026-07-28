@@ -24,7 +24,24 @@ Options:
                                                 Minimum transcript length (bp) used during GFF export.
                                                 Higher values can reduce tiny fragments and speed up export.
                                                 (default: 3)
-    -c, --cpu-workers N   CPU worker processes used in GFF export transcript grouping.
+      --orf-max-shift N       Maximum distance (nt, in spliced transcript coordinates)
+                                                that the start and stop codon may be moved when
+                                                repairing CDS boundaries against the genome
+                                                sequence. Repairs never alter exon structure and
+                                                never leave the predicted exonic sequence; models
+                                                that cannot be resolved are flagged partial=true
+                                                rather than forced. Use 0 to disable repair.
+                                                (default: 300)
+    --no-frame-aware        Decode with the original 5-state Viterbi, which ignores the
+                                                genome sequence. By default decoding is frame-aware: the
+                                                CDS is constrained to begin on ATG, end on a stop codon,
+                                                stay in frame across introns, and contain no in-frame
+                                                stop, so every predicted CDS translates cleanly.
+    --min-intron-length N   Shortest intron frame-aware decoding may emit (default: 20).
+                                                Guards against short introns being invented to step over
+                                                an in-frame stop codon. Lower it for compact genomes
+                                                with genuinely short introns.
+  -c, --cpu-workers N   CPU worker processes used in GFF export transcript grouping.
                                                 Uses an order-preserving map so outputs remain deterministic.
                                                 (default: 1)
   -b, --batch-size N    Inference batch size per GPU (default: auto — scaled to GPU VRAM)
@@ -78,6 +95,9 @@ BATCH_SIZE_ARG="auto"
 GPUS_ARG="0"
 TOP_N_CONTIGS="all"
 MIN_TRANSCRIPT_LENGTH="3"
+ORF_MAX_SHIFT="300"
+FRAME_AWARE="1"
+MIN_INTRON_LENGTH="20"
 CPU_WORKERS="1"
 LAUNCHER_ARG="${LAUNCHER:-}"
 MODEL_CHECKPOINT_ARG=""
@@ -91,6 +111,9 @@ while [[ $# -gt 0 ]]; do
     -m|--mode)       MODE="$2";            shift 2 ;;
     -n|--top-n-contigs) TOP_N_CONTIGS="$2"; shift 2 ;;
     -l|--min-transcript-length) MIN_TRANSCRIPT_LENGTH="$2"; shift 2 ;;
+    --orf-max-shift) ORF_MAX_SHIFT="$2"; shift 2 ;;
+    --no-frame-aware) FRAME_AWARE="0"; shift ;;
+    --min-intron-length) MIN_INTRON_LENGTH="$2"; shift 2 ;;
     -c|--cpu-workers) CPU_WORKERS="$2"; shift 2 ;;
     -b|--batch-size) BATCH_SIZE_ARG="$2"; shift 2 ;;
     -g|--gpus)       GPUS_ARG="$2";       shift 2 ;;
@@ -111,6 +134,16 @@ fi
 
 if ! [[ "$MIN_TRANSCRIPT_LENGTH" =~ ^[0-9]+$ ]]; then
     echo "Error: --min-transcript-length must be a non-negative integer."
+    exit 1
+fi
+
+if ! [[ "$ORF_MAX_SHIFT" =~ ^[0-9]+$ ]]; then
+    echo "Error: --orf-max-shift must be a non-negative integer."
+    exit 1
+fi
+
+if ! [[ "$MIN_INTRON_LENGTH" =~ ^[0-9]+$ ]] || [[ "$MIN_INTRON_LENGTH" -lt 5 ]]; then
+    echo "Error: --min-intron-length must be an integer of at least 5."
     exit 1
 fi
 
@@ -190,6 +223,8 @@ echo "Species ID:  $SPECIES_ID"
 echo "Mode:        $MODE  ($BASE_MODEL + $HEAD_MODEL)"
 echo "Top contigs: $TOP_N_CONTIGS"
 echo "Min tx len:  $MIN_TRANSCRIPT_LENGTH"
+echo "ORF shift:   $ORF_MAX_SHIFT"
+echo "Frame-aware: $FRAME_AWARE (min intron $MIN_INTRON_LENGTH)"
 echo "CPU workers: $CPU_WORKERS"
 echo "================================================================="
 
@@ -391,9 +426,9 @@ process_chromosome() {
 
     # --- Step 1: Extract Sequences ---
     if [[ -e $SEQUENCES_ZARR ]]; then
-        echo "${LOG_PREFIX} [1/7] Skipping — sequences.zarr already exists"
+        echo "${LOG_PREFIX} [1/8] Skipping — sequences.zarr already exists"
     else
-        echo "${LOG_PREFIX} [1/7] Extracting sequences..."
+        echo "${LOG_PREFIX} [1/8] Extracting sequences..."
         $PYTHON "$SCRIPT_DIR/scripts/extract_fasta.py" \
             --species-id "$SPECIES_ID" \
             --input-fasta "$INPUT_FILE" \
@@ -404,7 +439,7 @@ process_chromosome() {
 
     # --- Step 2: Predict ---
     if [[ -e $PREDICTIONS_DIR ]]; then
-        echo "${LOG_PREFIX} [2/7] Skipping — predictions dir already exists"
+        echo "${LOG_PREFIX} [2/8] Skipping — predictions dir already exists"
     else
         local gpu_id="$GPU_ID"
         local bs="$BATCH_SIZE"
@@ -414,7 +449,7 @@ process_chromosome() {
         while [[ $attempt -lt $max_attempts ]]; do
             local exit_code=0
             if [[ "$PREDICT_MODE" == "ddp" ]]; then
-                echo "${LOG_PREFIX} [2/7] Prediction via DDP (batch=${bs}/GPU, attempt $((attempt+1))/${max_attempts})..."
+                echo "${LOG_PREFIX} [2/8] Prediction via DDP (batch=${bs}/GPU, attempt $((attempt+1))/${max_attempts})..."
                 CUDA_VISIBLE_DEVICES="$GPU_LIST_STR" \
                 $PY_LAUNCHER \
                     "$SCRIPT_DIR/scripts/predict.py" \
@@ -429,7 +464,7 @@ process_chromosome() {
                     --window-size 8192 \
                     --stride 4096 || exit_code=$?
             elif [[ "$PREDICT_MODE" == "ddp_slurm" ]]; then
-                echo "${LOG_PREFIX} [2/7] Prediction via SLURM distributed (batch=${bs}/GPU, attempt $((attempt+1))/${max_attempts})..."
+                echo "${LOG_PREFIX} [2/8] Prediction via SLURM distributed (batch=${bs}/GPU, attempt $((attempt+1))/${max_attempts})..."
                 $PY_LAUNCHER "$SCRIPT_DIR/scripts/predict.py" \
                     --chromosome-id "$CHR_ID" \
                     --input-zarr $SEQUENCES_ZARR \
@@ -442,7 +477,7 @@ process_chromosome() {
                     --window-size 8192 \
                     --stride 4096 || exit_code=$?
             else
-                echo "${LOG_PREFIX} [2/7] Prediction on GPU ${gpu_id} (batch=${bs}, attempt $((attempt+1))/${max_attempts})..."
+                echo "${LOG_PREFIX} [2/8] Prediction on GPU ${gpu_id} (batch=${bs}, attempt $((attempt+1))/${max_attempts})..."
                 CUDA_VISIBLE_DEVICES="$gpu_id" \
                 $PY_LAUNCHER "$SCRIPT_DIR/scripts/predict.py" \
                     --chromosome-id "$CHR_ID" \
@@ -460,7 +495,7 @@ process_chromosome() {
             if [[ $exit_code -eq 0 ]]; then
                 success=1
                 if [[ $attempt -gt 0 ]]; then
-                    echo "${LOG_PREFIX} [2/7] Succeeded with batch size ${bs} after ${attempt} retry(s)."
+                    echo "${LOG_PREFIX} [2/8] Succeeded with batch size ${bs} after ${attempt} retry(s)."
                     echo "${LOG_PREFIX}   TIP: Add '-b ${bs}' to future runs to skip probing."
                 fi
                 break
@@ -468,7 +503,7 @@ process_chromosome() {
             local next_bs=$(( bs * 4 / 5 ))   # reduce by 20%
             [[ $next_bs -ge $bs ]] && next_bs=$(( bs - 1 ))  # guard against bs<5 rounding to same value
             [[ $next_bs -lt 1 ]] && next_bs=1
-            echo "${LOG_PREFIX} [2/7] Failed (exit ${exit_code}). Reducing batch size by 20%%: ${bs} → ${next_bs}..."
+            echo "${LOG_PREFIX} [2/8] Failed (exit ${exit_code}). Reducing batch size by 20%%: ${bs} → ${next_bs}..."
             bs=$next_bs
             rm -rf $PREDICTIONS_DIR
             attempt=$(( attempt + 1 ))
@@ -482,20 +517,21 @@ process_chromosome() {
 
     # --- Step 3: Detect Intervals ---
     if [[ -e $INTERVALS_ZARR ]]; then
-        echo "${LOG_PREFIX} [3/7] Skipping — intervals.zarr already exists"
+        echo "${LOG_PREFIX} [3/8] Skipping — intervals.zarr already exists"
     else
-        echo "${LOG_PREFIX} [3/7] Detecting intervals (Viterbi decoding)..."
+        echo "${LOG_PREFIX} [3/8] Detecting intervals (Viterbi decoding)..."
         $PYTHON "$SCRIPT_DIR/scripts/detect_intervals.py" \
             --input-dir $PREDICTIONS_DIR \
             --output-zarr $INTERVALS_ZARR \
-            --domain "$MODE"
+            --domain "$MODE" \
+            "${FRAME_AWARE_ARGS[@]}"
     fi
 
     # --- Step 4: Export Raw GFF ---
     if [[ -f $RAW_GENECAD_GFF ]]; then
-        echo "${LOG_PREFIX} [4/7] Skipping — predictions_raw.gff already exists"
+        echo "${LOG_PREFIX} [4/8] Skipping — predictions_raw.gff already exists"
     else
-        echo "${LOG_PREFIX} [4/7] Exporting raw GFF..."
+        echo "${LOG_PREFIX} [4/8] Exporting raw GFF..."
         local export_tqdm_args=()
         if [[ -n "$gpu_id" ]]; then
             export_tqdm_args=(--tqdm-position "$gpu_id")
@@ -509,7 +545,7 @@ process_chromosome() {
     fi
 
     # --- Step 5: Post-processing Filters ---
-    echo "${LOG_PREFIX} [5/7] Filtering features..."
+    echo "${LOG_PREFIX} [5/8] Filtering features..."
 
     if [[ -f $FILTERED_GENECAD_GFF ]]; then
         echo "${LOG_PREFIX}   Skipping feature-length filter — output already exists"
@@ -521,6 +557,12 @@ process_chromosome() {
 
     echo "${LOG_PREFIX} Done!"
 }
+
+if [[ "$FRAME_AWARE" == "1" ]]; then
+    FRAME_AWARE_ARGS=(--input-fasta "$INPUT_FILE" --min-intron-length "$MIN_INTRON_LENGTH")
+else
+    FRAME_AWARE_ARGS=()
+fi
 
 export -f process_chromosome
 export OUTPUT_DIR SPECIES_ID BASE_MODEL HEAD_MODEL TOKENIZER_PATH DTYPE PYTHON PYTHONPATH
@@ -632,10 +674,11 @@ done
 # =================================================================
 echo ""
 echo "================================================================="
-echo "[6/7] Merging per-chromosome GFFs into single files..."
+echo "[6/8] Merging per-chromosome GFFs into single files..."
 echo "================================================================="
 
 RAW_GFF="$OUTPUT_DIR/${SPECIES_ID}_GeneCAD_raw.gff"
+ORF_GFF="$OUTPUT_DIR/${SPECIES_ID}_GeneCAD_orf.gff"
 FINAL_GFF="$OUTPUT_DIR/${SPECIES_ID}_GeneCAD_final.gff"
 
 if [[ -f "$RAW_GFF" ]]; then
@@ -648,14 +691,33 @@ fi
 
 echo ""
 echo "================================================================="
-echo "[7/7] Running protein refinement on merged predictions..."
+echo "[7/8] Repairing CDS boundaries against the genome sequence..."
+echo "================================================================="
+
+if [[ "$ORF_MAX_SHIFT" -eq 0 ]]; then
+    echo "Skipping ORF repair — disabled via --orf-max-shift 0"
+    ORF_GFF="$RAW_GFF"
+elif [[ -f "$ORF_GFF" ]]; then
+    echo "Skipping ORF repair — ${SPECIES_ID}_GeneCAD_orf.gff already exists"
+else
+    $PYTHON "$SCRIPT_DIR/scripts/fix_orf.py" \
+        --input-gff "$RAW_GFF" \
+        --input-fasta "$INPUT_FILE" \
+        --output-gff "$ORF_GFF" \
+        --max-shift "$ORF_MAX_SHIFT" \
+        --report "$OUTPUT_DIR/${SPECIES_ID}_GeneCAD_orf_report.tsv"
+fi
+
+echo ""
+echo "================================================================="
+echo "[8/8] Running protein refinement on merged predictions..."
 echo "================================================================="
 
 if [[ -f "$FINAL_GFF" ]]; then
     echo "Skipping refinement — ${SPECIES_ID}_GeneCAD_final.gff already exists"
 else
     $PYTHON "$SCRIPT_DIR/scripts/refine.py" \
-        --input-gff "$RAW_GFF" \
+        --input-gff "$ORF_GFF" \
         --input-fasta "$INPUT_FILE" \
         --output-gff "$FINAL_GFF" \
         --gpus "$GPU_LIST_STR"
@@ -665,5 +727,6 @@ echo ""
 echo "================================================================="
 echo "All done! Final predictions saved to:"
 echo "Raw:   $RAW_GFF"
+echo "ORF:   $ORF_GFF"
 echo "Final: $FINAL_GFF"
 echo "================================================================="
