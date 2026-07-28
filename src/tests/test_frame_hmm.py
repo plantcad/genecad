@@ -4,6 +4,8 @@ import numpy as np
 import pytest
 
 from src import frame_hmm as fh
+
+pytest.importorskip("torch")
 from src.modeling import token_transition_probs
 
 IG, IN, U5, CDS, U3 = range(5)
