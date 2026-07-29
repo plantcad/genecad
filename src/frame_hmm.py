@@ -35,7 +35,8 @@ this occurs in real genes but is rare, and supporting it would roughly double th
 state count.
 
 Introns additionally carry their donor and acceptor dinucleotides as states, so
-every emitted intron is canonical (GT-AG or GC-AG).  That constraint is load
+every emitted intron matches one of the configured splice motifs (GT-AG and
+GC-AG by default; see :class:`SpliceMotifGroup`).  That constraint is load
 bearing rather than decorative: given only the frame constraints, the cheapest
 way for the decoder to escape an in-frame stop codon is to invent a two-base
 intron across it, and measured on real predictions it did so readily.
@@ -54,7 +55,16 @@ predecessor each, so they cost states but no back-pointer memory (see
 
 Known limitations
 -----------------
-* U12-type AT-AC introns (~0.1-0.3% of introns) cannot be represented.
+* U12-type AT-AC introns are off by default. They are real but rare (~0.04%
+  of introns in the TAIR12 reference, against >99.9% GT-AG/GC-AG), and
+  supporting them roughly doubles the intron state count -- each configured
+  :class:`SpliceMotifGroup` gets its own donor, body and acceptor sub-chain,
+  since a donor from one group must never resume through another group's
+  acceptor. Pass ``splice_motif_groups=(GT_AG, AT_AC)`` to
+  :func:`build_states`/:func:`build_edges`/:func:`frame_aware_decode` to
+  enable them. Motifs beyond GT-AG, GC-AG and AT-AC are not offered: every
+  other dinucleotide pairing combined accounts for under 0.02% of introns in
+  that reference, consistent with annotation noise rather than real splicing.
 * Introns are not permitted to interrupt the start or the stop codon.
 * Genes must have both a 5' and a 3' UTR, as in the unconstrained decoder.
 """
@@ -89,7 +99,8 @@ MASK_NOT_A = 5
 MASK_NOT_AG = 6
 MASK_IS_AG = 7
 MASK_IS_TC = 8
-N_MASKS = 9
+MASK_IS_C = 9
+N_MASKS = 10
 
 # A large finite stand-in for -inf, so that adding two of them cannot produce NaN
 NEG_INF = -1e30
@@ -118,6 +129,7 @@ def build_mask_table() -> np.ndarray:
     table[MASK_IS_AG, BASE_G] = True
     table[MASK_IS_TC, BASE_T] = True
     table[MASK_IS_TC, BASE_C] = True
+    table[MASK_IS_C, BASE_C] = True
     return table
 
 
@@ -178,22 +190,69 @@ INTRON_CLASSES: list[tuple[str, tuple[str, ...]]] = [
     ("utr3", ("utr3",)),
 ]
 
+
+@dataclass(frozen=True)
+class SpliceMotifGroup:
+    """Donor dinucleotides that share a single acceptor dinucleotide.
+
+    Pairing, not the donor alone, is what a spliceosome enforces: the major
+    (U2) spliceosome accepts either GT or GC at the 5' splice site but always
+    requires AG at the 3', while the minor (U12) spliceosome is strict and
+    requires AT...AC.  Grouping by shared acceptor is what lets GT and GC
+    share one acceptor sub-chain while AT gets its own -- a donor from one
+    group can never resume through another group's acceptor.
+    """
+
+    name: str
+    donor_masks: tuple[int, int]
+    acceptor_masks: tuple[int, int]
+
+
+GT_AG = SpliceMotifGroup("gtag", (MASK_IS_G, MASK_IS_TC), (MASK_IS_A, MASK_IS_G))
+AT_AC = SpliceMotifGroup("atac", (MASK_IS_A, MASK_IS_T), (MASK_IS_A, MASK_IS_C))
+
+# GT-AG and GC-AG account for >99.9% of introns in the TAIR12 reference (chr5:
+# 45,058 GT-AG + 484 GC-AG of 45,597 total). AT-AC (U12-type) is real but rare
+# there (20 introns, 0.044%) and every other dinucleotide pairing combined
+# accounts for under 0.02% -- almost certainly annotation noise rather than
+# alternative splicing -- so only AT-AC is offered as an opt-in extra. Adding
+# a group roughly doubles the intron state count (each gets its own donor,
+# body and acceptor sub-chain, see `intron_chain_parts`), so it is off by
+# default; pass ``splice_motif_groups=(GT_AG, AT_AC)`` to enable it.
+DEFAULT_SPLICE_MOTIF_GROUPS: tuple[SpliceMotifGroup, ...] = (GT_AG,)
+
 # The donor and acceptor account for four bases; a minimum-length intron also
 # needs at least one body base, so this is the shortest intron representable.
 STRUCTURAL_MIN_INTRON_LENGTH = 5
 
-# In the TAIR12 chr4 reference only 0.07% of introns are shorter than 20 nt,
-# while an unconstrained frame-aware decoder emits ~0.4% -- the excess being
-# short introns invented to step over an in-frame stop codon.  Twenty is short
-# enough to keep essentially every real intron and long enough to close that gap.
+# Twenty is deliberately below the ~40-70 nt often quoted as a minimum for
+# spliceosomal lariat formation. Checked across 64 Phytozome angiosperm
+# reference annotations (~14.5M introns total, not just Arabidopsis): only
+# 0.13% of introns are shorter than 20 nt, but raising the floor to 40 would
+# exclude 0.43% more -- and 37 of the 64 species have at least one genuine
+# sub-20nt intron, with a handful (e.g. Lens ervoides, Brassica oleracea,
+# Arachis hypogaea) north of 1%. Meanwhile an unconstrained frame-aware
+# decoder emits ~0.4% of introns below 20 nt on Arabidopsis -- the excess
+# being short introns invented to step over an in-frame stop codon. Twenty
+# keeps essentially every real intron across these genomes while still
+# closing that gap. This is only a default: pass a larger value (e.g. via
+# --min-intron-length in scripts/detect_intervals.py) to enforce a stricter,
+# more textbook-canonical minimum for organisms where that's preferred.
 DEFAULT_MIN_INTRON_LENGTH = 20
 
 
-def intron_chain_parts(min_intron_length: int) -> list[tuple[str, int]]:
-    """(suffix, base constraint) for the states of one intron chain.
+def intron_chain_parts(
+    min_intron_length: int,
+    splice_motif_groups: tuple[SpliceMotifGroup, ...] = DEFAULT_SPLICE_MOTIF_GROUPS,
+) -> dict[str, list[tuple[str, int]]]:
+    """Per-group (suffix, base constraint) lists for the states of one intron.
 
-    ``b1..bk`` are mandatory body positions that impose the minimum length; the
-    looping ``body`` state that follows is what actually absorbs intron length.
+    Keyed by :attr:`SpliceMotifGroup.name`. Within a group's chain, ``b1..bk``
+    are mandatory body positions that impose the minimum length; the looping
+    ``body`` state that follows is what actually absorbs intron length. Groups
+    never merge -- each gets its own donor, body and acceptor states -- so an
+    intron entered through one group's donor can only leave through that same
+    group's acceptor.
     """
     if min_intron_length < STRUCTURAL_MIN_INTRON_LENGTH:
         raise ValueError(
@@ -201,23 +260,35 @@ def intron_chain_parts(min_intron_length: int) -> list[tuple[str, int]]:
             f"got {min_intron_length}"
         )
     mandatory = min_intron_length - STRUCTURAL_MIN_INTRON_LENGTH
-    return (
-        [("d1", MASK_IS_G), ("d2", MASK_IS_TC)]  # donor: GT or GC
-        + [(f"b{i}", MASK_ANY) for i in range(1, mandatory + 1)]
-        + [("body", MASK_ANY)]
-        + [("a1", MASK_IS_A), ("a2", MASK_IS_G)]  # acceptor: AG
-    )
+    body_parts = [(f"b{i}", MASK_ANY) for i in range(1, mandatory + 1)] + [
+        ("body", MASK_ANY)
+    ]
+    return {
+        group.name: (
+            [("d1", group.donor_masks[0]), ("d2", group.donor_masks[1])]
+            + body_parts
+            + [("a1", group.acceptor_masks[0]), ("a2", group.acceptor_masks[1])]
+        )
+        for group in splice_motif_groups
+    }
 
 
-def intron_state(intron_class: str, part: str) -> str:
-    return f"intron_{intron_class}_{part}"
+def intron_state(intron_class: str, group_name: str, part: str) -> str:
+    return f"intron_{intron_class}_{group_name}_{part}"
 
 
-def build_states(min_intron_length: int = DEFAULT_MIN_INTRON_LENGTH) -> list[State]:
+def build_states(
+    min_intron_length: int = DEFAULT_MIN_INTRON_LENGTH,
+    splice_motif_groups: tuple[SpliceMotifGroup, ...] = DEFAULT_SPLICE_MOTIF_GROUPS,
+) -> list[State]:
     states = list(CORE_STATES)
+    chain_parts = intron_chain_parts(min_intron_length, splice_motif_groups)
     for intron_class, _ in INTRON_CLASSES:
-        for part, mask in intron_chain_parts(min_intron_length):
-            states.append(State(intron_state(intron_class, part), IN, mask))
+        for group_name, parts in chain_parts.items():
+            for part, mask in parts:
+                states.append(
+                    State(intron_state(intron_class, group_name, part), IN, mask)
+                )
     return states
 
 
@@ -230,6 +301,7 @@ N_STATES = len(STATES)
 def build_edges(
     feature_probs: np.ndarray,
     min_intron_length: int = DEFAULT_MIN_INTRON_LENGTH,
+    splice_motif_groups: tuple[SpliceMotifGroup, ...] = DEFAULT_SPLICE_MOTIF_GROUPS,
 ) -> list[tuple[int, int, float]]:
     """Expand the 5x5 feature transition matrix into the frame-aware state graph.
 
@@ -247,8 +319,11 @@ def build_edges(
     if p.shape != (N_FEATURES, N_FEATURES):
         raise ValueError(f"Expected a {N_FEATURES}x{N_FEATURES} matrix; got {p.shape}")
 
-    chain_parts = intron_chain_parts(min_intron_length)
-    s = {state.name: i for i, state in enumerate(build_states(min_intron_length))}
+    chain_parts = intron_chain_parts(min_intron_length, splice_motif_groups)
+    s = {
+        state.name: i
+        for i, state in enumerate(build_states(min_intron_length, splice_motif_groups))
+    }
     edges: list[tuple[int, int, float]] = []
 
     def add(source: str, destination: str, weight: float) -> None:
@@ -264,7 +339,12 @@ def build_edges(
     add("intergenic", "utr5", p[IG][U5])
 
     def enter_intron(source: str, intron_class: str, weight: float) -> None:
-        add(source, intron_state(intron_class, "d1"), weight)
+        # Each configured motif group's donor mask is mutually exclusive with
+        # every other group's (G-first vs A-first), so -- as with cds_p0_t /
+        # cds_p0_x above -- each gets the full weight rather than a share of
+        # it; only one can ever be feasible for a given base.
+        for group in splice_motif_groups:
+            add(source, intron_state(intron_class, group.name, "d1"), weight)
 
     add("utr5", "utr5", p[U5][U5])
     enter_intron("utr5", "utr5", p[U5][IN])
@@ -328,11 +408,12 @@ def build_edges(
     add("utr3", "intergenic", p[U3][IG])
 
     # -- intron chains --------------------------------------------------------
-    # Each intron runs G -> T/C -> b1..bk -> body* -> A -> G before resuming.
-    # The b-states are mandatory, which is what imposes the minimum intron
-    # length; the decision to end the intron is taken on leaving the looping
-    # body state, and the acceptor states that follow are forced, so the exit
-    # weight sits on that one edge.
+    # Each intron runs donor -> b1..bk -> body* -> acceptor before resuming,
+    # separately per configured motif group (e.g. G -> T/C -> ... -> A -> G for
+    # GT_AG). The b-states are mandatory, which is what imposes the minimum
+    # intron length; the decision to end the intron is taken on leaving the
+    # looping body state, and the acceptor states that follow are forced, so
+    # the exit weight sits on that one edge.
     resume_weights = {
         # A 5' UTR intron may resume into more UTR or straight into the start
         # codon, and those two are not mutually exclusive under their masks, so
@@ -347,17 +428,18 @@ def build_edges(
         },
     }
     for intron_class, destinations in INTRON_CLASSES:
-        chain = [intron_state(intron_class, part) for part, _ in chain_parts]
-        body, acceptor_1, acceptor_2 = chain[-3], chain[-2], chain[-1]
-        # Donor and the mandatory body positions are a forced march
-        for source, destination in zip(chain, chain[1:-2]):
-            add(source, destination, 1.0)
-        add(body, body, intron_stay)
-        add(body, acceptor_1, intron_exit)
-        add(acceptor_1, acceptor_2, 1.0)
-        weights = resume_weights.get(intron_class, {})
-        for destination in destinations:
-            add(acceptor_2, destination, weights.get(destination, 1.0))
+        for group_name, parts in chain_parts.items():
+            chain = [intron_state(intron_class, group_name, part) for part, _ in parts]
+            body, acceptor_1, acceptor_2 = chain[-3], chain[-2], chain[-1]
+            # Donor and the mandatory body positions are a forced march
+            for source, destination in zip(chain, chain[1:-2]):
+                add(source, destination, 1.0)
+            add(body, body, intron_stay)
+            add(body, acceptor_1, intron_exit)
+            add(acceptor_1, acceptor_2, 1.0)
+            weights = resume_weights.get(intron_class, {})
+            for destination in destinations:
+                add(acceptor_2, destination, weights.get(destination, 1.0))
 
     return edges
 
@@ -585,6 +667,7 @@ def frame_aware_decode(
     epsilon: float | None = None,
     return_states: bool = False,
     min_intron_length: int = DEFAULT_MIN_INTRON_LENGTH,
+    splice_motif_groups: tuple[SpliceMotifGroup, ...] = DEFAULT_SPLICE_MOTIF_GROUPS,
 ) -> np.ndarray:
     """Decode per-base feature probabilities under frame and codon constraints.
 
@@ -611,6 +694,10 @@ def frame_aware_decode(
         Shortest intron the decoder may emit.  Introns below this length are
         overwhelmingly artefacts of stepping over an in-frame stop codon rather
         than real splicing.
+    splice_motif_groups
+        Which donor/acceptor dinucleotide pairings an intron may use. Defaults
+        to GT-AG/GC-AG only; pass ``(GT_AG, AT_AC)`` to also allow U12-type
+        AT-AC introns, at the cost of roughly doubling the intron state count.
 
     Returns
     -------
@@ -632,10 +719,14 @@ def frame_aware_decode(
     if epsilon is None:
         epsilon = float(np.finfo(np.float32).tiny)
 
-    states = build_states(min_intron_length)
+    states = build_states(min_intron_length, splice_motif_groups)
     n_states = len(states)
     mask_table = build_mask_table()
-    edges = build_edges(np.asarray(feature_transition, dtype=float), min_intron_length)
+    edges = build_edges(
+        np.asarray(feature_transition, dtype=float),
+        min_intron_length,
+        splice_motif_groups,
+    )
     validate_edges(edges, mask_table, states)
     index = build_predecessor_csr(edges, n_states)
 
@@ -661,7 +752,8 @@ def frame_aware_decode(
         f"Frame-aware decoding of {log_emission.shape[0]} positions over "
         f"{n_states} states ({len(edges)} transitions, "
         f"{index.n_branch_columns} with back-pointers, "
-        f"min_intron_length={min_intron_length})"
+        f"min_intron_length={min_intron_length}, "
+        f"splice_motif_groups={[g.name for g in splice_motif_groups]})"
     )
     path = _masked_viterbi(
         log_emission,

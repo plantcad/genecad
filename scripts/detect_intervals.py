@@ -7,7 +7,11 @@ from src.sequence import (
     viterbi_decode,
 )
 from src.frame_hmm import (
+    AT_AC,
     DEFAULT_MIN_INTRON_LENGTH,
+    DEFAULT_SPLICE_MOTIF_GROUPS,
+    GT_AG,
+    SpliceMotifGroup,
     encode_sequence,
     frame_aware_decode,
     reverse_complement_codes,
@@ -40,6 +44,7 @@ def _detect_intervals(
     remove_incomplete_features: bool,
     base_codes: np.ndarray | None = None,
     min_intron_length: int = DEFAULT_MIN_INTRON_LENGTH,
+    splice_motif_groups: tuple[SpliceMotifGroup, ...] = DEFAULT_SPLICE_MOTIF_GROUPS,
 ) -> xr.Dataset:
     """Infer genomic intervals from per-token feature predictions.
 
@@ -98,6 +103,7 @@ def _detect_intervals(
                 base_codes=strand_base_codes,
                 feature_transition=matrix,
                 min_intron_length=min_intron_length,
+                splice_motif_groups=splice_motif_groups,
             )
         else:
             # Decoding takes ~90 seconds for 308452471 tokens on Grace CPU
@@ -221,6 +227,7 @@ def detect_intervals(
     remove_incomplete_features: bool,
     input_fasta: str | None = None,
     min_intron_length: int = DEFAULT_MIN_INTRON_LENGTH,
+    splice_motif_groups: tuple[SpliceMotifGroup, ...] = DEFAULT_SPLICE_MOTIF_GROUPS,
 ):
     """Aggregate rank outputs and decode genomic intervals from logits.
 
@@ -262,6 +269,7 @@ def detect_intervals(
         remove_incomplete_features=remove_incomplete_features,
         base_codes=base_codes,
         min_intron_length=min_intron_length,
+        splice_motif_groups=splice_motif_groups,
     )
     interval_predictions = interval_predictions.assign_attrs(
         # Copy attributes from sequence predictions, which have
@@ -369,8 +377,19 @@ def main():
         default="plant",
         help="Biological domain for Viterbi transition priors (default: plant)",
     )
+    parser.add_argument(
+        "--allow-u12-introns",
+        action="store_true",
+        help="Also allow U12-type AT-AC introns during frame-aware decoding "
+        "(default: only GT-AG/GC-AG). AT-AC introns are real but rare "
+        "(~0.04%% of introns in the TAIR12 reference); enabling this roughly "
+        "doubles the intron state count. Ignored unless --input-fasta is set.",
+    )
 
     args = parser.parse_args()
+    splice_motif_groups = (
+        (GT_AG, AT_AC) if args.allow_u12_introns else DEFAULT_SPLICE_MOTIF_GROUPS
+    )
 
     if args.manifest is None:
         if (args.input_dir is None) or (args.output_zarr is None):
@@ -390,6 +409,7 @@ def main():
             remove_incomplete_features=(not args.keep_incomplete_features),
             input_fasta=args.input_fasta,
             min_intron_length=args.min_intron_length,
+            splice_motif_groups=splice_motif_groups,
         )
     else:
         with open(args.manifest) as fh:
@@ -412,6 +432,7 @@ def main():
                 remove_incomplete_features=(not args.keep_incomplete_features),
                 input_fasta=args.input_fasta,
                 min_intron_length=args.min_intron_length,
+                splice_motif_groups=splice_motif_groups,
             )
 
 

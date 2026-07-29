@@ -387,6 +387,64 @@ def test_a_noncanonical_intron_is_not_decoded_as_an_intron():
         assert (intron[:2], intron[-2:]) in (("GT", "AG"), ("GC", "AG"))
 
 
+def test_at_ac_intron_requires_opt_in():
+    """U12-type AT-AC introns are only decodable once GT_AG.AT_AC is enabled;
+    a donor from one splice motif group must never resume through another
+    group's acceptor."""
+    rng = np.random.default_rng(11)
+    sequence, labels = build_locus(rng, VALID_CODING, split=50)
+    intron_start = 2000 + 200 + 50
+    intron_len = 200
+    sequence = (
+        sequence[:intron_start]
+        + "AT"
+        + sequence[intron_start + 2 : intron_start + intron_len - 2]
+        + "AC"
+        + sequence[intron_start + intron_len :]
+    )
+    codes = fh.encode_sequence(sequence)
+    probs = emissions_from(labels, 0.9)
+
+    # Without AT_AC, the true AT-AC intron is structurally unreachable, so the
+    # decoder falls back to whatever nearby canonical (GT-AG/GC-AG) intron
+    # best explains the emissions -- never the planted AT-AC one.
+    default = fh.frame_aware_decode(probs, codes, plant_matrix())
+    default_introns = decoded_introns(sequence, default)
+    assert default_introns, "expected the decoder to still find some intron"
+    for intron in default_introns:
+        assert (intron[:2], intron[-2:]) in (("GT", "AG"), ("GC", "AG"))
+
+    extended = fh.frame_aware_decode(
+        probs, codes, plant_matrix(), splice_motif_groups=(fh.GT_AG, fh.AT_AC)
+    )
+    introns = decoded_introns(sequence, extended)
+    assert introns, "expected the AT-AC intron to be decodable once enabled"
+    assert (introns[0][:2], introns[0][-2:]) == ("AT", "AC")
+    for coding in coding_sequences(sequence, extended):
+        assert is_valid_orf(coding)
+
+
+def test_splice_motif_groups_do_not_cross_pair():
+    """A GT donor may only resume through an AG acceptor, and an AT donor only
+    through AC, even when both groups are enabled -- donor and acceptor come
+    from the same sub-chain, never mixed across groups."""
+    states = fh.build_states(splice_motif_groups=(fh.GT_AG, fh.AT_AC))
+    edges = fh.build_edges(plant_matrix(), splice_motif_groups=(fh.GT_AG, fh.AT_AC))
+    fh.validate_edges(edges, fh.build_mask_table(), states)
+
+    by_name = {state.name: i for i, state in enumerate(states)}
+    outgoing: dict[int, list[int]] = {}
+    for source, destination, _ in edges:
+        outgoing.setdefault(source, []).append(destination)
+
+    gtag_body = by_name["intron_p2_gtag_body"]
+    atac_body = by_name["intron_p2_atac_body"]
+    gtag_acceptor_1 = by_name["intron_p2_gtag_a1"]
+    atac_acceptor_1 = by_name["intron_p2_atac_a1"]
+    assert outgoing[gtag_body] == [gtag_body, gtag_acceptor_1]
+    assert outgoing[atac_body] == [atac_body, atac_acceptor_1]
+
+
 def test_mismatched_sequence_length_is_rejected():
     rng = np.random.default_rng(5)
     sequence, labels = build_locus(rng, VALID_CODING, split=50)

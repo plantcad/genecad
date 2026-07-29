@@ -41,6 +41,10 @@ Options:
                                                 Guards against short introns being invented to step over
                                                 an in-frame stop codon. Lower it for compact genomes
                                                 with genuinely short introns.
+    --allow-u12-introns     Also allow U12-type AT-AC introns during frame-aware
+                                                decoding (default: only GT-AG/GC-AG). These are real but
+                                                rare; enabling this roughly doubles the intron state count
+                                                and slows decoding accordingly.
   -c, --cpu-workers N   CPU worker processes used in GFF export transcript grouping.
                                                 Uses an order-preserving map so outputs remain deterministic.
                                                 (default: 1)
@@ -98,6 +102,7 @@ MIN_TRANSCRIPT_LENGTH="3"
 ORF_MAX_SHIFT="300"
 FRAME_AWARE="1"
 MIN_INTRON_LENGTH="20"
+ALLOW_U12_INTRONS="0"
 CPU_WORKERS="1"
 LAUNCHER_ARG="${LAUNCHER:-}"
 MODEL_CHECKPOINT_ARG=""
@@ -114,6 +119,7 @@ while [[ $# -gt 0 ]]; do
     --orf-max-shift) ORF_MAX_SHIFT="$2"; shift 2 ;;
     --no-frame-aware) FRAME_AWARE="0"; shift ;;
     --min-intron-length) MIN_INTRON_LENGTH="$2"; shift 2 ;;
+    --allow-u12-introns) ALLOW_U12_INTRONS="1"; shift ;;
     -c|--cpu-workers) CPU_WORKERS="$2"; shift 2 ;;
     -b|--batch-size) BATCH_SIZE_ARG="$2"; shift 2 ;;
     -g|--gpus)       GPUS_ARG="$2";       shift 2 ;;
@@ -224,7 +230,7 @@ echo "Mode:        $MODE  ($BASE_MODEL + $HEAD_MODEL)"
 echo "Top contigs: $TOP_N_CONTIGS"
 echo "Min tx len:  $MIN_TRANSCRIPT_LENGTH"
 echo "ORF shift:   $ORF_MAX_SHIFT"
-echo "Frame-aware: $FRAME_AWARE (min intron $MIN_INTRON_LENGTH)"
+echo "Frame-aware: $FRAME_AWARE (min intron $MIN_INTRON_LENGTH, allow U12 introns: $ALLOW_U12_INTRONS)"
 echo "CPU workers: $CPU_WORKERS"
 echo "================================================================="
 
@@ -560,6 +566,9 @@ process_chromosome() {
 
 if [[ "$FRAME_AWARE" == "1" ]]; then
     FRAME_AWARE_ARGS=(--input-fasta "$INPUT_FILE" --min-intron-length "$MIN_INTRON_LENGTH")
+    if [[ "$ALLOW_U12_INTRONS" == "1" ]]; then
+        FRAME_AWARE_ARGS+=(--allow-u12-introns)
+    fi
 else
     FRAME_AWARE_ARGS=()
 fi
