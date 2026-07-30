@@ -3,7 +3,18 @@ import logging
 from numpy import typing as npt
 from src.sequence import (
     convert_entity_labels_to_intervals,
+    regularize_transition_matrix,
     viterbi_decode,
+)
+from src.frame_hmm import (
+    AT_AC,
+    DEFAULT_MIN_INTRON_LENGTH,
+    DEFAULT_SPLICE_MOTIF_GROUPS,
+    GT_AG,
+    SpliceMotifGroup,
+    encode_sequence,
+    frame_aware_decode,
+    reverse_complement_codes,
 )
 import torch
 import torch.nn.functional as F
@@ -31,6 +42,9 @@ def _detect_intervals(
     intergenic_bias: float,
     domain: str,
     remove_incomplete_features: bool,
+    base_codes: np.ndarray | None = None,
+    min_intron_length: int = DEFAULT_MIN_INTRON_LENGTH,
+    splice_motif_groups: tuple[SpliceMotifGroup, ...] = DEFAULT_SPLICE_MOTIF_GROUPS,
 ) -> xr.Dataset:
     """Infer genomic intervals from per-token feature predictions.
 
@@ -56,7 +70,9 @@ def _detect_intervals(
     assert set(strands) == {"positive", "negative"}
 
     def _decode_intervals_viterbi(
-        logits: npt.ArrayLike, remove_incomplete_features: bool
+        logits: npt.ArrayLike,
+        remove_incomplete_features: bool,
+        strand_base_codes: np.ndarray | None = None,
     ) -> np.ndarray:
         transition_probs = token_transition_probs(
             remove_incomplete_features=remove_incomplete_features,
@@ -73,14 +89,30 @@ def _detect_intervals(
         assert emissions.min() >= 0 and emissions.max() <= 1
         assert transition_probs.index.tolist() == transition_probs.columns.tolist()
 
-        # Decoding takes ~90 seconds for 308452471 tokens on Grace CPU
         alpha = viterbi_alpha
-        logger.info(f"Running viterbi decoding ({alpha=})")
-        labels = viterbi_decode(
-            emission_probs=emissions,
-            transition_matrix=transition_probs.values,
-            alpha=alpha,
-        )
+        matrix = transition_probs.values
+        if strand_base_codes is not None:
+            # Regularization has to be applied to the 5x5 feature matrix before
+            # it is expanded: smoothing the expanded matrix would fill in the
+            # structural zeros that carry the reading frame.
+            if alpha is not None:
+                matrix = regularize_transition_matrix(matrix, alpha)
+            logger.info(f"Running frame-aware viterbi decoding ({alpha=})")
+            labels = frame_aware_decode(
+                feature_probs=emissions,
+                base_codes=strand_base_codes,
+                feature_transition=matrix,
+                min_intron_length=min_intron_length,
+                splice_motif_groups=splice_motif_groups,
+            )
+        else:
+            # Decoding takes ~90 seconds for 308452471 tokens on Grace CPU
+            logger.info(f"Running viterbi decoding ({alpha=})")
+            labels = viterbi_decode(
+                emission_probs=emissions,
+                transition_matrix=matrix,
+                alpha=alpha,
+            )
 
         assert labels.ndim == 1
         # pyrefly: ignore  # bad-argument-type
@@ -114,12 +146,20 @@ def _detect_intervals(
                 viterbi_labels = _decode_intervals_viterbi(
                     logits=logits,
                     remove_incomplete_features=remove_incomplete_features,
+                    strand_base_codes=base_codes,
                 )
             else:
+                # The minus strand is decoded on the reversed logit array, so the
+                # sequence must be reverse complemented to stay in register.
                 viterbi_labels = flip(
                     _decode_intervals_viterbi(
                         logits=flip(logits).copy(),
                         remove_incomplete_features=remove_incomplete_features,
+                        strand_base_codes=(
+                            None
+                            if base_codes is None
+                            else reverse_complement_codes(base_codes)
+                        ),
                     )
                 )
 
@@ -148,6 +188,35 @@ def _detect_intervals(
     return region_intervals
 
 
+def load_chromosome_codes(fasta_path: str, chromosome_id: str) -> np.ndarray:
+    """Read one chromosome from a FASTA file and encode it as base codes.
+
+    The file is streamed a record at a time so that whole-genome FASTAs do not
+    have to be held in memory.
+    """
+    import gzip
+
+    opener = gzip.open if fasta_path.endswith(".gz") else open
+    with opener(fasta_path, "rt") as fh:  # pyrefly: ignore[bad-argument-type]
+        current: str | None = None
+        chunks: list[str] = []
+        for line in fh:
+            if line.startswith(">"):
+                if current == chromosome_id:
+                    break
+                current = line[1:].strip().split()[0]
+                chunks = []
+            elif current == chromosome_id:
+                chunks.append(line.strip())
+    if not chunks:
+        raise ValueError(f"Sequence {chromosome_id!r} not found in {fasta_path}")
+    logger.info(
+        f"Loaded sequence {chromosome_id!r} ({sum(len(c) for c in chunks)} bp) "
+        f"from {fasta_path}"
+    )
+    return encode_sequence("".join(chunks))
+
+
 def detect_intervals(
     input_dir: str,
     output: str,
@@ -156,6 +225,9 @@ def detect_intervals(
     intergenic_bias: float,
     domain: str,
     remove_incomplete_features: bool,
+    input_fasta: str | None = None,
+    min_intron_length: int = DEFAULT_MIN_INTRON_LENGTH,
+    splice_motif_groups: tuple[SpliceMotifGroup, ...] = DEFAULT_SPLICE_MOTIF_GROUPS,
 ):
     """Aggregate rank outputs and decode genomic intervals from logits.
 
@@ -175,6 +247,18 @@ def detect_intervals(
         drop_variables=["token_predictions", "token_logits"],
     )
 
+    base_codes = None
+    if input_fasta is not None:
+        chromosome_id = sequence_predictions.attrs["chromosome_id"]
+        base_codes = load_chromosome_codes(input_fasta, chromosome_id)
+        n_positions = sequence_predictions.sizes["sequence"]
+        if len(base_codes) != n_positions:
+            raise ValueError(
+                f"Sequence {chromosome_id!r} has {len(base_codes)} bases but "
+                f"{n_positions} positions were predicted; frame-aware decoding "
+                f"requires the FASTA used for prediction"
+            )
+
     logger.info("Detecting intervals")
     interval_predictions = _detect_intervals(
         predictions=sequence_predictions,
@@ -183,6 +267,9 @@ def detect_intervals(
         intergenic_bias=intergenic_bias,
         domain=domain,
         remove_incomplete_features=remove_incomplete_features,
+        base_codes=base_codes,
+        min_intron_length=min_intron_length,
+        splice_motif_groups=splice_motif_groups,
     )
     interval_predictions = interval_predictions.assign_attrs(
         # Copy attributes from sequence predictions, which have
@@ -268,14 +355,42 @@ def main():
         help="Keep incomplete features in the prediction",
     )
     parser.add_argument(
+        "--input-fasta",
+        "-f",
+        type=str,
+        default=None,
+        help="Genome FASTA used for prediction. When given, decoding becomes "
+        "frame-aware: the CDS is constrained to begin on ATG, end on a stop "
+        "codon, stay in frame across introns, and contain no in-frame stop. "
+        "Ignored when --decode-direct is set.",
+    )
+    parser.add_argument(
+        "--min-intron-length",
+        type=int,
+        default=DEFAULT_MIN_INTRON_LENGTH,
+        help="Shortest intron frame-aware decoding may emit. Guards against short "
+        "introns being invented to step over an in-frame stop codon.",
+    )
+    parser.add_argument(
         "--domain",
         type=str,
         choices=["plant", "animal"],
         default="plant",
         help="Biological domain for Viterbi transition priors (default: plant)",
     )
+    parser.add_argument(
+        "--allow-u12-introns",
+        action="store_true",
+        help="Also allow U12-type AT-AC introns during frame-aware decoding "
+        "(default: only GT-AG/GC-AG). AT-AC introns are real but rare "
+        "(~0.04%% of introns in the TAIR12 reference); enabling this roughly "
+        "doubles the intron state count. Ignored unless --input-fasta is set.",
+    )
 
     args = parser.parse_args()
+    splice_motif_groups = (
+        (GT_AG, AT_AC) if args.allow_u12_introns else DEFAULT_SPLICE_MOTIF_GROUPS
+    )
 
     if args.manifest is None:
         if (args.input_dir is None) or (args.output_zarr is None):
@@ -293,6 +408,9 @@ def main():
             intergenic_bias=args.intergenic_bias,
             domain=args.domain,
             remove_incomplete_features=(not args.keep_incomplete_features),
+            input_fasta=args.input_fasta,
+            min_intron_length=args.min_intron_length,
+            splice_motif_groups=splice_motif_groups,
         )
     else:
         with open(args.manifest) as fh:
@@ -313,6 +431,9 @@ def main():
                 intergenic_bias=args.intergenic_bias,
                 domain=args.domain,
                 remove_incomplete_features=(not args.keep_incomplete_features),
+                input_fasta=args.input_fasta,
+                min_intron_length=args.min_intron_length,
+                splice_motif_groups=splice_motif_groups,
             )
 
 

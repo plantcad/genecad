@@ -2,7 +2,7 @@
 
 # GeneCAD: Plant Genome Annotation with a DNA Foundation Model
 
-![](https://img.shields.io/badge/version-0.3.0-blue)
+![](https://img.shields.io/badge/version-0.4.0-blue)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![CI](https://github.com/plantcad/genecad/actions/workflows/ci.yaml/badge.svg)](https://github.com/plantcad/genecad/actions/workflows/ci.yaml)
 [![bioRxiv](https://img.shields.io/badge/bioRxiv-10.1101/2025.10.31.685877-b31b1b.svg)](https://doi.org/10.1101/2025.10.31.685877)
@@ -340,6 +340,18 @@ If set, overrides automatic DDP/SLURM detection. Can also be set via LAUNCHER en
 (Default: python)
 * `--model-checkpoint` - Overrides the GeneCAD head model set by `--mode`. Accepts a local path to a `.ckpt` file or a
 HuggingFace model repo ID. Note that this does **not** override the base PlantCAD model set by `--mode`
+* `--no-frame-aware` - Decode with the original 5-state Viterbi, which ignores the genome sequence. By default,
+decoding is frame-aware: the CDS is constrained to begin on ATG, end on a stop codon, stay in frame across introns,
+and contain no in-frame stop, so every predicted CDS translates cleanly.
+* `--min-intron-length` - Shortest intron frame-aware decoding may emit. Guards against short introns being invented
+to step over an in-frame stop codon. Lower it for compact genomes with genuinely short introns. (Default: 20)
+* `--allow-u12-introns` - Also allow U12-type AT-AC introns during frame-aware decoding, in addition to the default
+GT-AG/GC-AG. These are real but rare; enabling this roughly doubles the intron state count and slows decoding
+accordingly.
+* `--orf-max-shift` - Maximum distance (nt, in spliced transcript coordinates) that the start and stop codon may be
+moved when repairing CDS boundaries against the genome sequence. Repairs never alter exon structure and never leave
+the predicted exonic sequence; models that cannot be resolved this way are flagged `partial=true` rather than
+forced. Use 0 to disable repair. (Default: 300)
 
 #### Pipeline Breakdown
 
