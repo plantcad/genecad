@@ -331,6 +331,7 @@ def build_edges(
             edges.append((s[source], s[destination], float(weight)))
 
     cds_cont, cds_intron, cds_end = p[CDS][CDS], p[CDS][IN], p[CDS][U3]
+    utr5_cont, utr5_intron, utr5_end = p[U5][U5], p[U5][IN], p[U5][CDS]
     intron_stay = p[IN][IN]
     intron_exit = 1.0 - intron_stay
 
@@ -346,9 +347,9 @@ def build_edges(
         for group in splice_motif_groups:
             add(source, intron_state(intron_class, group.name, "d1"), weight)
 
-    add("utr5", "utr5", p[U5][U5])
-    enter_intron("utr5", "utr5", p[U5][IN])
-    add("utr5", "start_a", p[U5][CDS])
+    add("utr5", "utr5", utr5_cont)
+    enter_intron("utr5", "utr5", utr5_intron)
+    add("utr5", "start_a", utr5_end)
 
     # -- start codon ----------------------------------------------------------
     add("start_a", "start_t", 1.0)
@@ -416,9 +417,13 @@ def build_edges(
     # the exit weight sits on that one edge.
     resume_weights = {
         # A 5' UTR intron may resume into more UTR or straight into the start
-        # codon, and those two are not mutually exclusive under their masks, so
-        # they share the exit mass.
-        "utr5": {"utr5": 0.5, "start_a": 0.5},
+        # codon; those two are not mutually exclusive under their masks, so
+        # they share the exit mass in the same ratio a UTR base would transition,
+        # rather than splitting it arbitrarily.
+        "utr5": {
+            "utr5": utr5_cont / (utr5_cont + utr5_end),
+            "start_a": utr5_end / (utr5_cont + utr5_end),
+        },
         # At a codon boundary the intron resumes into the next codon or into the
         # terminal stop codon, in the same ratio a coding base would.
         "p2": {

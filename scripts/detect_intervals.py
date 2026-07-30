@@ -356,6 +356,7 @@ def main():
     )
     parser.add_argument(
         "--input-fasta",
+        "-f",
         type=str,
         default=None,
         help="Genome FASTA used for prediction. When given, decoding becomes "

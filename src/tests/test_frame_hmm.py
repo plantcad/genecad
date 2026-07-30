@@ -445,6 +445,31 @@ def test_splice_motif_groups_do_not_cross_pair():
     assert outgoing[atac_body] == [atac_body, atac_acceptor_1]
 
 
+def test_utr5_intron_resume_uses_measured_transition_ratio():
+    """Exiting a 5' UTR intron into more UTR vs. straight into the start codon
+    must split by the measured UTR5->UTR5 / UTR5->CDS ratio, not an arbitrary
+    50/50 -- regression test for a fix from a hardcoded flat split."""
+    matrix = plant_matrix()
+    # The real data isn't close to 50/50; if it ever were, this test wouldn't
+    # be able to tell a correct ratio-based split from a coincidental flat one.
+    assert matrix[U5, U5] == pytest.approx(0.9945, abs=0.01)
+    assert matrix[U5, CDS] == pytest.approx(0.0046, abs=0.01)
+
+    states = fh.build_states()
+    edges = fh.build_edges(matrix)
+    by_name = {state.name: i for i, state in enumerate(states)}
+    acceptor_2 = by_name["intron_utr5_gtag_a2"]
+
+    weights = {
+        states[destination].name: weight
+        for source, destination, weight in edges
+        if source == acceptor_2 and states[destination].name in ("utr5", "start_a")
+    }
+    total = matrix[U5, U5] + matrix[U5, CDS]
+    assert weights["utr5"] == pytest.approx(matrix[U5, U5] / total)
+    assert weights["start_a"] == pytest.approx(matrix[U5, CDS] / total)
+
+
 def test_mismatched_sequence_length_is_rejected():
     rng = np.random.default_rng(5)
     sequence, labels = build_locus(rng, VALID_CODING, split=50)
