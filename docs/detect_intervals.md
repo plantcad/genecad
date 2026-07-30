@@ -28,8 +28,16 @@ UTR must follow CDS, etc.). The direct method creates intervals directly from th
 predicting genic regions (CDS, 3' UTR, 5' UTR, or intron). Note that this value is applied before
 softmax, and so can be greater than 1.
 * `--keep-incomplete-features` - Flag. If set, gene models missing UTRs are allowed.
+* `--input-fasta`, `-f` - Genome FASTA used for prediction. When given, decoding becomes frame-aware: the CDS is
+constrained to begin on ATG, end on a stop codon, stay in frame across introns, and contain no in-frame stop.
+Ignored when `--decode-direct` is set.
+* `--min-intron-length` - Shortest intron frame-aware decoding may emit. Guards against short introns being invented
+to step over an in-frame stop codon. Default: 20.
 * `--domain` - Domain sets the transition probabilities between states based on empirical observation from
 different types of organisms. Default: plant. Options: plant, animal.
+* `--allow-u12-introns` - Flag. Also allow U12-type AT-AC introns during frame-aware decoding, in addition to the
+default GT-AG/GC-AG. These are real but rare; enabling this roughly doubles the intron state count and slows
+decoding accordingly. Ignored unless `--input-fasta` is set.
 
 ### Next Step
 
