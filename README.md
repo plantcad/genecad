@@ -40,11 +40,9 @@ v0.1.0 or earlier, we recommend installing the latest version and re-running all
 </details>
 
 > [!NOTE]
-> **v0.4.0**: Added ORF validation via frame-aware decoding and CDS repair. Benchmarked across
-> 11 genomic regions spanning 6 plant species, the share of predicted transcripts with a
-> complete, translatable ORF (correct frame, ATG start, stop codon, no internal stop) rose from
-> a **70.3% average with the previous decoder to 98.2%**. See the
-> [release notes](https://github.com/plantcad/genecad/releases/tag/v0.4.0) for the full benchmark.
+> **v0.4.0**: predicted CDS regions are now checked and repaired to be valid ORFs. Tested
+> across 11 regions in 6 plant species, the complete-ORF rate went from 70.3% to 98.2%. Full
+> numbers in the [release notes](https://github.com/plantcad/genecad/releases/tag/v0.4.0).
 
 
 ## Table of Contents
