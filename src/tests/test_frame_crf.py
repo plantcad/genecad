@@ -311,6 +311,21 @@ def decoded_introns(sequence: str, labels: np.ndarray) -> list[str]:
     return runs
 
 
+def coding_exon_lengths(labels: np.ndarray) -> list[int]:
+    """Length of every maximal run of CDS-labelled bases."""
+    lengths: list[int] = []
+    current = 0
+    for label in labels:
+        if label == CDS:
+            current += 1
+        elif current:
+            lengths.append(current)
+            current = 0
+    if current:
+        lengths.append(current)
+    return lengths
+
+
 @pytest.mark.parametrize("seed", range(6))
 def test_decoded_introns_are_always_canonical(seed):
     """Without a splice-site constraint the decoder escapes an in-frame stop by
@@ -359,9 +374,13 @@ def test_minimum_intron_length_is_enforced():
 @pytest.mark.parametrize("min_intron_length", [5, 20, 40])
 def test_backpointer_memory_does_not_grow_with_minimum_intron_length(min_intron_length):
     """The mandatory body states have one predecessor each, so raising the
-    minimum intron length must cost states but not per-position memory."""
-    states = fh.build_states(min_intron_length)
-    edges = fh.build_edges(plant_matrix(), min_intron_length)
+    minimum intron length must cost states but not per-position memory.
+
+    Isolated from the minimum-exon-length lock chain (min_exon_length=0) since
+    that adds its own states independent of min_intron_length.
+    """
+    states = fh.build_states(min_intron_length, min_exon_length=0)
+    edges = fh.build_edges(plant_matrix(), min_intron_length, min_exon_length=0)
     fh.validate_edges(edges, fh.build_mask_table(), states)
     index = fh.build_predecessor_csr(edges, len(states))
 
@@ -370,6 +389,141 @@ def test_backpointer_memory_does_not_grow_with_minimum_intron_length(min_intron_
     # every non-branching state must know its unique predecessor
     for j in range(len(states)):
         assert (index.branch_column[j] >= 0) != (index.sole_predecessor[j] >= 0)
+
+
+# -------------------------------------------------------------------------------------------------
+# Minimum exon length
+# -------------------------------------------------------------------------------------------------
+
+
+def test_minimum_exon_length_can_be_enforced_before_the_stop_codon():
+    """The mirror-image artefact to test_exon_length_strictness_large_matches_the_hard_block:
+    an intron resuming directly into the stop codon, leaving a last exon
+    that is just the stop codon. Suppressing it is now a matter of degree
+    (see exon_length_strictness) rather than an absolute structural
+    guarantee -- this checks the strict end of that range still behaves like
+    the original hard block."""
+    rng = np.random.default_rng(21)
+    split = len(VALID_CODING) - 3  # last exon = "TAA" only
+    sequence, labels = build_locus(rng, VALID_CODING, split=split, intron_len=200)
+    probs = emissions_from(labels, 0.9)
+    codes = fh.encode_sequence(sequence)
+
+    relaxed = fh.frame_aware_decode(probs, codes, plant_matrix(), min_exon_length=0)
+    assert coding_exon_lengths(relaxed)[-1] == 3
+
+    strict = fh.frame_aware_decode(
+        probs, codes, plant_matrix(), exon_length_strictness=100.0
+    )
+    exon_lengths = coding_exon_lengths(strict)
+    assert all(length >= fh.DEFAULT_MIN_EXON_LENGTH for length in exon_lengths)
+    for coding in coding_sequences(sequence, strict):
+        assert is_valid_orf(coding)
+
+
+def test_soft_penalty_lets_strong_evidence_recover_a_short_exon():
+    """The property that makes this a soft preference and not the old hard
+    block: overwhelming, unambiguous emission support for a short exon must
+    still be able to win at the default settings. This is what lets genuine
+    short boundary exons -- confirmed to occur in real reference annotations
+    about as often as GeneCAD used to falsely invent them -- survive."""
+    rng = np.random.default_rng(25)
+    sequence, labels = build_locus(rng, VALID_CODING, split=3, intron_len=200)
+    codes = fh.encode_sequence(sequence)
+    probs = emissions_from(labels, 0.999)
+
+    decoded = fh.frame_aware_decode(probs, codes, plant_matrix())
+    assert coding_exon_lengths(decoded)[0] == 3
+    for coding in coding_sequences(sequence, decoded):
+        assert is_valid_orf(coding)
+
+
+@pytest.mark.parametrize("min_exon_length", [0, 1, 4, 9, 15])
+def test_exon_lock_graph_is_a_valid_probability_model(min_exon_length):
+    """The lock chain must not break the invariants the rest of the graph is
+    held to: no state may emit more than unit probability at any base, and
+    every state must be reachable and have somewhere to go."""
+    matrix = plant_matrix()
+    states = fh.build_states(min_exon_length=min_exon_length)
+    edges = fh.build_edges(matrix, min_exon_length=min_exon_length)
+    fh.validate_edges(edges, fh.build_mask_table(), states)  # raises if violated
+
+    sources = {source for source, _, _ in edges}
+    destinations = {destination for _, destination, _ in edges}
+    assert sources == set(range(len(states)))
+    assert destinations == set(range(len(states)))
+
+
+def test_exon_length_strictness_zero_allows_recovery_at_normal_confidence():
+    """strictness=0 must fully remove the length penalty: a short exon backed
+    by the same confidence level normal decoding already trusts elsewhere
+    (0.9, as the other tests in this file use) must be recoverable, not just
+    the confidence=0.999 needed once the calibrated default's discount is
+    in effect."""
+    rng = np.random.default_rng(23)
+    sequence, labels = build_locus(rng, VALID_CODING, split=3, intron_len=200)
+    probs = emissions_from(labels, 0.9)
+    codes = fh.encode_sequence(sequence)
+
+    decoded = fh.frame_aware_decode(
+        probs, codes, plant_matrix(), exon_length_strictness=0.0
+    )
+    assert coding_exon_lengths(decoded)[0] == 3
+    for coding in coding_sequences(sequence, decoded):
+        assert is_valid_orf(coding)
+
+
+def test_exon_length_strictness_large_matches_the_hard_block():
+    """A very large strictness must converge on the original hard-block
+    behaviour: even the same confidence level (0.9) other tests show is
+    enough to recover a short exon at strictness=0 must be suppressed."""
+    rng = np.random.default_rng(24)
+    sequence, labels = build_locus(rng, VALID_CODING, split=3, intron_len=200)
+    probs = emissions_from(labels, 0.9)
+    codes = fh.encode_sequence(sequence)
+
+    decoded = fh.frame_aware_decode(
+        probs, codes, plant_matrix(), exon_length_strictness=100.0
+    )
+    exon_lengths = coding_exon_lengths(decoded)
+    assert all(length >= fh.DEFAULT_MIN_EXON_LENGTH for length in exon_lengths)
+    for coding in coding_sequences(sequence, decoded):
+        assert is_valid_orf(coding)
+
+
+@pytest.mark.parametrize("min_exon_length", [4, 9, 15])
+@pytest.mark.parametrize("exon_length_strictness", [0.0, 1.0, 5.0, 100.0])
+def test_exon_length_penalty_graph_is_a_valid_probability_model(
+    min_exon_length, exon_length_strictness
+):
+    """The soft escape edges must not break the same invariants the hard
+    lock chain was already held to."""
+    matrix = plant_matrix()
+    states = fh.build_states(min_exon_length=min_exon_length)
+    edges = fh.build_edges(
+        matrix,
+        min_exon_length=min_exon_length,
+        exon_length_strictness=exon_length_strictness,
+    )
+    fh.validate_edges(edges, fh.build_mask_table(), states)
+
+    sources = {source for source, _, _ in edges}
+    destinations = {destination for _, destination, _ in edges}
+    assert sources == set(range(len(states)))
+    assert destinations == set(range(len(states)))
+
+
+def test_min_exon_length_zero_reproduces_the_original_graph():
+    """min_exon_length=0 is the escape hatch: it must add no states or edges
+    beyond what the graph looked like before this constraint existed."""
+    matrix = plant_matrix()
+    states = fh.build_states(min_exon_length=0)
+    edges = fh.build_edges(matrix, min_exon_length=0)
+
+    state_names = {state.name for state in states}
+    assert not any(name.startswith("lock") for name in state_names)
+    assert len(states) == 20 + 8 * fh.DEFAULT_MIN_INTRON_LENGTH
+    assert not any(states[d].name.startswith("lock") for _, d, _ in edges)
 
 
 def test_a_noncanonical_intron_is_not_decoded_as_an_intron():

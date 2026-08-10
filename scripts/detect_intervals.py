@@ -8,6 +8,8 @@ from src.sequence import (
 )
 from src.frame_crf import (
     AT_AC,
+    DEFAULT_EXON_LENGTH_STRICTNESS,
+    DEFAULT_MIN_EXON_LENGTH,
     DEFAULT_MIN_INTRON_LENGTH,
     DEFAULT_SPLICE_MOTIF_GROUPS,
     GT_AG,
@@ -45,6 +47,8 @@ def _detect_intervals(
     base_codes: np.ndarray | None = None,
     min_intron_length: int = DEFAULT_MIN_INTRON_LENGTH,
     splice_motif_groups: tuple[SpliceMotifGroup, ...] = DEFAULT_SPLICE_MOTIF_GROUPS,
+    min_exon_length: int = DEFAULT_MIN_EXON_LENGTH,
+    exon_length_strictness: float = DEFAULT_EXON_LENGTH_STRICTNESS,
 ) -> xr.Dataset:
     """Infer genomic intervals from per-token feature predictions.
 
@@ -104,6 +108,8 @@ def _detect_intervals(
                 feature_transition=matrix,
                 min_intron_length=min_intron_length,
                 splice_motif_groups=splice_motif_groups,
+                min_exon_length=min_exon_length,
+                exon_length_strictness=exon_length_strictness,
             )
         else:
             # Decoding takes ~90 seconds for 308452471 tokens on Grace CPU
@@ -228,6 +234,8 @@ def detect_intervals(
     input_fasta: str | None = None,
     min_intron_length: int = DEFAULT_MIN_INTRON_LENGTH,
     splice_motif_groups: tuple[SpliceMotifGroup, ...] = DEFAULT_SPLICE_MOTIF_GROUPS,
+    min_exon_length: int = DEFAULT_MIN_EXON_LENGTH,
+    exon_length_strictness: float = DEFAULT_EXON_LENGTH_STRICTNESS,
 ):
     """Aggregate rank outputs and decode genomic intervals from logits.
 
@@ -270,6 +278,8 @@ def detect_intervals(
         base_codes=base_codes,
         min_intron_length=min_intron_length,
         splice_motif_groups=splice_motif_groups,
+        min_exon_length=min_exon_length,
+        exon_length_strictness=exon_length_strictness,
     )
     interval_predictions = interval_predictions.assign_attrs(
         # Copy attributes from sequence predictions, which have
@@ -372,6 +382,26 @@ def main():
         "introns being invented to step over an in-frame stop codon.",
     )
     parser.add_argument(
+        "--min-exon-length",
+        type=int,
+        default=DEFAULT_MIN_EXON_LENGTH,
+        help="Coding exons adjacent to an intron shorter than this are discounted "
+        "(see --exon-length-strictness) rather than forbidden -- guards against an "
+        "intron being invented immediately after the start codon or immediately "
+        "after another intron, without also destroying genuine short exons. Pass 0 "
+        "to disable the discount entirely.",
+    )
+    parser.add_argument(
+        "--exon-length-strictness",
+        type=float,
+        default=DEFAULT_EXON_LENGTH_STRICTNESS,
+        help="How strongly to discount a coding exon below --min-exon-length: 0 "
+        "removes the discount, larger values fall off more steeply and converge on "
+        "treating --min-exon-length as a hard floor. Strong per-base emission "
+        "evidence can still outweigh the discount at any setting above 0, which is "
+        "what lets genuine short boundary exons survive.",
+    )
+    parser.add_argument(
         "--domain",
         type=str,
         choices=["plant", "animal"],
@@ -411,6 +441,8 @@ def main():
             input_fasta=args.input_fasta,
             min_intron_length=args.min_intron_length,
             splice_motif_groups=splice_motif_groups,
+            min_exon_length=args.min_exon_length,
+            exon_length_strictness=args.exon_length_strictness,
         )
     else:
         with open(args.manifest) as fh:
@@ -434,6 +466,8 @@ def main():
                 input_fasta=args.input_fasta,
                 min_intron_length=args.min_intron_length,
                 splice_motif_groups=splice_motif_groups,
+                min_exon_length=args.min_exon_length,
+                exon_length_strictness=args.exon_length_strictness,
             )
 
 
