@@ -6,7 +6,7 @@ from src.sequence import (
     regularize_transition_matrix,
     viterbi_decode,
 )
-from src.frame_hmm import (
+from src.frame_crf import (
     AT_AC,
     DEFAULT_MIN_INTRON_LENGTH,
     DEFAULT_SPLICE_MOTIF_GROUPS,

@@ -1,9 +1,9 @@
-"""Tests for frame-aware, sequence-constrained HMM decoding."""
+"""Tests for frame-aware, sequence-constrained CRF decoding."""
 
 import numpy as np
 import pytest
 
-from src import frame_hmm as fh
+from src import frame_crf as fh
 
 pytest.importorskip("torch")
 from src.modeling import token_transition_probs

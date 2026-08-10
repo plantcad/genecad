@@ -1,4 +1,4 @@
-"""Frame-aware, sequence-constrained HMM decoding of per-base feature predictions.
+"""Frame-aware, sequence-constrained CRF decoding of per-base feature predictions.
 
 The default decoder in :mod:`scripts.detect_intervals` runs Viterbi over the five
 modelling features (intergenic / intron / 5' UTR / CDS / 3' UTR) and never looks
