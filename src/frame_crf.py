@@ -399,7 +399,9 @@ def exon_lock_states(min_exon_length: int) -> list[State]:
     ]
 
 
-def exon_lock_destination(suffix: str, min_exon_length: int, already_consumed: int) -> str:
+def exon_lock_destination(
+    suffix: str, min_exon_length: int, already_consumed: int
+) -> str:
     """Name of the state to land in for codon-phase ``suffix`` (e.g.
     ``"p0_t"``), given that ``already_consumed`` bases of the current exon
     have already been read.
@@ -540,7 +542,9 @@ def build_edges(
     add("start_g", "stop_t", cds_end)
     add("start_g", exon_lock_destination("p0_t", min_exon_length, 3), cds_cont)
     add("start_g", exon_lock_destination("p0_x", min_exon_length, 3), cds_cont)
-    start_codon_discount = exon_length_discount(3, min_exon_length, exon_length_strictness)
+    start_codon_discount = exon_length_discount(
+        3, min_exon_length, exon_length_strictness
+    )
     if start_codon_discount > 0:
         enter_intron("start_g", "p2", cds_intron * start_codon_discount)
 
@@ -606,6 +610,7 @@ def build_edges(
             "stop_t": cds_end / (cds_cont + cds_end),
         },
     }
+
     def resume_destination(destination: str) -> str | None:
         """Where an intron acceptor actually resumes, once the minimum exon
         length is accounted for.
@@ -619,9 +624,7 @@ def build_edges(
         if destination == "stop_t":
             return "stop_t" if min_exon_length <= 0 else None
         if destination.startswith("cds_"):
-            return exon_lock_destination(
-                destination[len("cds_") :], min_exon_length, 0
-            )
+            return exon_lock_destination(destination[len("cds_") :], min_exon_length, 0)
         return destination
 
     for intron_class, destinations in INTRON_CLASSES:
@@ -666,7 +669,9 @@ def build_edges(
         if discount > 0:
             for suffix, _ in CDS_PHASE_STATES:
                 source = f"lock{level}_{suffix}"
-                enter_intron(source, PHASE_TO_INTRON_CLASS[suffix], cds_intron * discount)
+                enter_intron(
+                    source, PHASE_TO_INTRON_CLASS[suffix], cds_intron * discount
+                )
                 if suffix.startswith("p2_"):
                     add(source, "stop_t", cds_end * discount)
 
