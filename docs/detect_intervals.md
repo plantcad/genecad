@@ -33,12 +33,12 @@ constrained to begin on ATG, end on a stop codon, stay in frame across introns, 
 Ignored when `--decode-direct` is set.
 * `--min-intron-length` - Shortest intron frame-aware decoding may emit. Guards against short introns being invented
 to step over an in-frame stop codon. Default: 20.
-* `--min-exon-length` - Coding exons adjacent to an intron shorter than this are discounted, not forbidden (see
+* `--min-exon-length` - Coding exons adjacent to an intron shorter than this are penalized, not forbidden (see
 `--exon-length-strictness`). Guards against an intron being invented immediately after the start codon or immediately
-after another intron, without also destroying genuine short exons. Use 0 to disable the discount entirely. Default: 9.
-* `--exon-length-strictness` - How strongly to discount a coding exon below `--min-exon-length`. 0 removes the
-discount; larger values fall off more steeply and converge on treating `--min-exon-length` as a hard floor. Strong
-per-base emission evidence can still outweigh the discount at any setting above 0, which is what lets genuine short
+after another intron, without also destroying genuine short exons. Use 0 to disable the penalty entirely. Default: 9.
+* `--exon-length-strictness` - How strongly to penalize a coding exon below `--min-exon-length`. 0 removes the
+penalty; larger values fall off more steeply and converge on treating `--min-exon-length` as a hard floor. Strong
+per-base emission evidence can still outweigh the penalty at any setting above 0, which is what lets genuine short
 boundary exons survive. Default: 16.
 * `--domain` - Domain sets the transition probabilities between states based on empirical observation from
 different types of organisms. Default: plant. Options: plant, animal.
