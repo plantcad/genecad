@@ -177,7 +177,7 @@ def main():
     # load gff
     gff = load_gff(args.input_gff)
 
-    chrom_list = [chrom.name for chrom in gff]
+    chrom_list = [chrom.id for chrom in gff]
 
     fastas = SeqIO.to_dict(SeqIO.parse(args.input_fasta, "fasta"))
 
@@ -282,7 +282,7 @@ def main():
                     for mRNA in gene.sub_features
                 ]
             )
-            transcript_name = gene.sub_features[longest_transcript].name
+            transcript_name = gene.sub_features[longest_transcript].id
             longest_transcripts[out_df.index.get_loc(transcript_name)] = True
 
     out_df["longest"] = longest_transcripts
@@ -328,14 +328,14 @@ def main():
                     gff[df["chrom"].iloc[idx]]
                     .genes[df["gene"].iloc[idx]]
                     .mRNAs[df["mRNA"].iloc[idx]]
-                    .name
+                    .id
                 ]
             else:
                 mRNA_names = [
                     gff[df["chrom"].iloc[idx]]
                     .genes[df["gene"].iloc[idx]]
                     .mRNAs[int(idy)]
-                    .name
+                    .id
                     for idy in df["mRNA"].iloc[idx].split(",")
                 ]
             for mRNA_name in mRNA_names:
