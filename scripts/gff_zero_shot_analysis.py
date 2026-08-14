@@ -24,23 +24,11 @@ class ScoreList:
         return ",".join([str(score) for score in self.scores])
 
 
-def has_protein_coding_tag(tags) -> bool:
-    if "gene_biotype" in tags.keys():
-        return tags["gene_biotype"] == "protein_coding"
-    elif "biotype" in tags.keys():
-        return tags["biotype"] == "protein_coding"
-    else:
-        return False
-
-
 def has_canonical_tag(tags) -> bool:
-    if "Ensemble_canonical" in tags.keys():
-        return tags["tag"] == "Ensembl_canonical"
-    elif "canonical_transcript" in tags.keys():
-        return tags["canonical_transcript"] == "1"
+    if "canonical_transcript" in tags.keys():
+        return "1" in tags["canonical_transcript"]
     elif "tag" in tags.keys():
-        other_tags = tags["tag"].split(",")
-        return "Ensembl_canonical" in other_tags
+        return "Ensembl_canonical" in tags["tag"]
     else:
         return False
 
