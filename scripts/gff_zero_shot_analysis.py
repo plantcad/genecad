@@ -326,15 +326,15 @@ def main():
             if type(df["mRNA"].iloc[idx]) is not str:
                 mRNA_names = [
                     gff[df["chrom"].iloc[idx]]
-                    .genes[df["gene"].iloc[idx]]
-                    .mRNAs[df["mRNA"].iloc[idx]]
+                    .features[df["gene"].iloc[idx]]
+                    .sub_features[df["mRNA"].iloc[idx]]
                     .id
                 ]
             else:
                 mRNA_names = [
                     gff[df["chrom"].iloc[idx]]
-                    .genes[df["gene"].iloc[idx]]
-                    .mRNAs[int(idy)]
+                    .features[df["gene"].iloc[idx]]
+                    .sub_features[int(idy)]
                     .id
                     for idy in df["mRNA"].iloc[idx].split(",")
                 ]
