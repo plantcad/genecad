@@ -221,9 +221,9 @@ def main():
         out_df = pd.DataFrame(
             [
                 (
-                    chrom.name,
-                    gene.name,
-                    mRNA.name,
+                    chrom.id,
+                    gene.id,
+                    mRNA.id,
                     mRNA.location.start,
                     mRNA.location.end,
                     gene.strand,
@@ -251,9 +251,9 @@ def main():
         out_df = pd.DataFrame(
             [
                 (
-                    chrom.name,
-                    gene.name,
-                    mRNA.name,
+                    chrom.id,
+                    gene.id,
+                    mRNA.id,
                     mRNA.range[0],
                     mRNA.range[1],
                     gene.strand,
