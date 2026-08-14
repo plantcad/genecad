@@ -160,25 +160,8 @@ def merge_entries(y):
         return y[1]
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Gene Annotation Training CRF")
-    parser.add_argument(
-        "--input-gff",
-        "-i",
-        type=str,
-        required=True,
-        help="gff with gene annotations to analyze",
-    )
-    parser.add_argument(
-        "--output-table", "-o", type=str, required=True, help="output table path"
-    )
-    parser.add_argument("--num-workers", type=int, default=1, help="number of workers")
-
-    args = parser.parse_args()
-
-    logger.info("Loading files...")
-
-    gff = [chrom for chrom in parse(args.input_gff)]
+def load_gff(gff_filename):
+    gff = [chrom for chrom in parse(gff_filename)]
 
     # remove transcripts without CDSs, and genes without at least one mRNA
     rem_counter = 0
@@ -220,6 +203,29 @@ def main():
         + str(rem_counter)
         + " genes without a valid protein-coding transcript"
     )
+
+    return gff
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Gene Annotation Training CRF")
+    parser.add_argument(
+        "--input-gff",
+        "-i",
+        type=str,
+        required=True,
+        help="gff with gene annotations to analyze",
+    )
+    parser.add_argument(
+        "--output-table", "-o", type=str, required=True, help="output table path"
+    )
+    parser.add_argument("--num-workers", type=int, default=1, help="number of workers")
+
+    args = parser.parse_args()
+
+    logger.info("Loading files...")
+
+    gff = load_gff(args.input_gff)
 
     logger.info("Getting junction locations")
     junctions = [

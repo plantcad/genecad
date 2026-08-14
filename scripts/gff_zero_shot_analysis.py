@@ -1,5 +1,4 @@
 import argparse
-from enum import Enum
 
 import numpy as np
 import torch
@@ -7,7 +6,7 @@ from torch.utils.data import Dataset
 from tqdm import tqdm
 from transformers import AutoTokenizer, AutoModelForMaskedLM
 from torch.utils.data import DataLoader
-import gff_utils
+from scripts.gff_zero_shot_preprocess import load_gff, Junc
 from Bio import SeqIO
 import pandas as pd
 from dataclasses import dataclass
@@ -16,6 +15,7 @@ from warnings import simplefilter
 simplefilter(action="ignore", category=pd.errors.PerformanceWarning)
 
 
+# simple dataclass to handle multiple donor/acceptor splice site scores
 @dataclass
 class ScoreList:
     scores: list
@@ -24,21 +24,25 @@ class ScoreList:
         return ",".join([str(score) for score in self.scores])
 
 
-class Junc(Enum):
-    TIS = 0
-    TTS = 1
-    DONOR = 2
-    ACCEPTOR = 3
+def has_protein_coding_tag(tags) -> bool:
+    if "gene_biotype" in tags.keys():
+        return tags["gene_biotype"] == "protein_coding"
+    elif "biotype" in tags.keys():
+        return tags["biotype"] == "protein_coding"
+    else:
+        return False
 
-    def __str__(self):
-        if self == self.TIS:
-            return "TIS"
-        elif self == self.TTS:
-            return "TTS"
-        elif self == self.DONOR:
-            return "Donor"
-        else:
-            return "Acceptor"
+
+def has_canonical_tag(tags) -> bool:
+    if "Ensemble_canonical" in tags.keys():
+        return tags["tag"] == "Ensembl_canonical"
+    elif "canonical_transcript" in tags.keys():
+        return tags["canonical_transcript"] == "1"
+    elif "tag" in tags.keys():
+        other_tags = tags["tag"].split(",")
+        return "Ensembl_canonical" in other_tags
+    else:
+        return False
 
 
 def to_junc(x):
@@ -65,12 +69,12 @@ class JunctionDataset(Dataset):
         self.token = window_size // 2
 
     def __len__(self):
-        return df.shape[0]
+        return self.df.shape[0]
 
     def __getitem__(self, idx):
         start = self.df["pos"].iloc[idx] - self.token
         end = start + self.window_size
-        chrom = chrom_list[df["chrom"].iloc[idx]]
+        chrom = self.chrom_list[self.df["chrom"].iloc[idx]]
 
         if start < 0:
             sequence = str(self.fastas[chrom][0:end].seq.upper()).rjust(
@@ -96,26 +100,29 @@ class JunctionDataset(Dataset):
         input_ids = encoding["input_ids"].squeeze()
 
         strand = (
-            self.gff[self.df["chrom"].iloc[idx]].genes[self.df["gene"].iloc[idx]].strand
+            self.gff[self.df["chrom"].iloc[idx]]
+            .features[self.df["gene"].iloc[idx]]
+            .location.strand
         )
+
         junction = self.df["junction"].iloc[idx]
 
         mask_tokens = np.zeros(self.window_size, dtype=bool)
 
-        if (strand.positive() and junction == Junc.TIS) or (
-            strand.negative() and junction == Junc.TTS
+        if (strand == 1 and junction == Junc.TIS) or (
+            strand == -1 and junction == Junc.TTS
         ):
             mask_tokens[self.token : self.token + 3] = True
-        elif (strand.positive() and junction == Junc.TTS) or (
-            strand.negative() and junction == Junc.TIS
+        elif (strand == 1 and junction == Junc.TTS) or (
+            strand == -1 and junction == Junc.TIS
         ):
             mask_tokens[self.token - 2 : self.token + 1] = True
-        elif (strand.positive() and junction == Junc.DONOR) or (
-            strand.negative() and junction == Junc.ACCEPTOR
+        elif (strand == 1 and junction == Junc.DONOR) or (
+            strand == -1 and junction == Junc.ACCEPTOR
         ):
             mask_tokens[self.token : self.token + 2] = True
-        elif (strand.positive() and junction == Junc.ACCEPTOR) or (
-            strand.negative() and junction == Junc.DONOR
+        elif (strand == 1 and junction == Junc.ACCEPTOR) or (
+            strand == -1 and junction == Junc.DONOR
         ):
             mask_tokens[self.token - 1 : self.token + 1] = True
 
@@ -133,14 +140,22 @@ class JunctionDataset(Dataset):
         }
 
 
-if __name__ == "__main__":
+def main():
     # parse arguments
     parser = argparse.ArgumentParser(description="Gene Annotation Training CRF")
     parser.add_argument(
-        "--gff", type=str, required=True, help="gff with gene annotations to analyze"
+        "--input-gff",
+        "-i",
+        type=str,
+        required=True,
+        help="gff with gene annotations to analyze",
     )
-    parser.add_argument("--fasta", type=str, required=True, help="fasta file")
-    parser.add_argument("--junctions", type=str, required=True, help="junctions file")
+    parser.add_argument(
+        "--input-fasta", "-f", type=str, required=True, help="fasta file"
+    )
+    parser.add_argument(
+        "--input-junctions", "-j", type=str, required=True, help="junctions file"
+    )
     parser.add_argument("--output", type=str, required=True, help="output table path")
     parser.add_argument(
         "--model-path", type=str, required=True, help="Path to the pre-trained model"
@@ -165,49 +180,23 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     device = "cuda:" + str(args.gpu)
-    junction_df = args.junctions
+    junction_df = args.input_junctions
     window_size = args.window_size
     batch_size = args.batch_size
     model_path = args.model_path
-    tokenIdx = window_size // 2
     print("loading files")
 
     # load gff
-    gff = gff_utils.parse_gff(args.gff, not args.tag_canonical)
+    gff = load_gff(args.input_gff)
 
     chrom_list = [chrom.name for chrom in gff]
 
-    rem_counter = 0
-    # remove transcripts without CDSs, and genes without at least one mRNA
-    for chrom in gff:
-        start_length = len(chrom.genes)
-
-        for gene in chrom.genes:
-            gene.mRNAs = [mRNA for mRNA in gene.mRNAs if len(mRNA.cds) > 0]
-
-            for mRNA in gene.mRNAs:
-                mRNA.cds.sort(key=lambda cds: cds.range[0])
-                mRNA.five_prime_utr.sort(key=lambda utr: utr[0])
-                mRNA.three_prime_utr.sort(key=lambda utr: utr[0])
-
-            gene.mRNAs.sort(key=lambda mRNA: mRNA.range[0])
-
-        chrom.genes = [gene for gene in chrom.genes if len(gene.mRNAs) > 0]
-
-        end_length = len(chrom.genes)
-        rem_counter += start_length - end_length
-
-    print(
-        "Removed "
-        + str(rem_counter)
-        + " genes without a valid protein-coding transcript"
-    )
-
-    fastas = SeqIO.to_dict(SeqIO.parse(args.fasta, "fasta"))
+    fastas = SeqIO.to_dict(SeqIO.parse(args.input_fasta, "fasta"))
 
     print("load junctions")
     df = pd.read_csv(junction_df, sep="\t")
 
+    # convert string back into junction class
     df["junction"] = df["junction"].apply(to_junc)
 
     print("load model")
@@ -235,16 +224,16 @@ if __name__ == "__main__":
                     chrom.name,
                     gene.name,
                     mRNA.name,
-                    mRNA.range[0],
-                    mRNA.range[1],
+                    mRNA.location.start,
+                    mRNA.location.end,
                     gene.strand,
-                    mRNA.is_canonical,
+                    has_canonical_tag(mRNA.qualifiers),
                     ScoreList([]),
                     ScoreList([]),
                 )
                 for chrom in gff
-                for gene in chrom.genes
-                for mRNA in gene.mRNAs
+                for gene in chrom.features
+                for mRNA in gene.sub_features
             ],
             columns=[
                 "chrom",
@@ -272,8 +261,8 @@ if __name__ == "__main__":
                     ScoreList([]),
                 )
                 for chrom in gff
-                for gene in chrom.genes
-                for mRNA in gene.mRNAs
+                for gene in chrom.features
+                for mRNA in gene.sub_features
             ],
             columns=[
                 "chrom",
@@ -293,14 +282,19 @@ if __name__ == "__main__":
     longest_transcripts = [False] * out_df.shape[0]
 
     for chrom in gff:
-        for gene in tqdm(chrom.genes):
+        for gene in tqdm(chrom.features):
             longest_transcript = np.argmax(
                 [
-                    np.sum([(exon[1] + 1) - exon[0] for exon in mRNA.exons])
-                    for mRNA in gene.mRNAs
+                    np.sum(
+                        [
+                            (exon.location.end + 1) - exon.location.start
+                            for exon in mRNA.sub_features
+                        ]
+                    )
+                    for mRNA in gene.sub_features
                 ]
             )
-            transcript_name = gene.mRNAs[longest_transcript].name
+            transcript_name = gene.sub_features[longest_transcript].name
             longest_transcripts[out_df.index.get_loc(transcript_name)] = True
 
     out_df["longest"] = longest_transcripts
@@ -373,3 +367,7 @@ if __name__ == "__main__":
     out_df["TTS"] = tts
     print("Writing")
     out_df.to_csv(args.output, sep="\t", index=False, header=True)
+
+
+if __name__ == "__main__":
+    main()
