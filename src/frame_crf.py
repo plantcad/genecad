@@ -81,7 +81,7 @@ Known limitations
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import NamedTuple
 
 import numpy as np
@@ -250,38 +250,6 @@ STRUCTURAL_MIN_INTRON_LENGTH = 5
 DEFAULT_MIN_INTRON_LENGTH = 20
 
 
-def intron_chain_parts(
-    min_intron_length: int,
-    splice_motif_groups: tuple[SpliceMotifGroup, ...] = DEFAULT_SPLICE_MOTIF_GROUPS,
-) -> dict[str, list[tuple[str, int]]]:
-    """Per-group (suffix, base constraint) lists for the states of one intron.
-
-    Keyed by :attr:`SpliceMotifGroup.name`. Within a group's chain, ``b1..bk``
-    are mandatory body positions that impose the minimum length; the looping
-    ``body`` state that follows is what actually absorbs intron length. Groups
-    never merge -- each gets its own donor, body and acceptor states -- so an
-    intron entered through one group's donor can only leave through that same
-    group's acceptor.
-    """
-    if min_intron_length < STRUCTURAL_MIN_INTRON_LENGTH:
-        raise ValueError(
-            f"min_intron_length must be at least {STRUCTURAL_MIN_INTRON_LENGTH}; "
-            f"got {min_intron_length}"
-        )
-    mandatory = min_intron_length - STRUCTURAL_MIN_INTRON_LENGTH
-    body_parts = [(f"b{i}", MASK_ANY) for i in range(1, mandatory + 1)] + [
-        ("body", MASK_ANY)
-    ]
-    return {
-        group.name: (
-            [("d1", group.donor_masks[0]), ("d2", group.donor_masks[1])]
-            + body_parts
-            + [("a1", group.acceptor_masks[0]), ("a2", group.acceptor_masks[1])]
-        )
-        for group in splice_motif_groups
-    }
-
-
 def intron_state(intron_class: str, group_name: str, part: str) -> str:
     return f"intron_{intron_class}_{group_name}_{part}"
 
@@ -379,43 +347,6 @@ DEFAULT_MIN_CODING_RUN_LENGTH = 9
 DEFAULT_EXON_LENGTH_STRICTNESS = 16.0
 
 
-def exon_lock_states(min_coding_run_length: int) -> list[State]:
-    """States that force at least ``min_coding_run_length`` bases of coding sequence
-    before intron entry (or the terminal stop) becomes reachable again,
-    mirroring :data:`CDS_PHASE_STATES` at each remaining-length level.
-
-    Level ``L`` means "L more bases must be read before the real, unlocked
-    CDS states -- which do offer intron entry -- become reachable". Every
-    transition consumes one base and steps down exactly one level, so no path
-    can reach an intron or the stop codon before the minimum has elapsed.
-    Level 1 is the last locked level; its own transitions land directly on
-    the real states, so only ``min_coding_run_length - 1`` levels are ever
-    materialised, and none at all once ``min_coding_run_length <= 1``.
-    """
-    return [
-        State(f"lock{level}_{suffix}", CDS, mask)
-        for level in range(min_coding_run_length - 1, 0, -1)
-        for suffix, mask in CDS_PHASE_STATES
-    ]
-
-
-def exon_lock_destination(
-    suffix: str, min_coding_run_length: int, already_consumed: int
-) -> str:
-    """Name of the state to land in for codon-phase ``suffix`` (e.g.
-    ``"p0_t"``), given that ``already_consumed`` bases of the current exon
-    have already been read.
-
-    Returns a locked state if more coding sequence must still be forced
-    before intron entry is legal again, or the real (unlocked) state directly
-    once ``already_consumed`` plus this base already meets the minimum.
-    """
-    remaining = min_coding_run_length - already_consumed - 1
-    if remaining <= 0:
-        return f"cds_{suffix}"
-    return f"lock{remaining}_{suffix}"
-
-
 def exon_length_penalty(
     length: int, min_coding_run_length: int, exon_length_strictness: float
 ) -> float:
@@ -432,410 +363,434 @@ def exon_length_penalty(
     return (length / min_coding_run_length) ** exon_length_strictness
 
 
-def locked_destination(
-    base_state: str, min_coding_run_length: int, already_consumed: int
-) -> str:
-    """Single-track analogue of :func:`exon_lock_destination`, for lock chains
-    that have no codon phase to track (5' UTR) or whose phase is fixed (the
-    start codon).
+@dataclass(frozen=True)
+class FrameStateGraph:
+    """The expanded Viterbi state graph for one frame-aware decoding configuration.
 
-    Returns ``base_state`` once ``already_consumed`` plus this base already
-    meets ``min_coding_run_length``, otherwise ``f"{base_state}_lock{N}"``.
+    Owns the five values that determine both the state space and the edge
+    weights built from a transition matrix: ``min_intron_length``,
+    ``splice_motif_groups``, ``min_coding_run_length``,
+    ``exon_length_strictness``, and ``include_utr_in_coding_run``. See the
+    matching ``DEFAULT_*`` module constants above for the reasoning behind
+    each default. Set once at construction and read everywhere internally,
+    so there is no call path that can build states and edges from
+    mismatched values.
+
+    ``states`` is built eagerly in ``__post_init__``. ``build_edges()``
+    still needs a transition matrix argument, since edges also depend on
+    data that varies per decode (the matrix), not just on this
+    configuration. ``decode()`` does both, plus the Viterbi pass itself,
+    and is the main entry point for reusing one graph across multiple
+    decodes; :func:`frame_aware_decode` is a convenience wrapper for a
+    one-off decode.
     """
-    remaining = min_coding_run_length - already_consumed - 1
-    if remaining <= 0:
-        return base_state
-    return f"{base_state}_lock{remaining}"
 
+    min_intron_length: int = DEFAULT_MIN_INTRON_LENGTH
+    splice_motif_groups: tuple[SpliceMotifGroup, ...] = DEFAULT_SPLICE_MOTIF_GROUPS
+    min_coding_run_length: int = DEFAULT_MIN_CODING_RUN_LENGTH
+    exon_length_strictness: float = DEFAULT_EXON_LENGTH_STRICTNESS
+    include_utr_in_coding_run: bool = True
 
-def utr5_lock_states(min_coding_run_length: int) -> list[State]:
-    """States that carry a running count of 5' UTR bases consumed so far,
-    used by ``include_utr_in_coding_run`` to let a long 5' UTR satisfy
-    ``min_coding_run_length`` on its own, so a short first coding run isn't
-    penalized just because the exon's UTR portion isn't counted.
+    states: list[State] = field(init=False)
+    state_feature: np.ndarray = field(init=False)
+    state_mask: np.ndarray = field(init=False)
+    _state_index: dict[str, int] = field(init=False)
 
-    Mirrors :func:`exon_lock_states`, but with a single untyped state per
-    level (5' UTR carries no codon phase) and continuing into the start codon
-    via :func:`start_lock_states` rather than resetting at the start codon.
-    """
-    return [
-        State(f"utr5_lock{level}", U5, MASK_ANY)
-        for level in range(min_coding_run_length - 1, 0, -1)
-    ]
-
-
-def start_lock_states(min_coding_run_length: int) -> list[State]:
-    """Locked variants of the start codon (A/T/G) used by
-    ``include_utr_in_coding_run`` to carry the running UTR+CDS base count
-    from :func:`utr5_lock_states` across the mandatory ATG, which otherwise
-    has no branching point at which to track it.
-
-    Each position can only be reached once at least that many bases
-    (1 for the A, 2 for the T, 3 for the G) have already been consumed, so
-    the reachable level range narrows by one at each position; generating
-    the full ``min_coding_run_length - 1`` range at every position would
-    otherwise leave unreachable states that fail the graph-connectivity check.
-    """
-    specs = [
-        ("start_a", MASK_IS_A, 1),
-        ("start_t", MASK_IS_T, 2),
-        ("start_g", MASK_IS_G, 3),
-    ]
-    return [
-        State(f"{name}_lock{level}", CDS, mask)
-        for name, mask, min_consumed in specs
-        for level in range(min_coding_run_length - min_consumed, 0, -1)
-    ]
-
-
-def build_states(
-    min_intron_length: int = DEFAULT_MIN_INTRON_LENGTH,
-    splice_motif_groups: tuple[SpliceMotifGroup, ...] = DEFAULT_SPLICE_MOTIF_GROUPS,
-    min_coding_run_length: int = DEFAULT_MIN_CODING_RUN_LENGTH,
-    include_utr_in_coding_run: bool = True,
-) -> list[State]:
-    states = list(CORE_STATES)
-    chain_parts = intron_chain_parts(min_intron_length, splice_motif_groups)
-    for intron_class, _ in INTRON_CLASSES:
-        for group_name, parts in chain_parts.items():
-            for part, mask in parts:
-                states.append(
-                    State(intron_state(intron_class, group_name, part), IN, mask)
-                )
-    states.extend(exon_lock_states(min_coding_run_length))
-    if include_utr_in_coding_run:
-        states.extend(utr5_lock_states(min_coding_run_length))
-        states.extend(start_lock_states(min_coding_run_length))
-    return states
-
-
-MIN_INTRON_LENGTH = DEFAULT_MIN_INTRON_LENGTH
-MIN_CODING_RUN_LENGTH = DEFAULT_MIN_CODING_RUN_LENGTH
-STATES: list[State] = build_states()
-STATE_INDEX = {state.name: i for i, state in enumerate(STATES)}
-N_STATES = len(STATES)
-
-
-def build_edges(
-    feature_probs: np.ndarray,
-    min_intron_length: int = DEFAULT_MIN_INTRON_LENGTH,
-    splice_motif_groups: tuple[SpliceMotifGroup, ...] = DEFAULT_SPLICE_MOTIF_GROUPS,
-    min_coding_run_length: int = DEFAULT_MIN_CODING_RUN_LENGTH,
-    exon_length_strictness: float = DEFAULT_EXON_LENGTH_STRICTNESS,
-    include_utr_in_coding_run: bool = True,
-) -> list[tuple[int, int, float]]:
-    """Expand the 5x5 feature transition matrix into the frame-aware state graph.
-
-    Returns a list of ``(source, destination, probability)`` edges, indexed
-    against ``build_states(min_intron_length, min_coding_run_length=min_coding_run_length,
-    include_utr_in_coding_run=include_utr_in_coding_run)``.
-
-    Weights are taken directly from the feature matrix.  Where several expanded
-    successors share a feature *and* are mutually exclusive under their base
-    constraints -- for instance ``cds_p0_t`` and ``cds_p0_x`` -- each receives
-    the full feature weight rather than a share of it, because which one applies
-    is determined by the sequence, not by chance.  :func:`validate_edges` checks
-    that this never lets the feasible weight out of a state exceed 1.
-
-    include_utr_in_coding_run
-        When set, ``min_coding_run_length`` is measured over the
-        5' UTR plus the coding run rather than the coding run alone, so a long
-        UTR can by itself satisfy the minimum and exempt a short first coding
-        run from the penalty -- see ``utr5_lock_states``/``start_lock_states``.
-        Only the start side is covered; a symmetric fix for the stop/3' UTR
-        side is not implemented. On by default; pass False to fall back to the
-        coding-run-only behavior.
-    """
-    p = np.asarray(feature_probs, dtype=float)
-    if p.shape != (N_FEATURES, N_FEATURES):
-        raise ValueError(f"Expected a {N_FEATURES}x{N_FEATURES} matrix; got {p.shape}")
-
-    chain_parts = intron_chain_parts(min_intron_length, splice_motif_groups)
-    s = {
-        state.name: i
-        for i, state in enumerate(
-            build_states(
-                min_intron_length,
-                splice_motif_groups,
-                min_coding_run_length,
-                include_utr_in_coding_run,
+    def __post_init__(self) -> None:
+        if self.min_intron_length < STRUCTURAL_MIN_INTRON_LENGTH:
+            raise ValueError(
+                f"min_intron_length must be at least {STRUCTURAL_MIN_INTRON_LENGTH}; "
+                f"got {self.min_intron_length}"
             )
+        states = self._build_states()
+        object.__setattr__(self, "states", states)
+        object.__setattr__(
+            self,
+            "state_feature",
+            np.array([state.feature for state in states], dtype=np.int64),
         )
-    }
-    edges: list[tuple[int, int, float]] = []
-
-    def add(source: str, destination: str, weight: float) -> None:
-        if weight > 0:
-            edges.append((s[source], s[destination], float(weight)))
-
-    cds_cont, cds_intron, cds_end = p[CDS][CDS], p[CDS][IN], p[CDS][U3]
-    utr5_cont, utr5_intron, utr5_end = p[U5][U5], p[U5][IN], p[U5][CDS]
-    intron_stay = p[IN][IN]
-    intron_exit = 1.0 - intron_stay
-
-    # -- intergenic and 5' UTR ------------------------------------------------
-    add("intergenic", "intergenic", p[IG][IG])
-    if include_utr_in_coding_run:
-        add(
-            "intergenic",
-            locked_destination("utr5", min_coding_run_length, 0),
-            p[IG][U5],
+        object.__setattr__(
+            self,
+            "state_mask",
+            np.array([state.mask for state in states], dtype=np.int64),
         )
-    else:
-        add("intergenic", "utr5", p[IG][U5])
+        object.__setattr__(
+            self, "_state_index", {state.name: i for i, state in enumerate(states)}
+        )
 
-    def enter_intron(source: str, intron_class: str, weight: float) -> None:
-        # Each configured motif group's donor mask is mutually exclusive with
-        # every other group's (G-first vs A-first), so -- as with cds_p0_t /
-        # cds_p0_x above -- each gets the full weight rather than a share of
-        # it; only one can ever be feasible for a given base.
-        for group in splice_motif_groups:
-            add(source, intron_state(intron_class, group.name, "d1"), weight)
+    # -- state construction ---------------------------------------------
 
-    add("utr5", "utr5", utr5_cont)
-    enter_intron("utr5", "utr5", utr5_intron)
-    add("utr5", "start_a", utr5_end)
+    def _intron_chain_parts(self) -> dict[str, list[tuple[str, int]]]:
+        """Per-group (suffix, base constraint) lists for the states of one intron.
 
-    if include_utr_in_coding_run:
-        # Carries the running UTR+CDS base count from utr5_lock_states across
-        # the 5' UTR, so a long UTR can satisfy min_coding_run_length on its
-        # own -- see locked_destination/utr5_lock_states/start_lock_states.
-        for level in range(min_coding_run_length - 1, 0, -1):
-            consumed = min_coding_run_length - level
-            source = f"utr5_lock{level}"
-            add(
-                source,
-                locked_destination("utr5", min_coding_run_length, consumed),
-                utr5_cont,
-            )
-            add(
-                source,
-                locked_destination("start_a", min_coding_run_length, consumed),
-                utr5_end,
-            )
-            penalty = exon_length_penalty(
-                consumed, min_coding_run_length, exon_length_strictness
-            )
-            enter_intron(source, "utr5", utr5_intron * penalty)
-
-    # -- start codon ----------------------------------------------------------
-    add("start_a", "start_t", 1.0)
-    add("start_t", "start_g", 1.0)
-
-    def leave_codon_boundary(source: str) -> None:
-        """Successors of a CDS base that completes a codon.
-
-        The next base either opens an intron, continues the coding sequence, or
-        begins the terminal stop codon.  Reaching the 3' UTR is only possible
-        through that stop codon, so the feature matrix's CDS -> 3' UTR mass is
-        what drives entry into it.
+        See the old module-level ``intron_chain_parts`` docstring (removed)
+        for the full explanation: keyed by :attr:`SpliceMotifGroup.name`,
+        ``b1..bk`` are mandatory body positions imposing the minimum
+        length, and groups never merge.
         """
-        enter_intron(source, "p2", cds_intron)
-        add(source, "cds_p0_t", cds_cont)
-        add(source, "cds_p0_x", cds_cont)
-        add(source, "stop_t", cds_end)
-
-    # The start codon is 3 bases. Escaping straight from here into an intron
-    # gives a 3-base first exon, penalized the same way the lock chain
-    # penalizes any other short exon (full weight once min_coding_run_length <= 3,
-    # since 3 bases already meets it). The "continue coding" edges are routed
-    # through the lock chain instead of the real cds_p0_t/cds_p0_x, so that
-    # only *further* intron entry is deferred until the minimum is met.
-    # "start_g" -> "stop_t" is left alone either way: a start codon
-    # immediately followed by a stop isn't an exon split by an intron, so
-    # min_coding_run_length has no opinion on it.
-    add("start_g", "stop_t", cds_end)
-    if include_utr_in_coding_run:
-        # This plain (unlocked) start_g is only reachable once the 5' UTR
-        # alone already met min_coding_run_length (see the utr5_lock chain
-        # above), so the whole exon-length requirement is already satisfied
-        # here regardless of how little coding sequence follows -- no lock
-        # chain, no penalty, same as any other already-unlocked CDS state.
-        # The still-locked case is handled by the start_*_lock chain below.
-        add("start_g", "cds_p0_t", cds_cont)
-        add("start_g", "cds_p0_x", cds_cont)
-        enter_intron("start_g", "p2", cds_intron)
-
-        for level in range(min_coding_run_length - 1, 0, -1):
-            consumed = min_coding_run_length - level
-            add(
-                f"start_a_lock{level}",
-                locked_destination("start_t", min_coding_run_length, consumed),
-                1.0,
+        mandatory = self.min_intron_length - STRUCTURAL_MIN_INTRON_LENGTH
+        body_parts = [(f"b{i}", MASK_ANY) for i in range(1, mandatory + 1)] + [
+            ("body", MASK_ANY)
+        ]
+        return {
+            group.name: (
+                [("d1", group.donor_masks[0]), ("d2", group.donor_masks[1])]
+                + body_parts
+                + [("a1", group.acceptor_masks[0]), ("a2", group.acceptor_masks[1])]
             )
-        for level in range(min_coding_run_length - 2, 0, -1):
-            consumed = min_coding_run_length - level
-            add(
-                f"start_t_lock{level}",
-                locked_destination("start_g", min_coding_run_length, consumed),
-                1.0,
+            for group in self.splice_motif_groups
+        }
+
+    def _exon_lock_states(self) -> list[State]:
+        return [
+            State(f"lock{level}_{suffix}", CDS, mask)
+            for level in range(self.min_coding_run_length - 1, 0, -1)
+            for suffix, mask in CDS_PHASE_STATES
+        ]
+
+    def _exon_lock_destination(self, suffix: str, already_consumed: int) -> str:
+        remaining = self.min_coding_run_length - already_consumed - 1
+        if remaining <= 0:
+            return f"cds_{suffix}"
+        return f"lock{remaining}_{suffix}"
+
+    def _locked_destination(self, base_state: str, already_consumed: int) -> str:
+        remaining = self.min_coding_run_length - already_consumed - 1
+        if remaining <= 0:
+            return base_state
+        return f"{base_state}_lock{remaining}"
+
+    def _utr5_lock_states(self) -> list[State]:
+        return [
+            State(f"utr5_lock{level}", U5, MASK_ANY)
+            for level in range(self.min_coding_run_length - 1, 0, -1)
+        ]
+
+    def _start_lock_states(self) -> list[State]:
+        specs = [
+            ("start_a", MASK_IS_A, 1),
+            ("start_t", MASK_IS_T, 2),
+            ("start_g", MASK_IS_G, 3),
+        ]
+        return [
+            State(f"{name}_lock{level}", CDS, mask)
+            for name, mask, min_consumed in specs
+            for level in range(self.min_coding_run_length - min_consumed, 0, -1)
+        ]
+
+    def _build_states(self) -> list[State]:
+        states = list(CORE_STATES)
+        chain_parts = self._intron_chain_parts()
+        for intron_class, _ in INTRON_CLASSES:
+            for group_name, parts in chain_parts.items():
+                for part, mask in parts:
+                    states.append(
+                        State(intron_state(intron_class, group_name, part), IN, mask)
+                    )
+        states.extend(self._exon_lock_states())
+        if self.include_utr_in_coding_run:
+            states.extend(self._utr5_lock_states())
+            states.extend(self._start_lock_states())
+        return states
+
+    # -- edges -------------------------------------------------------------
+
+    def build_edges(
+        self, feature_transition: np.ndarray
+    ) -> list[tuple[int, int, float]]:
+        """Expand the 5x5 feature transition matrix into this graph's edges.
+
+        Returns a list of ``(source, destination, probability)`` edges,
+        indexed against ``self.states``.
+
+        Weights are taken directly from the feature matrix. Where several
+        expanded successors share a feature *and* are mutually exclusive
+        under their base constraints -- for instance ``cds_p0_t`` and
+        ``cds_p0_x`` -- each receives the full feature weight rather than a
+        share of it, because which one applies is determined by the
+        sequence, not by chance. :func:`validate_edges` checks that this
+        never lets the feasible weight out of a state exceed 1.
+
+        ``self.include_utr_in_coding_run`` behavior: when set,
+        ``self.min_coding_run_length`` is measured over the 5' UTR plus the
+        coding run rather than the coding run alone, so a long UTR can by
+        itself satisfy the minimum and exempt a short first coding run from
+        the penalty. Only the start side is covered; a symmetric fix for
+        the stop/3' UTR side is not implemented.
+        """
+        p = np.asarray(feature_transition, dtype=float)
+        if p.shape != (N_FEATURES, N_FEATURES):
+            raise ValueError(
+                f"Expected a {N_FEATURES}x{N_FEATURES} matrix; got {p.shape}"
             )
-        for level in range(min_coding_run_length - 3, 0, -1):
-            consumed = min_coding_run_length - level
-            source = f"start_g_lock{level}"
+
+        chain_parts = self._intron_chain_parts()
+        s = self._state_index
+        edges: list[tuple[int, int, float]] = []
+
+        def add(source: str, destination: str, weight: float) -> None:
+            if weight > 0:
+                edges.append((s[source], s[destination], float(weight)))
+
+        cds_cont, cds_intron, cds_end = p[CDS][CDS], p[CDS][IN], p[CDS][U3]
+        utr5_cont, utr5_intron, utr5_end = p[U5][U5], p[U5][IN], p[U5][CDS]
+        intron_stay = p[IN][IN]
+        intron_exit = 1.0 - intron_stay
+
+        # -- intergenic and 5' UTR ------------------------------------------------
+        add("intergenic", "intergenic", p[IG][IG])
+        if self.include_utr_in_coding_run:
+            add(
+                "intergenic",
+                self._locked_destination("utr5", 0),
+                p[IG][U5],
+            )
+        else:
+            add("intergenic", "utr5", p[IG][U5])
+
+        def enter_intron(source: str, intron_class: str, weight: float) -> None:
+            for group in self.splice_motif_groups:
+                add(source, intron_state(intron_class, group.name, "d1"), weight)
+
+        add("utr5", "utr5", utr5_cont)
+        enter_intron("utr5", "utr5", utr5_intron)
+        add("utr5", "start_a", utr5_end)
+
+        if self.include_utr_in_coding_run:
+            for level in range(self.min_coding_run_length - 1, 0, -1):
+                consumed = self.min_coding_run_length - level
+                source = f"utr5_lock{level}"
+                add(source, self._locked_destination("utr5", consumed), utr5_cont)
+                add(source, self._locked_destination("start_a", consumed), utr5_end)
+                penalty = exon_length_penalty(
+                    consumed, self.min_coding_run_length, self.exon_length_strictness
+                )
+                enter_intron(source, "utr5", utr5_intron * penalty)
+
+        # -- start codon ----------------------------------------------------------
+        add("start_a", "start_t", 1.0)
+        add("start_t", "start_g", 1.0)
+
+        def leave_codon_boundary(source: str) -> None:
+            enter_intron(source, "p2", cds_intron)
+            add(source, "cds_p0_t", cds_cont)
+            add(source, "cds_p0_x", cds_cont)
             add(source, "stop_t", cds_end)
-            add(
-                source,
-                exon_lock_destination("p0_t", min_coding_run_length, consumed),
-                cds_cont,
-            )
-            add(
-                source,
-                exon_lock_destination("p0_x", min_coding_run_length, consumed),
-                cds_cont,
-            )
-            penalty = exon_length_penalty(
-                consumed, min_coding_run_length, exon_length_strictness
-            )
-            enter_intron(source, "p2", cds_intron * penalty)
-    else:
-        add(
-            "start_g", exon_lock_destination("p0_t", min_coding_run_length, 3), cds_cont
-        )
-        add(
-            "start_g", exon_lock_destination("p0_x", min_coding_run_length, 3), cds_cont
-        )
-        start_codon_penalty = exon_length_penalty(
-            3, min_coding_run_length, exon_length_strictness
-        )
-        enter_intron("start_g", "p2", cds_intron * start_codon_penalty)
 
-    # -- CDS body -------------------------------------------------------------
-    # Mid-codon there is nowhere to go but onward or into an intron, so the
-    # CDS -> 3' UTR mass folds into continuing.
-    cds_onward = cds_cont + cds_end
+        add("start_g", "stop_t", cds_end)
+        if self.include_utr_in_coding_run:
+            add("start_g", "cds_p0_t", cds_cont)
+            add("start_g", "cds_p0_x", cds_cont)
+            enter_intron("start_g", "p2", cds_intron)
 
-    enter_intron("cds_p0_t", "p0t", cds_intron)
-    add("cds_p0_t", "cds_p1_ta", cds_onward)
-    add("cds_p0_t", "cds_p1_tg", cds_onward)
-    add("cds_p0_t", "cds_p1_safe_t", cds_onward)
-
-    enter_intron("cds_p0_x", "p0x", cds_intron)
-    add("cds_p0_x", "cds_p1_safe_x", cds_onward)
-
-    enter_intron("cds_p1_ta", "p1ta", cds_intron)
-    add("cds_p1_ta", "cds_p2_ta", cds_onward)
-
-    enter_intron("cds_p1_tg", "p1tg", cds_intron)
-    add("cds_p1_tg", "cds_p2_tg", cds_onward)
-
-    for source in ("cds_p1_safe_t", "cds_p1_safe_x"):
-        enter_intron(source, "p1safe", cds_intron)
-        add(source, "cds_p2_safe", cds_onward)
-
-    for source in ("cds_p2_ta", "cds_p2_tg", "cds_p2_safe"):
-        leave_codon_boundary(source)
-
-    # -- terminal stop codon and 3' UTR --------------------------------------
-    add("stop_t", "stop_a", 1.0)
-    add("stop_t", "stop_g", 1.0)
-    add("stop_a", "stop_end_a", 1.0)
-    add("stop_g", "stop_end_g", 1.0)
-    add("stop_end_a", "utr3", 1.0)
-    add("stop_end_g", "utr3", 1.0)
-
-    add("utr3", "utr3", p[U3][U3])
-    enter_intron("utr3", "utr3", p[U3][IN])
-    add("utr3", "intergenic", p[U3][IG])
-
-    # -- intron chains --------------------------------------------------------
-    # Each intron runs donor -> b1..bk -> body* -> acceptor before resuming,
-    # separately per configured motif group (e.g. G -> T/C -> ... -> A -> G for
-    # GT_AG). The b-states are mandatory, which is what imposes the minimum
-    # intron length; the decision to end the intron is taken on leaving the
-    # looping body state, and the acceptor states that follow are forced, so
-    # the exit weight sits on that one edge.
-    resume_weights = {
-        # A 5' UTR intron may resume into more UTR or straight into the start
-        # codon; those two are not mutually exclusive under their masks, so
-        # they share the exit mass in the same ratio a UTR base would transition,
-        # rather than splitting it arbitrarily.
-        "utr5": {
-            "utr5": utr5_cont / (utr5_cont + utr5_end),
-            "start_a": utr5_end / (utr5_cont + utr5_end),
-        },
-        # At a codon boundary the intron resumes into the next codon or into the
-        # terminal stop codon, in the same ratio a coding base would.
-        "p2": {
-            "cds_p0_t": cds_cont / (cds_cont + cds_end),
-            "cds_p0_x": cds_cont / (cds_cont + cds_end),
-            "stop_t": cds_end / (cds_cont + cds_end),
-        },
-    }
-
-    def resume_destination(destination: str) -> str | None:
-        """Where an intron acceptor actually resumes, once the minimum coding
-        run length is accounted for.
-
-        3' UTR is untouched -- min_coding_run_length only governs the run of
-        coding sequence (and, with include_utr_in_coding_run, the 5' UTR
-        preceding it). "stop_t" resuming directly (an intron immediately
-        followed by the stop codon, i.e. a zero-length final exon) is dropped
-        unless the constraint is disabled; the stop codon remains reachable
-        the normal way, once the lock chain is satisfied.
-        """
-        if destination == "stop_t":
-            return "stop_t" if min_coding_run_length <= 0 else None
-        if destination.startswith("cds_"):
-            return exon_lock_destination(
-                destination[len("cds_") :], min_coding_run_length, 0
-            )
-        if include_utr_in_coding_run and destination in ("utr5", "start_a"):
-            # A fresh exon begins here, so the combined UTR+CDS count resets
-            # to 0 just like the CDS-only case above, rather than landing on
-            # the already-unlocked singleton.
-            return locked_destination(destination, min_coding_run_length, 0)
-        return destination
-
-    for intron_class, destinations in INTRON_CLASSES:
-        for group_name, parts in chain_parts.items():
-            chain = [intron_state(intron_class, group_name, part) for part, _ in parts]
-            body, acceptor_1, acceptor_2 = chain[-3], chain[-2], chain[-1]
-            # Donor and the mandatory body positions are a forced march
-            for source, destination in zip(chain, chain[1:-2]):
-                add(source, destination, 1.0)
-            add(body, body, intron_stay)
-            add(body, acceptor_1, intron_exit)
-            add(acceptor_1, acceptor_2, 1.0)
-            weights = resume_weights.get(intron_class, {})
-            for destination in destinations:
-                resolved = resume_destination(destination)
-                if resolved is not None:
-                    add(acceptor_2, resolved, weights.get(destination, 1.0))
-
-    # -- minimum exon length lock chain ---------------------------------------
-    # Level L means "L more bases must be read before the real, intron-capable
-    # CDS states become reachable". Every edge here consumes one base and steps
-    # down exactly one level -- including the codon-boundary (p2 -> p0) step,
-    # not just the mid-codon ones -- so no path can shortcut the count. Level 1
-    # connects directly to the real states rather than a level 0.
-    #
-    # Locked states also get their own (penalized) escape edges -- the same
-    # enter_intron/stop_t options the real states offer, just scaled down by
-    # exon_length_penalty(). That is what makes this a soft preference rather
-    # than the structural ban it used to be: strong emission evidence at that
-    # exact position can still outweigh the penalty.
-    for level in range(min_coding_run_length - 1, 0, -1):
-        for src_suffix, dst_suffix, kind in CDS_PHASE_EDGES:
-            weight = cds_onward if kind == "onward" else cds_cont
-            destination = (
-                f"lock{level - 1}_{dst_suffix}" if level > 1 else f"cds_{dst_suffix}"
-            )
-            add(f"lock{level}_{src_suffix}", destination, weight)
-
-        penalty = exon_length_penalty(
-            min_coding_run_length - level, min_coding_run_length, exon_length_strictness
-        )
-        if penalty > 0:
-            for suffix, _ in CDS_PHASE_STATES:
-                source = f"lock{level}_{suffix}"
-                enter_intron(
-                    source, PHASE_TO_INTRON_CLASS[suffix], cds_intron * penalty
+            for level in range(self.min_coding_run_length - 1, 0, -1):
+                consumed = self.min_coding_run_length - level
+                add(
+                    f"start_a_lock{level}",
+                    self._locked_destination("start_t", consumed),
+                    1.0,
                 )
-                if suffix.startswith("p2_"):
-                    add(source, "stop_t", cds_end * penalty)
+            for level in range(self.min_coding_run_length - 2, 0, -1):
+                consumed = self.min_coding_run_length - level
+                add(
+                    f"start_t_lock{level}",
+                    self._locked_destination("start_g", consumed),
+                    1.0,
+                )
+            for level in range(self.min_coding_run_length - 3, 0, -1):
+                consumed = self.min_coding_run_length - level
+                source = f"start_g_lock{level}"
+                add(source, "stop_t", cds_end)
+                add(source, self._exon_lock_destination("p0_t", consumed), cds_cont)
+                add(source, self._exon_lock_destination("p0_x", consumed), cds_cont)
+                penalty = exon_length_penalty(
+                    consumed, self.min_coding_run_length, self.exon_length_strictness
+                )
+                enter_intron(source, "p2", cds_intron * penalty)
+        else:
+            add("start_g", self._exon_lock_destination("p0_t", 3), cds_cont)
+            add("start_g", self._exon_lock_destination("p0_x", 3), cds_cont)
+            start_codon_penalty = exon_length_penalty(
+                3, self.min_coding_run_length, self.exon_length_strictness
+            )
+            enter_intron("start_g", "p2", cds_intron * start_codon_penalty)
 
-    return edges
+        # -- CDS body -------------------------------------------------------------
+        cds_onward = cds_cont + cds_end
+
+        enter_intron("cds_p0_t", "p0t", cds_intron)
+        add("cds_p0_t", "cds_p1_ta", cds_onward)
+        add("cds_p0_t", "cds_p1_tg", cds_onward)
+        add("cds_p0_t", "cds_p1_safe_t", cds_onward)
+
+        enter_intron("cds_p0_x", "p0x", cds_intron)
+        add("cds_p0_x", "cds_p1_safe_x", cds_onward)
+
+        enter_intron("cds_p1_ta", "p1ta", cds_intron)
+        add("cds_p1_ta", "cds_p2_ta", cds_onward)
+
+        enter_intron("cds_p1_tg", "p1tg", cds_intron)
+        add("cds_p1_tg", "cds_p2_tg", cds_onward)
+
+        for source in ("cds_p1_safe_t", "cds_p1_safe_x"):
+            enter_intron(source, "p1safe", cds_intron)
+            add(source, "cds_p2_safe", cds_onward)
+
+        for source in ("cds_p2_ta", "cds_p2_tg", "cds_p2_safe"):
+            leave_codon_boundary(source)
+
+        # -- terminal stop codon and 3' UTR --------------------------------------
+        add("stop_t", "stop_a", 1.0)
+        add("stop_t", "stop_g", 1.0)
+        add("stop_a", "stop_end_a", 1.0)
+        add("stop_g", "stop_end_g", 1.0)
+        add("stop_end_a", "utr3", 1.0)
+        add("stop_end_g", "utr3", 1.0)
+
+        add("utr3", "utr3", p[U3][U3])
+        enter_intron("utr3", "utr3", p[U3][IN])
+        add("utr3", "intergenic", p[U3][IG])
+
+        # -- intron chains --------------------------------------------------------
+        resume_weights = {
+            "utr5": {
+                "utr5": utr5_cont / (utr5_cont + utr5_end),
+                "start_a": utr5_end / (utr5_cont + utr5_end),
+            },
+            "p2": {
+                "cds_p0_t": cds_cont / (cds_cont + cds_end),
+                "cds_p0_x": cds_cont / (cds_cont + cds_end),
+                "stop_t": cds_end / (cds_cont + cds_end),
+            },
+        }
+
+        def resume_destination(destination: str) -> str | None:
+            if destination == "stop_t":
+                return "stop_t" if self.min_coding_run_length <= 0 else None
+            if destination.startswith("cds_"):
+                return self._exon_lock_destination(destination[len("cds_") :], 0)
+            if self.include_utr_in_coding_run and destination in ("utr5", "start_a"):
+                return self._locked_destination(destination, 0)
+            return destination
+
+        for intron_class, destinations in INTRON_CLASSES:
+            for group_name, parts in chain_parts.items():
+                chain = [
+                    intron_state(intron_class, group_name, part) for part, _ in parts
+                ]
+                body, acceptor_1, acceptor_2 = chain[-3], chain[-2], chain[-1]
+                for source, destination in zip(chain, chain[1:-2]):
+                    add(source, destination, 1.0)
+                add(body, body, intron_stay)
+                add(body, acceptor_1, intron_exit)
+                add(acceptor_1, acceptor_2, 1.0)
+                weights = resume_weights.get(intron_class, {})
+                for destination in destinations:
+                    resolved = resume_destination(destination)
+                    if resolved is not None:
+                        add(acceptor_2, resolved, weights.get(destination, 1.0))
+
+        # -- minimum exon length lock chain ---------------------------------------
+        for level in range(self.min_coding_run_length - 1, 0, -1):
+            for src_suffix, dst_suffix, kind in CDS_PHASE_EDGES:
+                weight = cds_onward if kind == "onward" else cds_cont
+                destination = (
+                    f"lock{level - 1}_{dst_suffix}"
+                    if level > 1
+                    else f"cds_{dst_suffix}"
+                )
+                add(f"lock{level}_{src_suffix}", destination, weight)
+
+            penalty = exon_length_penalty(
+                self.min_coding_run_length - level,
+                self.min_coding_run_length,
+                self.exon_length_strictness,
+            )
+            if penalty > 0:
+                for suffix, _ in CDS_PHASE_STATES:
+                    source = f"lock{level}_{suffix}"
+                    enter_intron(
+                        source, PHASE_TO_INTRON_CLASS[suffix], cds_intron * penalty
+                    )
+                    if suffix.startswith("p2_"):
+                        add(source, "stop_t", cds_end * penalty)
+
+        return edges
+
+    # -- decoding ------------------------------------------------------------
+
+    def decode(
+        self,
+        feature_probs: npt.ArrayLike,
+        base_codes: np.ndarray,
+        feature_transition: npt.ArrayLike,
+        epsilon: float | None = None,
+        return_states: bool = False,
+    ) -> np.ndarray:
+        """Decode per-base feature probabilities under frame and codon constraints.
+
+        See :func:`frame_aware_decode` for parameter documentation --
+        ``feature_probs``/``base_codes``/``feature_transition``/``epsilon``/
+        ``return_states`` mean the same thing here; the five graph config
+        values come from ``self`` instead of being passed in.
+        """
+        feature_probs = np.asarray(feature_probs)
+        if feature_probs.ndim != 2 or feature_probs.shape[1] != N_FEATURES:
+            raise ValueError(
+                f"Expected feature probs of shape (T, 5); got {feature_probs.shape}"
+            )
+        base_codes = np.ascontiguousarray(base_codes, dtype=np.uint8)
+        if base_codes.shape[0] != feature_probs.shape[0]:
+            raise ValueError(
+                f"Sequence length {base_codes.shape[0]} does not match the number of "
+                f"predicted positions {feature_probs.shape[0]}"
+            )
+        if epsilon is None:
+            epsilon = float(np.finfo(np.float32).tiny)
+
+        mask_table = build_mask_table()
+        edges = self.build_edges(np.asarray(feature_transition, dtype=float))
+        validate_edges(edges, mask_table, self.states)
+        index = build_predecessor_csr(edges, len(self.states))
+
+        n_states = len(self.states)
+        initial = np.full(n_states, 1.0 / (10 * n_states))
+        initial[self._state_index["intergenic"]] = 1.0
+        log_initial = np.log(initial / initial.sum())
+
+        log_emission = np.array(feature_probs, dtype=np.float32, copy=True)
+        np.add(log_emission, np.float32(epsilon), out=log_emission)
+        np.log(log_emission, out=log_emission)
+
+        logger.info(
+            f"Frame-aware decoding of {log_emission.shape[0]} positions over "
+            f"{n_states} states ({len(edges)} transitions, "
+            f"{index.n_branch_columns} with back-pointers, "
+            f"min_intron_length={self.min_intron_length}, "
+            f"min_coding_run_length={self.min_coding_run_length}, "
+            f"exon_length_strictness={self.exon_length_strictness}, "
+            f"splice_motif_groups={[g.name for g in self.splice_motif_groups]})"
+        )
+        path = _masked_viterbi(
+            log_emission,
+            base_codes,
+            self.state_feature,
+            self.state_mask,
+            mask_table,
+            index.indptr,
+            index.sources,
+            index.log_weights,
+            index.sole_predecessor,
+            index.branch_column,
+            index.n_branch_columns,
+            log_initial,
+        )
+        if return_states:
+            return path.astype(np.int64)
+        return self.state_feature[path.astype(np.int64)]
+
+
+DEFAULT_GRAPH = FrameStateGraph()
 
 
 def validate_edges(
@@ -853,7 +808,7 @@ def validate_edges(
     silently disable whatever constraint it carries.
     """
     if states is None:
-        states = STATES
+        states = DEFAULT_GRAPH.states
 
     outgoing: dict[int, list[tuple[int, float]]] = {}
     for source, destination, weight in edges:
@@ -907,7 +862,7 @@ def build_predecessor_csr(
     edges: list[tuple[int, int, float]], n_states: int = -1
 ) -> PredecessorIndex:
     if n_states < 0:
-        n_states = N_STATES
+        n_states = len(DEFAULT_GRAPH.states)
     by_destination: dict[int, list[tuple[int, float]]] = {
         j: [] for j in range(n_states)
     }
@@ -1118,79 +1073,17 @@ def frame_aware_decode(
         Feature labels of shape ``(T,)`` with values in ``0..4``, or expanded
         state indices when ``return_states`` is set.
     """
-    feature_probs = np.asarray(feature_probs)
-    if feature_probs.ndim != 2 or feature_probs.shape[1] != N_FEATURES:
-        raise ValueError(
-            f"Expected feature probs of shape (T, 5); got {feature_probs.shape}"
-        )
-    base_codes = np.ascontiguousarray(base_codes, dtype=np.uint8)
-    if base_codes.shape[0] != feature_probs.shape[0]:
-        raise ValueError(
-            f"Sequence length {base_codes.shape[0]} does not match the number of "
-            f"predicted positions {feature_probs.shape[0]}"
-        )
-    if epsilon is None:
-        epsilon = float(np.finfo(np.float32).tiny)
-
-    states = build_states(
-        min_intron_length,
-        splice_motif_groups,
-        min_coding_run_length,
-        include_utr_in_coding_run,
+    graph = FrameStateGraph(
+        min_intron_length=min_intron_length,
+        splice_motif_groups=splice_motif_groups,
+        min_coding_run_length=min_coding_run_length,
+        exon_length_strictness=exon_length_strictness,
+        include_utr_in_coding_run=include_utr_in_coding_run,
     )
-    n_states = len(states)
-    mask_table = build_mask_table()
-    edges = build_edges(
-        np.asarray(feature_transition, dtype=float),
-        min_intron_length,
-        splice_motif_groups,
-        min_coding_run_length,
-        exon_length_strictness,
-        include_utr_in_coding_run,
-    )
-    validate_edges(edges, mask_table, states)
-    index = build_predecessor_csr(edges, n_states)
-
-    state_feature = np.array([state.feature for state in states], dtype=np.int64)
-    state_mask = np.array([state.mask for state in states], dtype=np.int64)
-
-    # The initial distribution is deliberately weak: chromosomes begin in
-    # intergenic sequence, and over millions of positions the choice is
-    # immaterial to the decoded path.
-    initial = np.full(n_states, 1.0 / (10 * n_states))
-    initial[[state.name for state in states].index("intergenic")] = 1.0
-    log_initial = np.log(initial / initial.sum())
-
-    # Build the log-emission array with a single allocation.  At one row per
-    # base this is gigabytes for a large chromosome, so the naive
-    # `np.log(probs + eps)` -- which materialises two more full-size temporaries
-    # -- is worth avoiding.
-    log_emission = np.array(feature_probs, dtype=np.float32, copy=True)
-    np.add(log_emission, np.float32(epsilon), out=log_emission)
-    np.log(log_emission, out=log_emission)
-
-    logger.info(
-        f"Frame-aware decoding of {log_emission.shape[0]} positions over "
-        f"{n_states} states ({len(edges)} transitions, "
-        f"{index.n_branch_columns} with back-pointers, "
-        f"min_intron_length={min_intron_length}, min_coding_run_length={min_coding_run_length}, "
-        f"exon_length_strictness={exon_length_strictness}, "
-        f"splice_motif_groups={[g.name for g in splice_motif_groups]})"
-    )
-    path = _masked_viterbi(
-        log_emission,
+    return graph.decode(
+        feature_probs,
         base_codes,
-        state_feature,
-        state_mask,
-        mask_table,
-        index.indptr,
-        index.sources,
-        index.log_weights,
-        index.sole_predecessor,
-        index.branch_column,
-        index.n_branch_columns,
-        log_initial,
+        feature_transition,
+        epsilon=epsilon,
+        return_states=return_states,
     )
-    if return_states:
-        return path.astype(np.int64)
-    return state_feature[path.astype(np.int64)]

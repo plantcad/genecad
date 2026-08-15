@@ -129,7 +129,8 @@ def test_expanded_graph_is_a_valid_probability_model(domain, remove_incomplete):
     matrix = token_transition_probs(
         remove_incomplete_features=remove_incomplete, domain=domain
     ).values
-    edges = fh.build_edges(matrix)
+    graph = fh.FrameStateGraph()
+    edges = graph.build_edges(matrix)
     fh.validate_edges(edges, fh.build_mask_table())  # raises if violated
 
     mask_table = fh.build_mask_table()
@@ -141,17 +142,18 @@ def test_expanded_graph_is_a_valid_probability_model(domain, remove_incomplete):
             total = sum(
                 weight
                 for destination, weight in successors
-                if mask_table[fh.STATES[destination].mask, base]
+                if mask_table[graph.states[destination].mask, base]
             )
-            assert total <= 1.0 + 1e-9, fh.STATES[source].name
+            assert total <= 1.0 + 1e-9, graph.states[source].name
 
 
 def test_every_state_is_connected():
-    edges = fh.build_edges(plant_matrix())
+    graph = fh.FrameStateGraph()
+    edges = graph.build_edges(plant_matrix())
     sources = {source for source, _, _ in edges}
     destinations = {destination for _, destination, _ in edges}
-    assert sources == set(range(fh.N_STATES))
-    assert destinations == set(range(fh.N_STATES))
+    assert sources == set(range(len(graph.states)))
+    assert destinations == set(range(len(graph.states)))
 
 
 def test_mask_table_treats_ambiguous_bases_conservatively():
@@ -361,7 +363,7 @@ def test_decoded_introns_are_always_canonical(seed):
     introns = decoded_introns(sequence, decoded)
     assert introns, "expected at least one intron"
     for intron in introns:
-        assert len(intron) >= fh.MIN_INTRON_LENGTH
+        assert len(intron) >= fh.DEFAULT_MIN_INTRON_LENGTH
         assert (intron[:2], intron[-2:]) in (("GT", "AG"), ("GC", "AG")), intron[:8]
 
 
@@ -394,8 +396,11 @@ def test_backpointer_memory_does_not_grow_with_minimum_intron_length(min_intron_
     Isolated from the minimum-exon-length lock chain (min_coding_run_length=0) since
     that adds its own states independent of min_intron_length.
     """
-    states = fh.build_states(min_intron_length, min_coding_run_length=0)
-    edges = fh.build_edges(plant_matrix(), min_intron_length, min_coding_run_length=0)
+    graph = fh.FrameStateGraph(
+        min_intron_length=min_intron_length, min_coding_run_length=0
+    )
+    states = graph.states
+    edges = graph.build_edges(plant_matrix())
     fh.validate_edges(edges, fh.build_mask_table(), states)
     index = fh.build_predecessor_csr(edges, len(states))
 
@@ -459,8 +464,9 @@ def test_exon_lock_graph_is_a_valid_probability_model(min_coding_run_length):
     held to: no state may emit more than unit probability at any base, and
     every state must be reachable and have somewhere to go."""
     matrix = plant_matrix()
-    states = fh.build_states(min_coding_run_length=min_coding_run_length)
-    edges = fh.build_edges(matrix, min_coding_run_length=min_coding_run_length)
+    graph = fh.FrameStateGraph(min_coding_run_length=min_coding_run_length)
+    states = graph.states
+    edges = graph.build_edges(matrix)
     fh.validate_edges(edges, fh.build_mask_table(), states)  # raises if violated
 
     sources = {source for source, _, _ in edges}
@@ -548,12 +554,12 @@ def test_exon_length_penalty_graph_is_a_valid_probability_model(
     """The soft escape edges must not break the same invariants the hard
     lock chain was already held to."""
     matrix = plant_matrix()
-    states = fh.build_states(min_coding_run_length=min_coding_run_length)
-    edges = fh.build_edges(
-        matrix,
+    graph = fh.FrameStateGraph(
         min_coding_run_length=min_coding_run_length,
         exon_length_strictness=exon_length_strictness,
     )
+    states = graph.states
+    edges = graph.build_edges(matrix)
     fh.validate_edges(edges, fh.build_mask_table(), states)
 
     sources = {source for source, _, _ in edges}
@@ -566,8 +572,9 @@ def test_min_coding_run_length_zero_reproduces_the_original_graph():
     """min_coding_run_length=0 is the escape hatch: it must add no states or edges
     beyond what the graph looked like before this constraint existed."""
     matrix = plant_matrix()
-    states = fh.build_states(min_coding_run_length=0)
-    edges = fh.build_edges(matrix, min_coding_run_length=0)
+    graph = fh.FrameStateGraph(min_coding_run_length=0)
+    states = graph.states
+    edges = graph.build_edges(matrix)
 
     state_names = {state.name for state in states}
     assert not any(name.startswith("lock") for name in state_names)
@@ -585,15 +592,13 @@ def test_include_utr_in_coding_run_graph_is_a_valid_probability_model(
     across the full range of reachable lock levels (including the ones
     narrowed by start_lock_states to avoid unreachable states)."""
     matrix = plant_matrix()
-    states = fh.build_states(
-        min_coding_run_length=min_coding_run_length, include_utr_in_coding_run=True
-    )
-    edges = fh.build_edges(
-        matrix,
+    graph = fh.FrameStateGraph(
         min_coding_run_length=min_coding_run_length,
         exon_length_strictness=exon_length_strictness,
         include_utr_in_coding_run=True,
     )
+    states = graph.states
+    edges = graph.build_edges(matrix)
     fh.validate_edges(edges, fh.build_mask_table(), states)
 
     sources = {source for source, _, _ in edges}
@@ -686,8 +691,9 @@ def test_splice_motif_groups_do_not_cross_pair():
     """A GT donor may only resume through an AG acceptor, and an AT donor only
     through AC, even when both groups are enabled -- donor and acceptor come
     from the same sub-chain, never mixed across groups."""
-    states = fh.build_states(splice_motif_groups=(fh.GT_AG, fh.AT_AC))
-    edges = fh.build_edges(plant_matrix(), splice_motif_groups=(fh.GT_AG, fh.AT_AC))
+    graph = fh.FrameStateGraph(splice_motif_groups=(fh.GT_AG, fh.AT_AC))
+    states = graph.states
+    edges = graph.build_edges(plant_matrix())
     fh.validate_edges(edges, fh.build_mask_table(), states)
 
     by_name = {state.name: i for i, state in enumerate(states)}
@@ -715,8 +721,9 @@ def test_utr5_intron_resume_uses_measured_transition_ratio():
     assert matrix[U5, U5] == pytest.approx(0.9945, abs=0.01)
     assert matrix[U5, CDS] == pytest.approx(0.0046, abs=0.01)
 
-    states = fh.build_states(include_utr_in_coding_run=False)
-    edges = fh.build_edges(matrix, include_utr_in_coding_run=False)
+    graph = fh.FrameStateGraph(include_utr_in_coding_run=False)
+    states = graph.states
+    edges = graph.build_edges(matrix)
     by_name = {state.name: i for i, state in enumerate(states)}
     acceptor_2 = by_name["intron_utr5_gtag_a2"]
 
@@ -747,15 +754,20 @@ def test_returning_expanded_states_maps_back_to_features():
     states = fh.frame_aware_decode(
         emissions_from(labels, 0.9), codes, plant_matrix(), return_states=True
     )
-    state_feature = np.array([state.feature for state in fh.STATES])
+    state_feature = np.array([state.feature for state in fh.DEFAULT_GRAPH.states])
     assert np.array_equal(state_feature[states], features)
 
     # The start codon really is decoded through the dedicated start states
     coding_start = int(np.argmax(features == CDS))
-    assert [fh.STATES[s].name for s in states[coding_start : coding_start + 3]] == [
+    assert [
+        fh.DEFAULT_GRAPH.states[s].name for s in states[coding_start : coding_start + 3]
+    ] == [
         "start_a",
         "start_t",
         "start_g",
     ]
     coding_end = len(features) - 1 - int(np.argmax((features == CDS)[::-1]))
-    assert fh.STATES[states[coding_end]].name in ("stop_end_a", "stop_end_g")
+    assert fh.DEFAULT_GRAPH.states[states[coding_end]].name in (
+        "stop_end_a",
+        "stop_end_g",
+    )
