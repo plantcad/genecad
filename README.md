@@ -26,9 +26,9 @@ Currently, both plant and vertebrate models are available.
 </div>
 
 > [!NOTE]
-> **v0.4.0**: predicted CDS regions are now checked and repaired to be valid ORFs. Tested
-> across 11 regions in 6 plant species, the complete-ORF rate went from 70.3% to 98.2%. Full
-> numbers in the [release notes](https://github.com/plantcad/genecad/releases/tag/v0.4.0).
+> **v0.4.0**: This version adds sequence awareness to enforce canonical motifs for start/stop
+> codons and donor/acceptor splice sites, and enforces minimum intron/exon feature lengths.
+> Full details available in the [release notes](https://github.com/plantcad/genecad/releases/tag/v0.4.0).
 
 > [!WARNING]
 > A significant problem was identified in GeneCAD v0.1.0 which caused low BUSCO scores. Please update to
@@ -350,12 +350,13 @@ decoding is frame-aware: the CDS is constrained to begin on ATG, end on a stop c
 and contain no in-frame stop, so every predicted CDS translates cleanly.
 * `--min-intron-length` - Shortest intron frame-aware decoding may emit. Guards against short introns being invented
 to step over an in-frame stop codon. Lower it for compact genomes with genuinely short introns. (Default: 20)
-* `--min-exon-length` - Coding exons adjacent to an intron shorter than this are discounted, not forbidden (see
-`--exon-length-strictness`). Guards against an intron being invented immediately after the start codon or immediately
-after another intron, without also destroying genuine short exons. Use 0 to disable the discount entirely. (Default: 9)
-* `--exon-length-strictness` - How strongly to discount a coding exon below `--min-exon-length`. 0 removes the
-discount; larger values fall off more steeply and converge on treating `--min-exon-length` as a hard floor. Strong
-per-base emission evidence can still outweigh the discount at any setting above 0, which is what lets genuine short
+* `--min-coding-run-length` - Runs of coding sequence adjacent to an intron shorter than this are penalized, not
+forbidden (see `--exon-length-strictness`). Guards against an intron being invented immediately after the start codon
+or immediately after another intron, without also destroying genuine short exons. Use 0 to disable the penalty
+entirely. (Default: 9)
+* `--exon-length-strictness` - How strongly to penalize a run of coding sequence below `--min-coding-run-length`. 0 removes the
+penalty; larger values fall off more steeply and converge on treating `--min-coding-run-length` as a hard floor. Strong
+per-base emission evidence can still outweigh the penalty at any setting above 0, which is what lets genuine short
 boundary exons survive. (Default: 16)
 * `--allow-u12-introns` - Also allow U12-type AT-AC introns during frame-aware decoding, in addition to the default
 GT-AG/GC-AG. These are real but rare; enabling this roughly doubles the intron state count and slows decoding

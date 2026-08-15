@@ -33,13 +33,17 @@ constrained to begin on ATG, end on a stop codon, stay in frame across introns, 
 Ignored when `--decode-direct` is set.
 * `--min-intron-length` - Shortest intron frame-aware decoding may emit. Guards against short introns being invented
 to step over an in-frame stop codon. Default: 20.
-* `--min-exon-length` - Coding exons adjacent to an intron shorter than this are penalized, not forbidden (see
-`--exon-length-strictness`). Guards against an intron being invented immediately after the start codon or immediately
-after another intron, without also destroying genuine short exons. Use 0 to disable the penalty entirely. Default: 9.
-* `--exon-length-strictness` - How strongly to penalize a coding exon below `--min-exon-length`. 0 removes the
-penalty; larger values fall off more steeply and converge on treating `--min-exon-length` as a hard floor. Strong
+* `--min-coding-run-length` - Runs of coding sequence adjacent to an intron shorter than this are penalized, not
+forbidden (see `--exon-length-strictness`). Guards against an intron being invented immediately after the start codon
+or immediately after another intron, without also destroying genuine short exons. Use 0 to disable the penalty
+entirely. Default: 9.
+* `--exon-length-strictness` - How strongly to penalize a run of coding sequence below `--min-coding-run-length`. 0 removes the
+penalty; larger values fall off more steeply and converge on treating `--min-coding-run-length` as a hard floor. Strong
 per-base emission evidence can still outweigh the penalty at any setting above 0, which is what lets genuine short
 boundary exons survive. Default: 16.
+* `--include-utr-in-coding-run` - Flag. Counts the 5' UTR alongside the coding run for
+`--min-coding-run-length` purposes, so a long UTR can by itself exempt a short first coding run from the penalty.
+Only the start side is covered. On by default; pass `--no-include-utr-in-coding-run` to disable.
 * `--domain` - Domain sets the transition probabilities between states based on empirical observation from
 different types of organisms. Default: plant. Options: plant, animal.
 * `--allow-u12-introns` - Flag. Also allow U12-type AT-AC introns during frame-aware decoding, in addition to the

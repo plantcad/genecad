@@ -9,7 +9,7 @@ from src.sequence import (
 from src.frame_crf import (
     AT_AC,
     DEFAULT_EXON_LENGTH_STRICTNESS,
-    DEFAULT_MIN_EXON_LENGTH,
+    DEFAULT_MIN_CODING_RUN_LENGTH,
     DEFAULT_MIN_INTRON_LENGTH,
     DEFAULT_SPLICE_MOTIF_GROUPS,
     GT_AG,
@@ -47,8 +47,9 @@ def _detect_intervals(
     base_codes: np.ndarray | None = None,
     min_intron_length: int = DEFAULT_MIN_INTRON_LENGTH,
     splice_motif_groups: tuple[SpliceMotifGroup, ...] = DEFAULT_SPLICE_MOTIF_GROUPS,
-    min_exon_length: int = DEFAULT_MIN_EXON_LENGTH,
+    min_coding_run_length: int = DEFAULT_MIN_CODING_RUN_LENGTH,
     exon_length_strictness: float = DEFAULT_EXON_LENGTH_STRICTNESS,
+    include_utr_in_coding_run: bool = True,
 ) -> xr.Dataset:
     """Infer genomic intervals from per-token feature predictions.
 
@@ -108,8 +109,9 @@ def _detect_intervals(
                 feature_transition=matrix,
                 min_intron_length=min_intron_length,
                 splice_motif_groups=splice_motif_groups,
-                min_exon_length=min_exon_length,
+                min_coding_run_length=min_coding_run_length,
                 exon_length_strictness=exon_length_strictness,
+                include_utr_in_coding_run=include_utr_in_coding_run,
             )
         else:
             # Decoding takes ~90 seconds for 308452471 tokens on Grace CPU
@@ -234,8 +236,9 @@ def detect_intervals(
     input_fasta: str | None = None,
     min_intron_length: int = DEFAULT_MIN_INTRON_LENGTH,
     splice_motif_groups: tuple[SpliceMotifGroup, ...] = DEFAULT_SPLICE_MOTIF_GROUPS,
-    min_exon_length: int = DEFAULT_MIN_EXON_LENGTH,
+    min_coding_run_length: int = DEFAULT_MIN_CODING_RUN_LENGTH,
     exon_length_strictness: float = DEFAULT_EXON_LENGTH_STRICTNESS,
+    include_utr_in_coding_run: bool = True,
 ):
     """Aggregate rank outputs and decode genomic intervals from logits.
 
@@ -278,8 +281,9 @@ def detect_intervals(
         base_codes=base_codes,
         min_intron_length=min_intron_length,
         splice_motif_groups=splice_motif_groups,
-        min_exon_length=min_exon_length,
+        min_coding_run_length=min_coding_run_length,
         exon_length_strictness=exon_length_strictness,
+        include_utr_in_coding_run=include_utr_in_coding_run,
     )
     interval_predictions = interval_predictions.assign_attrs(
         # Copy attributes from sequence predictions, which have
@@ -382,24 +386,33 @@ def main():
         "introns being invented to step over an in-frame stop codon.",
     )
     parser.add_argument(
-        "--min-exon-length",
+        "--min-coding-run-length",
         type=int,
-        default=DEFAULT_MIN_EXON_LENGTH,
-        help="Coding exons adjacent to an intron shorter than this are discounted "
-        "(see --exon-length-strictness) rather than forbidden -- guards against an "
-        "intron being invented immediately after the start codon or immediately "
-        "after another intron, without also destroying genuine short exons. Pass 0 "
-        "to disable the discount entirely.",
+        default=DEFAULT_MIN_CODING_RUN_LENGTH,
+        help="Runs of coding sequence adjacent to an intron shorter than this are "
+        "penalized (see --exon-length-strictness) rather than forbidden -- guards "
+        "against an intron being invented immediately after the start codon or "
+        "immediately after another intron, without also destroying genuine short "
+        "exons. Pass 0 to disable the penalty entirely.",
     )
     parser.add_argument(
         "--exon-length-strictness",
         type=float,
         default=DEFAULT_EXON_LENGTH_STRICTNESS,
-        help="How strongly to discount a coding exon below --min-exon-length: 0 "
-        "removes the discount, larger values fall off more steeply and converge on "
-        "treating --min-exon-length as a hard floor. Strong per-base emission "
-        "evidence can still outweigh the discount at any setting above 0, which is "
+        help="How strongly to penalize a run of coding sequence below --min-coding-run-length: 0 "
+        "removes the penalty, larger values fall off more steeply and converge on "
+        "treating --min-coding-run-length as a hard floor. Strong per-base emission "
+        "evidence can still outweigh the penalty at any setting above 0, which is "
         "what lets genuine short boundary exons survive.",
+    )
+    parser.add_argument(
+        "--include-utr-in-coding-run",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Count the 5' UTR alongside the coding run for "
+        "--min-coding-run-length purposes, so a long UTR can by itself exempt "
+        "a short first coding run from the penalty. Only the start side is "
+        "covered. On by default; pass --no-include-utr-in-coding-run to disable.",
     )
     parser.add_argument(
         "--domain",
@@ -441,8 +454,9 @@ def main():
             input_fasta=args.input_fasta,
             min_intron_length=args.min_intron_length,
             splice_motif_groups=splice_motif_groups,
-            min_exon_length=args.min_exon_length,
+            min_coding_run_length=args.min_coding_run_length,
             exon_length_strictness=args.exon_length_strictness,
+            include_utr_in_coding_run=args.include_utr_in_coding_run,
         )
     else:
         with open(args.manifest) as fh:
@@ -466,8 +480,9 @@ def main():
                 input_fasta=args.input_fasta,
                 min_intron_length=args.min_intron_length,
                 splice_motif_groups=splice_motif_groups,
-                min_exon_length=args.min_exon_length,
+                min_coding_run_length=args.min_coding_run_length,
                 exon_length_strictness=args.exon_length_strictness,
+                include_utr_in_coding_run=args.include_utr_in_coding_run,
             )
 
 

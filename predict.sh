@@ -41,17 +41,17 @@ Options:
                                                 Guards against short introns being invented to step over
                                                 an in-frame stop codon. Lower it for compact genomes
                                                 with genuinely short introns.
-    --min-exon-length N     Coding exons adjacent to an intron shorter than this are
-                                                discounted, not forbidden (default: 9; see
+    --min-coding-run-length N     Runs of coding sequence adjacent to an intron shorter than this
+                                                are penalized, not forbidden (default: 9; see
                                                 --exon-length-strictness). Guards against an intron
                                                 being invented immediately after the start codon or
                                                 immediately after another intron, without also
                                                 destroying genuine short exons. Use 0 to disable.
     --exon-length-strictness N
-                                                How strongly to discount a coding exon below
-                                                --min-exon-length (default: 16). 0 removes the
-                                                discount; larger values converge on treating
-                                                --min-exon-length as a hard floor.
+                                                How strongly to penalize a run of coding sequence below
+                                                --min-coding-run-length (default: 16). 0 removes the
+                                                penalty; larger values converge on treating
+                                                --min-coding-run-length as a hard floor.
     --allow-u12-introns     Also allow U12-type AT-AC introns during frame-aware
                                                 decoding (default: only GT-AG/GC-AG). These are real but
                                                 rare; enabling this roughly doubles the intron state count
@@ -113,7 +113,7 @@ MIN_TRANSCRIPT_LENGTH="3"
 ORF_MAX_SHIFT="300"
 FRAME_AWARE="1"
 MIN_INTRON_LENGTH="20"
-MIN_EXON_LENGTH="9"
+MIN_CODING_RUN_LENGTH="9"
 EXON_LENGTH_STRICTNESS="16"
 ALLOW_U12_INTRONS="0"
 CPU_WORKERS="1"
@@ -132,7 +132,7 @@ while [[ $# -gt 0 ]]; do
     --orf-max-shift) ORF_MAX_SHIFT="$2"; shift 2 ;;
     --no-frame-aware) FRAME_AWARE="0"; shift ;;
     --min-intron-length) MIN_INTRON_LENGTH="$2"; shift 2 ;;
-    --min-exon-length) MIN_EXON_LENGTH="$2"; shift 2 ;;
+    --min-coding-run-length) MIN_CODING_RUN_LENGTH="$2"; shift 2 ;;
     --exon-length-strictness) EXON_LENGTH_STRICTNESS="$2"; shift 2 ;;
     --allow-u12-introns) ALLOW_U12_INTRONS="1"; shift ;;
     -c|--cpu-workers) CPU_WORKERS="$2"; shift 2 ;;
@@ -168,8 +168,8 @@ if ! [[ "$MIN_INTRON_LENGTH" =~ ^[0-9]+$ ]] || [[ "$MIN_INTRON_LENGTH" -lt 5 ]];
     exit 1
 fi
 
-if ! [[ "$MIN_EXON_LENGTH" =~ ^[0-9]+$ ]]; then
-    echo "Error: --min-exon-length must be a non-negative integer."
+if ! [[ "$MIN_CODING_RUN_LENGTH" =~ ^[0-9]+$ ]]; then
+    echo "Error: --min-coding-run-length must be a non-negative integer."
     exit 1
 fi
 
@@ -255,7 +255,7 @@ echo "Mode:        $MODE  ($BASE_MODEL + $HEAD_MODEL)"
 echo "Top contigs: $TOP_N_CONTIGS"
 echo "Min tx len:  $MIN_TRANSCRIPT_LENGTH"
 echo "ORF shift:   $ORF_MAX_SHIFT"
-echo "Frame-aware: $FRAME_AWARE (min intron $MIN_INTRON_LENGTH, min exon $MIN_EXON_LENGTH @ strictness $EXON_LENGTH_STRICTNESS, allow U12 introns: $ALLOW_U12_INTRONS)"
+echo "Frame-aware: $FRAME_AWARE (min intron $MIN_INTRON_LENGTH, min exon $MIN_CODING_RUN_LENGTH @ strictness $EXON_LENGTH_STRICTNESS, allow U12 introns: $ALLOW_U12_INTRONS)"
 echo "CPU workers: $CPU_WORKERS"
 echo "================================================================="
 
@@ -590,7 +590,7 @@ process_chromosome() {
 }
 
 if [[ "$FRAME_AWARE" == "1" ]]; then
-    FRAME_AWARE_ARGS=(--input-fasta "$INPUT_FILE" --min-intron-length "$MIN_INTRON_LENGTH" --min-exon-length "$MIN_EXON_LENGTH" --exon-length-strictness "$EXON_LENGTH_STRICTNESS")
+    FRAME_AWARE_ARGS=(--input-fasta "$INPUT_FILE" --min-intron-length "$MIN_INTRON_LENGTH" --min-coding-run-length "$MIN_CODING_RUN_LENGTH" --exon-length-strictness "$EXON_LENGTH_STRICTNESS")
     if [[ "$ALLOW_U12_INTRONS" == "1" ]]; then
         FRAME_AWARE_ARGS+=(--allow-u12-introns)
     fi

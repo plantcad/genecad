@@ -33,6 +33,7 @@ repos:
     hooks:
     -   id: detect-secrets
         args: ['--baseline', '.secrets.baseline']
+        exclude: 'src/tests/fixtures/frame_crf_background.txt'
   - repo: https://github.com/abravalheri/validate-pyproject
     rev: v0.23
     hooks:
