@@ -398,7 +398,7 @@ http = [
 
 [[package]]
 name = "genecad"
-version = "0.4.0"
+version = "0.4.1"
 source = { editable = "." }
 dependencies = [
     { name = "biopython" },
@@ -429,6 +429,11 @@ mamba = [
     { name = "causal-conv1d" },
     { name = "mamba-ssm" },
 ]
+test = [
+    { name = "lightning" },
+    { name = "torch" },
+    { name = "torchmetrics" },
+]
 torch = [
     { name = "flash-attn" },
     { name = "lightning" },
@@ -450,6 +455,7 @@ requires-dist = [
     { name = "causal-conv1d", marker = "extra == 'mamba'", git = "https://github.com/Dao-AILab/causal-conv1d?tag=v1.5.0.post8" },
     { name = "flash-attn", marker = "extra == 'torch'", specifier = ">=2.8.3" },
     { name = "gradio", specifier = ">=4.0.0" },
+    { name = "lightning", marker = "extra == 'test'", specifier = "~=2.5.1" },
     { name = "lightning", marker = "extra == 'torch'", specifier = "~=2.5.1" },
     { name = "mamba-ssm", marker = "extra == 'mamba'", git = "https://github.com/state-spaces/mamba?tag=v2.2.4" },
     { name = "matplotlib", specifier = "~=3.10.1" },
@@ -464,7 +470,9 @@ requires-dist = [
     { name = "scikit-learn", specifier = "~=1.6.1" },
     { name = "sentencepiece", specifier = ">=0.2.1" },
     { name = "six", specifier = "~=1.17.0" },
+    { name = "torch", marker = "extra == 'test'", specifier = "==2.7.1", index = "https://download.pytorch.org/whl/cu128" },
     { name = "torch", marker = "extra == 'torch'", specifier = "==2.7.1", index = "https://download.pytorch.org/whl/cu128" },
+    { name = "torchmetrics", marker = "extra == 'test'", specifier = "~=1.7.0" },
     { name = "torchmetrics", marker = "extra == 'torch'", specifier = "~=1.7.0" },
     { name = "tqdm", specifier = "~=4.67.1" },
     { name = "transformers", specifier = ">=4.51,<5.0.0" },
@@ -474,7 +482,7 @@ requires-dist = [
     { name = "xgboost", specifier = ">=3.1.2" },
     { name = "zarr", specifier = "~=3.0.4" },
 ]
-provides-extras = ["torch", "mamba"]
+provides-extras = ["torch", "test", "mamba"]
 
 [package.metadata.requires-dev]
 dev = [

@@ -39,6 +39,15 @@ torch = [
   "torchmetrics~=1.7.0",
   "flash-attn>=2.8.3",
 ]
+# Subset of `torch` needed to import src.modeling and run the torch-dependent
+# tests, without flash-attn: flash-attn is only reached by model construction
+# code the tests never exercise, and building it from source needs a CUDA
+# toolchain the CI runner doesn't have.
+test = [
+  "torch==2.7.1",
+  "lightning~=2.5.1",
+  "torchmetrics~=1.7.0",
+]
 mamba = [
   "causal-conv1d==1.5.0.post8",
   "mamba-ssm==2.2.4",
