@@ -58,9 +58,9 @@ constraining it, the cheapest way to route around an in-frame stop is a
 *normal-length* intron placed immediately after the start codon or
 immediately after another intron, leaving a coding exon that is just a
 start/stop codon or a couple of leftover bases.  A lock chain (see
-:func:`exon_lock_states`) forces a minimum run of coding sequence before
-intron entry becomes reachable again, the same way the intron body states
-force a minimum intron length -- just for exons instead of introns.
+:class:`FrameStateGraph`'s ``_exon_lock_states``) forces a minimum run of coding
+sequence before intron entry becomes reachable again, the same way the intron
+body states force a minimum intron length -- just for exons instead of introns.
 
 Known limitations
 -----------------
@@ -70,8 +70,8 @@ Known limitations
   :class:`SpliceMotifGroup` gets its own donor, body and acceptor sub-chain,
   since a donor from one group must never resume through another group's
   acceptor. Pass ``splice_motif_groups=(GT_AG, AT_AC)`` to
-  :func:`build_states`/:func:`build_edges`/:func:`frame_aware_decode` to
-  enable them. Motifs beyond GT-AG, GC-AG and AT-AC are not offered: every
+  :class:`FrameStateGraph`/:func:`frame_aware_decode` to enable them. Motifs
+  beyond GT-AG, GC-AG and AT-AC are not offered: every
   other dinucleotide pairing combined accounts for under 0.02% of introns in
   that reference, consistent with annotation noise rather than real splicing.
 * Introns are not permitted to interrupt the start or the stop codon.
@@ -185,9 +185,10 @@ CORE_STATES: list[State] = [
 
 # Introns, one class per coding state they must resume into so that the reading
 # frame survives them.  Each class becomes a chain of states (see
-# `intron_chain_parts`) that forces a canonical donor and acceptor and a minimum
-# length.  This is not cosmetic: without it the decoder dodges an in-frame stop
-# codon by inventing a short "intron" across it, and it does so readily.
+# `FrameStateGraph._intron_chain_parts`) that forces a canonical donor and
+# acceptor and a minimum length.  This is not cosmetic: without it the decoder
+# dodges an in-frame stop codon by inventing a short "intron" across it, and
+# it does so readily.
 INTRON_CLASSES: list[tuple[str, tuple[str, ...]]] = [
     ("utr5", ("utr5", "start_a")),
     ("p0t", ("cds_p1_ta", "cds_p1_tg", "cds_p1_safe_t")),
@@ -226,8 +227,8 @@ AT_AC = SpliceMotifGroup("atac", (MASK_IS_A, MASK_IS_T), (MASK_IS_A, MASK_IS_C))
 # accounts for under 0.02% -- almost certainly annotation noise rather than
 # alternative splicing -- so only AT-AC is offered as an opt-in extra. Adding
 # a group roughly doubles the intron state count (each gets its own donor,
-# body and acceptor sub-chain, see `intron_chain_parts`), so it is off by
-# default; pass ``splice_motif_groups=(GT_AG, AT_AC)`` to enable it.
+# body and acceptor sub-chain, see `FrameStateGraph._intron_chain_parts`), so
+# it is off by default; pass ``splice_motif_groups=(GT_AG, AT_AC)`` to enable it.
 DEFAULT_SPLICE_MOTIF_GROUPS: tuple[SpliceMotifGroup, ...] = (GT_AG,)
 
 # The donor and acceptor account for four bases; a minimum-length intron also
@@ -1040,8 +1041,9 @@ def frame_aware_decode(
         Floor added to probabilities before taking logs.
     return_states
         Return expanded state indices instead of feature labels.  Intended for
-        tests and diagnostics.  Indices refer to
-        ``build_states(min_intron_length, min_coding_run_length=min_coding_run_length)``.
+        tests and diagnostics.  Indices refer to the ``states`` list of the
+        ``FrameStateGraph`` built from this call's config values (see
+        :class:`FrameStateGraph`).
     min_intron_length
         Shortest intron the decoder may emit.  Introns below this length are
         overwhelmingly artefacts of stepping over an in-frame stop codon rather
