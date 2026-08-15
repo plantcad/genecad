@@ -156,6 +156,40 @@ def test_every_state_is_connected():
     assert destinations == set(range(len(graph.states)))
 
 
+def test_one_graph_builds_edges_for_two_different_matrices():
+    """A single FrameStateGraph must be safe to reuse for multiple decodes
+    under different transition matrices -- states are config-only and built
+    once, but edges depend on the matrix too and must reflect whichever
+    matrix build_edges was just called with, not stale weights from a
+    previous call."""
+    graph = fh.FrameStateGraph()
+    plant = plant_matrix()
+    animal = token_transition_probs(
+        remove_incomplete_features=True, domain="animal"
+    ).values
+
+    plant_edges = graph.build_edges(plant)
+    animal_edges = graph.build_edges(animal)
+
+    fh.validate_edges(plant_edges, fh.build_mask_table(), graph.states)
+    fh.validate_edges(animal_edges, fh.build_mask_table(), graph.states)
+
+    # Same topology (same graph, same config) but generally different
+    # weights, since the two domains' transition matrices differ.
+    plant_by_edge = {(s, d): w for s, d, w in plant_edges}
+    animal_by_edge = {(s, d): w for s, d, w in animal_edges}
+    assert set(plant_by_edge) == set(animal_by_edge)
+    assert plant_by_edge != animal_by_edge
+
+    sequence, labels = build_locus(VALID_CODING, split=50)
+    codes = fh.encode_sequence(sequence)
+    probs = emissions_from(labels, 0.9)
+    decoded_plant = graph.decode(probs, codes, plant)
+    decoded_animal = graph.decode(probs, codes, animal)
+    assert np.array_equal(decoded_plant, labels)
+    assert np.array_equal(decoded_animal, labels)
+
+
 def test_mask_table_treats_ambiguous_bases_conservatively():
     table = fh.build_mask_table()
     # An N can never be read as a specific base ...
