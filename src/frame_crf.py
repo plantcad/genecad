@@ -392,10 +392,10 @@ class FrameStateGraph:
     exon_length_strictness: float = DEFAULT_EXON_LENGTH_STRICTNESS
     include_utr_in_coding_run: bool = True
 
-    states: list[State] = field(init=False)
-    state_feature: np.ndarray = field(init=False)
-    state_mask: np.ndarray = field(init=False)
-    _state_index: dict[str, int] = field(init=False)
+    states: list[State] = field(init=False, repr=False, compare=False)
+    state_feature: np.ndarray = field(init=False, repr=False, compare=False)
+    state_mask: np.ndarray = field(init=False, repr=False, compare=False)
+    _state_index: dict[str, int] = field(init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         if self.min_intron_length < STRUCTURAL_MIN_INTRON_LENGTH:
@@ -424,10 +424,12 @@ class FrameStateGraph:
     def _intron_chain_parts(self) -> dict[str, list[tuple[str, int]]]:
         """Per-group (suffix, base constraint) lists for the states of one intron.
 
-        See the old module-level ``intron_chain_parts`` docstring (removed)
-        for the full explanation: keyed by :attr:`SpliceMotifGroup.name`,
-        ``b1..bk`` are mandatory body positions imposing the minimum
-        length, and groups never merge.
+        Keyed by :attr:`SpliceMotifGroup.name`. Within a group's chain,
+        ``b1..bk`` are mandatory body positions that impose the minimum
+        length; the looping ``body`` state that follows is what actually
+        absorbs intron length. Groups never merge -- each gets its own
+        donor, body and acceptor states -- so an intron entered through one
+        group's donor can only leave through that same group's acceptor.
         """
         mandatory = self.min_intron_length - STRUCTURAL_MIN_INTRON_LENGTH
         body_parts = [(f"b{i}", MASK_ANY) for i in range(1, mandatory + 1)] + [
@@ -443,6 +445,20 @@ class FrameStateGraph:
         }
 
     def _exon_lock_states(self) -> list[State]:
+        """States that force at least ``self.min_coding_run_length`` bases of
+        coding sequence before intron entry (or the terminal stop) becomes
+        reachable again, mirroring :data:`CDS_PHASE_STATES` at each
+        remaining-length level.
+
+        Level ``L`` means "L more bases must be read before the real,
+        unlocked CDS states -- which do offer intron entry -- become
+        reachable". Every transition consumes one base and steps down
+        exactly one level, so no path can reach an intron or the stop codon
+        before the minimum has elapsed. Level 1 is the last locked level;
+        its own transitions land directly on the real states, so only
+        ``self.min_coding_run_length - 1`` levels are ever materialised,
+        and none at all once ``self.min_coding_run_length <= 1``.
+        """
         return [
             State(f"lock{level}_{suffix}", CDS, mask)
             for level in range(self.min_coding_run_length - 1, 0, -1)
@@ -450,24 +466,64 @@ class FrameStateGraph:
         ]
 
     def _exon_lock_destination(self, suffix: str, already_consumed: int) -> str:
+        """Name of the state to land in for codon-phase ``suffix`` (e.g.
+        ``"p0_t"``), given that ``already_consumed`` bases of the current
+        exon have already been read.
+
+        Returns a locked state if more coding sequence must still be forced
+        before intron entry is legal again, or the real (unlocked) state
+        directly once ``already_consumed`` plus this base already meets
+        ``self.min_coding_run_length``.
+        """
         remaining = self.min_coding_run_length - already_consumed - 1
         if remaining <= 0:
             return f"cds_{suffix}"
         return f"lock{remaining}_{suffix}"
 
     def _locked_destination(self, base_state: str, already_consumed: int) -> str:
+        """Single-track analogue of :meth:`_exon_lock_destination`, for lock
+        chains that have no codon phase to track (5' UTR) or whose phase is
+        fixed (the start codon).
+
+        Returns ``base_state`` once ``already_consumed`` plus this base
+        already meets ``self.min_coding_run_length``, otherwise
+        ``f"{base_state}_lock{N}"``.
+        """
         remaining = self.min_coding_run_length - already_consumed - 1
         if remaining <= 0:
             return base_state
         return f"{base_state}_lock{remaining}"
 
     def _utr5_lock_states(self) -> list[State]:
+        """States that carry a running count of 5' UTR bases consumed so
+        far, used by ``self.include_utr_in_coding_run`` to let a long 5'
+        UTR satisfy ``self.min_coding_run_length`` on its own, so a short
+        first coding run isn't penalized just because the exon's UTR
+        portion isn't counted.
+
+        Mirrors :meth:`_exon_lock_states`, but with a single untyped state
+        per level (5' UTR carries no codon phase) and continuing into the
+        start codon via :meth:`_start_lock_states` rather than resetting at
+        the start codon.
+        """
         return [
             State(f"utr5_lock{level}", U5, MASK_ANY)
             for level in range(self.min_coding_run_length - 1, 0, -1)
         ]
 
     def _start_lock_states(self) -> list[State]:
+        """Locked variants of the start codon (A/T/G) used by
+        ``self.include_utr_in_coding_run`` to carry the running UTR+CDS
+        base count from :meth:`_utr5_lock_states` across the mandatory ATG,
+        which otherwise has no branching point at which to track it.
+
+        Each position can only be reached once at least that many bases
+        (1 for the A, 2 for the T, 3 for the G) have already been
+        consumed, so the reachable level range narrows by one at each
+        position; generating the full ``self.min_coding_run_length - 1``
+        range at every position would otherwise leave unreachable states
+        that fail the graph-connectivity check.
+        """
         specs = [
             ("start_a", MASK_IS_A, 1),
             ("start_t", MASK_IS_T, 2),
@@ -550,6 +606,11 @@ class FrameStateGraph:
             add("intergenic", "utr5", p[IG][U5])
 
         def enter_intron(source: str, intron_class: str, weight: float) -> None:
+            # Each configured motif group's donor mask is mutually exclusive
+            # with every other group's (G-first vs A-first), so -- as with
+            # cds_p0_t / cds_p0_x above -- each gets the full weight rather
+            # than a share of it; only one can ever be feasible for a given
+            # base.
             for group in self.splice_motif_groups:
                 add(source, intron_state(intron_class, group.name, "d1"), weight)
 
@@ -573,6 +634,13 @@ class FrameStateGraph:
         add("start_t", "start_g", 1.0)
 
         def leave_codon_boundary(source: str) -> None:
+            """Successors of a CDS base that completes a codon.
+
+            The next base either opens an intron, continues the coding
+            sequence, or begins the terminal stop codon.  Reaching the 3'
+            UTR is only possible through that stop codon, so the feature
+            matrix's CDS -> 3' UTR mass is what drives entry into it.
+            """
             enter_intron(source, "p2", cds_intron)
             add(source, "cds_p0_t", cds_cont)
             add(source, "cds_p0_x", cds_cont)
@@ -617,6 +685,8 @@ class FrameStateGraph:
             enter_intron("start_g", "p2", cds_intron * start_codon_penalty)
 
         # -- CDS body -------------------------------------------------------------
+        # Mid-codon there is nowhere to go but onward or into an intron, so
+        # the CDS -> 3' UTR mass folds into continuing.
         cds_onward = cds_cont + cds_end
 
         enter_intron("cds_p0_t", "p0t", cds_intron)
@@ -653,11 +723,25 @@ class FrameStateGraph:
         add("utr3", "intergenic", p[U3][IG])
 
         # -- intron chains --------------------------------------------------------
+        # Each intron runs donor -> b1..bk -> body* -> acceptor before
+        # resuming, separately per configured motif group (e.g.
+        # G -> T/C -> ... -> A -> G for GT_AG). The b-states are mandatory,
+        # which is what imposes the minimum intron length; the decision to
+        # end the intron is taken on leaving the looping body state, and the
+        # acceptor states that follow are forced, so the exit weight sits on
+        # that one edge.
         resume_weights = {
+            # A 5' UTR intron may resume into more UTR or straight into the
+            # start codon; those two are not mutually exclusive under their
+            # masks, so they share the exit mass in the same ratio a UTR
+            # base would transition, rather than splitting it arbitrarily.
             "utr5": {
                 "utr5": utr5_cont / (utr5_cont + utr5_end),
                 "start_a": utr5_end / (utr5_cont + utr5_end),
             },
+            # At a codon boundary the intron resumes into the next codon or
+            # into the terminal stop codon, in the same ratio a coding base
+            # would.
             "p2": {
                 "cds_p0_t": cds_cont / (cds_cont + cds_end),
                 "cds_p0_x": cds_cont / (cds_cont + cds_end),
@@ -666,11 +750,25 @@ class FrameStateGraph:
         }
 
         def resume_destination(destination: str) -> str | None:
+            """Where an intron acceptor actually resumes, once the minimum
+            coding run length is accounted for.
+
+            3' UTR is untouched -- ``self.min_coding_run_length`` only
+            governs the run of coding sequence (and, with
+            ``self.include_utr_in_coding_run``, the 5' UTR preceding it).
+            "stop_t" resuming directly (an intron immediately followed by
+            the stop codon, i.e. a zero-length final exon) is dropped unless
+            the constraint is disabled; the stop codon remains reachable the
+            normal way, once the lock chain is satisfied.
+            """
             if destination == "stop_t":
                 return "stop_t" if self.min_coding_run_length <= 0 else None
             if destination.startswith("cds_"):
                 return self._exon_lock_destination(destination[len("cds_") :], 0)
             if self.include_utr_in_coding_run and destination in ("utr5", "start_a"):
+                # A fresh exon begins here, so the combined UTR+CDS count
+                # resets to 0 just like the CDS-only case above, rather than
+                # landing on the already-unlocked singleton.
                 return self._locked_destination(destination, 0)
             return destination
 
@@ -680,6 +778,7 @@ class FrameStateGraph:
                     intron_state(intron_class, group_name, part) for part, _ in parts
                 ]
                 body, acceptor_1, acceptor_2 = chain[-3], chain[-2], chain[-1]
+                # Donor and the mandatory body positions are a forced march.
                 for source, destination in zip(chain, chain[1:-2]):
                     add(source, destination, 1.0)
                 add(body, body, intron_stay)
@@ -692,6 +791,19 @@ class FrameStateGraph:
                         add(acceptor_2, resolved, weights.get(destination, 1.0))
 
         # -- minimum exon length lock chain ---------------------------------------
+        # Level L means "L more bases must be read before the real,
+        # intron-capable CDS states become reachable". Every edge here
+        # consumes one base and steps down exactly one level -- including
+        # the codon-boundary (p2 -> p0) step, not just the mid-codon ones --
+        # so no path can shortcut the count. Level 1 connects directly to
+        # the real states rather than a level 0.
+        #
+        # Locked states also get their own (penalized) escape edges -- the
+        # same enter_intron/stop_t options the real states offer, just
+        # scaled down by exon_length_penalty(). That is what makes this a
+        # soft preference rather than the structural ban it used to be:
+        # strong emission evidence at that exact position can still
+        # outweigh the penalty.
         for level in range(self.min_coding_run_length - 1, 0, -1):
             for src_suffix, dst_suffix, kind in CDS_PHASE_EDGES:
                 weight = cds_onward if kind == "onward" else cds_cont

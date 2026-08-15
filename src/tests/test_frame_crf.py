@@ -422,6 +422,11 @@ def test_minimum_intron_length_is_enforced():
         assert is_valid_orf(coding)
 
 
+def test_min_intron_length_below_structural_minimum_is_rejected():
+    with pytest.raises(ValueError, match="min_intron_length must be at least"):
+        fh.FrameStateGraph(min_intron_length=fh.STRUCTURAL_MIN_INTRON_LENGTH - 1)
+
+
 @pytest.mark.parametrize("min_intron_length", [5, 20, 40])
 def test_backpointer_memory_does_not_grow_with_minimum_intron_length(min_intron_length):
     """The mandatory body states have one predecessor each, so raising the
@@ -624,7 +629,8 @@ def test_include_utr_in_coding_run_graph_is_a_valid_probability_model(
     """The 5' UTR + start-codon lock chain used by include_utr_in_coding_run
     must not break the same invariants the CDS-only lock chain is held to,
     across the full range of reachable lock levels (including the ones
-    narrowed by start_lock_states to avoid unreachable states)."""
+    narrowed by FrameStateGraph._start_lock_states to avoid unreachable
+    states)."""
     matrix = plant_matrix()
     graph = fh.FrameStateGraph(
         min_coding_run_length=min_coding_run_length,
