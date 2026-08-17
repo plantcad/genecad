@@ -102,7 +102,7 @@ def run(tmp_path, blocks, strand, intron=CANONICAL_INTRON, **kwargs):
         "report_path": None,
         "fix_weak_starts": True,
         "weak_start_threshold": 9,
-        "kozak_margin": 0.5,
+        "kozak_margin": 3.0,
         "weak_kozak_threshold": 5.0,
     }
     options.update(kwargs)
@@ -621,7 +621,7 @@ def run_weak_start(tmp_path, spliced_seq, intron=WEAK_START_INTRON, **kwargs):
         "report_path": None,
         "fix_weak_starts": True,
         "weak_start_threshold": 9,
-        "kozak_margin": 0.5,
+        "kozak_margin": 3.0,
         "weak_kozak_threshold": 5.0,
     }
     options.update(kwargs)
@@ -767,7 +767,7 @@ def test_weak_start_search_does_not_trigger_for_a_long_first_exon(
         report_path=None,
         fix_weak_starts=True,
         weak_start_threshold=9,
-        kozak_margin=1.0,
+        kozak_margin=3.0,
         weak_kozak_threshold=0.0,
     )
     assert stats["repaired"] == 0

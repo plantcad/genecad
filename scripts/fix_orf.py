@@ -762,7 +762,7 @@ def fix_orf(
     report_path: str | None,
     fix_weak_starts: bool = True,
     weak_start_threshold: int = 9,
-    kozak_margin: float = 0.5,
+    kozak_margin: float = 3.0,
     weak_kozak_threshold: float = 5.0,
 ) -> Counter:
     logger.info(f"Reading GFF {input_gff}")
@@ -971,7 +971,7 @@ def main() -> None:
     parser.add_argument(
         "--kozak-margin",
         type=float,
-        default=0.5,
+        default=3.0,
         help="Minimum Kozak log2-odds advantage an alternative start codon "
         "must have over the original to trigger a switch.",
     )
