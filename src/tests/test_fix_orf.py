@@ -353,7 +353,7 @@ def test_kozak_score_is_deterministic_and_finite():
 
 
 # -------------------------------------------------------------------------------------------------
-# first_exon_length and find_best_start_by_kozak (Task 2)
+# first_exon_length and find_best_start_by_kozak
 # -------------------------------------------------------------------------------------------------
 
 
@@ -573,13 +573,13 @@ def test_find_best_start_by_kozak_rejects_a_disjoint_upstream_orf(tiny_kozak_pwm
 
 
 # -------------------------------------------------------------------------------------------------
-# repair_transcript weak-start end-to-end wiring (Task 3)
+# repair_transcript weak-start end-to-end wiring
 # -------------------------------------------------------------------------------------------------
 
 # Genomic layout for the weak-start tests below (plus strand):
 #   FLANK(100) | exon1 (101-110, 10nt) | intron (111-150, 40nt canonical) |
 #   exon2 (151-166, 16nt) | FLANK(100)
-# Spliced transcript = exon1 + exon2 = the 26 nt sequences from Task 2.
+# Spliced transcript = exon1 + exon2 = the same 26 nt sequences used above.
 WEAK_START_INTRON = "GT" + "T" * 36 + "AG"  # 40 nt, canonical
 WEAK_START_NONCANONICAL_INTRON = "AA" + "T" * 36 + "CC"  # 40 nt, non-canonical
 

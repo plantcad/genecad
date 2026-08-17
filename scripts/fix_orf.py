@@ -73,12 +73,11 @@ START_CODON = "ATG"
 CANONICAL_SPLICE_PAIRS = frozenset((("GT", "AG"), ("GC", "AG"), ("AT", "AC")))
 
 # Log2-odds Kozak-context PWM: fit once, offline, from real confirmed start
-# codons pooled across multiple Phytozome plant species (see
-# docs/superpowers/specs/2026-08-15-fix-orf-weak-start-repair-design.md for
-# methodology). Deliberately excludes Oropetium thomaeum, the species used
-# to validate this whole change -- fitting and validating on the same
-# species would be circular. Window is [-KOZAK_WINDOW_UPSTREAM, ATG,
-# +KOZAK_WINDOW_DOWNSTREAM] in coding (5'->3') orientation, columns A/C/G/T.
+# codons pooled across multiple Phytozome plant species. Deliberately
+# excludes Oropetium thomaeum, the species used to validate this whole
+# change -- fitting and validating on the same species would be circular.
+# Window is [-KOZAK_WINDOW_UPSTREAM, ATG, +KOZAK_WINDOW_DOWNSTREAM] in
+# coding (5'->3') orientation, columns A/C/G/T.
 KOZAK_WINDOW_UPSTREAM = 6
 KOZAK_WINDOW_DOWNSTREAM = 6
 KOZAK_PWM_LOG_ODDS: tuple[tuple[float, float, float, float], ...] = (
