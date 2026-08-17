@@ -323,3 +323,26 @@ def test_first_in_frame_stop_terminates_the_orf():
         seq, cds_begin=3, cds_stop=len(seq), max_shift=300, min_protein_length=1
     )
     assert orf == (3, 3 + 3 + 15 + 3)
+
+
+def test_kozak_score_returns_none_outside_sequence_bounds():
+    seq = "A" * 5 + "ATG" + "A" * 5  # 13 nt total
+    # ATG is at offset 5; the real window needs 6 nt upstream, which isn't there
+    assert fix_orf.kozak_score(seq, 5) is None
+
+
+def test_kozak_score_returns_none_for_ambiguous_bases():
+    seq = (
+        "N" * fix_orf.KOZAK_WINDOW_UPSTREAM
+        + "ATG"
+        + "A" * fix_orf.KOZAK_WINDOW_DOWNSTREAM
+    )
+    assert fix_orf.kozak_score(seq, fix_orf.KOZAK_WINDOW_UPSTREAM) is None
+
+
+def test_kozak_score_is_deterministic_and_finite():
+    seq = "CGCGCG" + "ATG" + "GCGCGC"
+    score = fix_orf.kozak_score(seq, 6)
+    assert score is not None
+    assert score == fix_orf.kozak_score(seq, 6)  # deterministic
+    assert -1000 < score < 1000  # sane magnitude, not NaN/inf

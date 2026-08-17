@@ -55,6 +55,59 @@ START_CODON = "ATG"
 # transcribed strand.  GT-AG and GC-AG are U2-type; AT-AC is U12-type.
 CANONICAL_SPLICE_PAIRS = frozenset((("GT", "AG"), ("GC", "AG"), ("AT", "AC")))
 
+# Log2-odds Kozak-context PWM: fit once, offline, from real confirmed start
+# codons pooled across multiple Phytozome plant species (see
+# docs/superpowers/specs/2026-08-15-fix-orf-weak-start-repair-design.md for
+# methodology). Deliberately excludes Oropetium thomaeum, the species used
+# to validate this whole change -- fitting and validating on the same
+# species would be circular. Window is [-KOZAK_WINDOW_UPSTREAM, ATG,
+# +KOZAK_WINDOW_DOWNSTREAM] in coding (5'->3') orientation, columns A/C/G/T.
+KOZAK_WINDOW_UPSTREAM = 6
+KOZAK_WINDOW_DOWNSTREAM = 6
+KOZAK_PWM_LOG_ODDS: tuple[tuple[float, float, float, float], ...] = (
+    (0.0136, -0.0756, 0.3939, -0.2537),
+    (-0.0890, 0.5300, -0.0483, -0.2820),
+    (0.3170, 0.0057, 0.2045, -0.5907),
+    (0.4690, -0.5523, 0.5644, -0.9349),
+    (0.2857, 0.7449, -0.6555, -0.7332),
+    (0.2614, 0.4346, 0.3240, -1.1425),
+    (1.6575, -19.6135, -19.6135, -20.4058),
+    (-20.4059, -19.6135, -19.6135, 1.6576),
+    (-20.4059, -19.6135, 2.4499, -20.4058),
+    (-0.4964, -0.9217, 1.5662, -1.2134),
+    (-0.0608, 0.9640, -0.0891, -0.9244),
+    (-0.4841, -0.3068, 0.8155, -0.0636),
+    (0.0288, -0.1188, 0.6590, -0.5329),
+    (-0.1478, 0.6393, 0.0373, -0.3954),
+    (-0.3735, 0.2646, 0.4629, -0.1626),
+)
+KOZAK_BACKGROUND: tuple[float, float, float, float] = (0.3170, 0.1830, 0.1830, 0.3170)
+
+# Consensus: AAAAAAATGGCGAAT  (positions -6..ATG..+6)
+# Fit from 438262 confirmed start codons pooled across 11 species: Athaliana,
+# Bstricta, Crubella, Esalsugineum, Fvesca, Csativus, Cclementina,
+# Mtruncatula, Ljaponicus, Dcarota, Osativa.
+
+
+def kozak_score(seq: str, atg_offset: int) -> float | None:
+    """Log2-odds Kozak-context score for the ATG at transcript offset atg_offset.
+
+    None if the window falls outside seq, or contains a base other than
+    A/C/G/T (an assembly gap in the window makes the score meaningless).
+    """
+    lo = atg_offset - KOZAK_WINDOW_UPSTREAM
+    hi = atg_offset + 3 + KOZAK_WINDOW_DOWNSTREAM
+    if lo < 0 or hi > len(seq):
+        return None
+    window = seq[lo:hi]
+    score = 0.0
+    for i, base in enumerate(window):
+        if base not in "ACGT":
+            return None
+        score += KOZAK_PWM_LOG_ODDS[i]["ACGT".index(base)]
+    return score
+
+
 CDS = "CDS"
 FIVE_PRIME_UTR = "five_prime_UTR"
 THREE_PRIME_UTR = "three_prime_UTR"
