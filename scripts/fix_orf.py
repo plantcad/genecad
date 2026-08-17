@@ -408,6 +408,65 @@ def find_best_orf(
     return best
 
 
+def first_exon_length(transcript: Transcript, begin: int, stop: int) -> int:
+    """Length, in transcript coordinates, of the CDS's first coding exon.
+
+    The CDS is already known contiguous within the spliced transcript (the
+    caller has already ruled out ``discontiguous_cds``), so the first splice
+    junction after ``begin`` -- the smallest exon offset strictly greater
+    than ``begin`` -- caps the first coding exon, or ``stop`` does if
+    ``begin`` falls in the CDS's last exon.
+    """
+    later_offsets = [o for o in transcript.exon_offsets if o > begin]
+    first_exon_end = min(later_offsets) if later_offsets else stop
+    return min(first_exon_end, stop) - begin
+
+
+def find_best_start_by_kozak(
+    seq: str,
+    cds_begin: int,
+    cds_stop: int,
+    max_shift: int,
+    min_protein_length: int,
+) -> tuple[int, int, float] | None:
+    """Best-Kozak-scoring valid ORF within max_shift of (cds_begin, cds_stop).
+
+    Same candidate space as find_best_orf -- every in-frame ATG within the
+    window, each with its forced downstream in-frame stop -- but ranked by
+    kozak_score() instead of boundary movement. Candidates whose Kozak
+    window falls outside the sequence (kozak_score returns None) are
+    skipped: there is nothing to compare.
+
+    Returns
+    -------
+    tuple[int, int, float] | None
+        (begin, stop, kozak_score) for the winner, or None if no valid
+        candidate in the window has a computable Kozak score.
+    """
+    next_stop = build_next_in_frame_stop(seq)
+    lo = max(0, cds_begin - max_shift)
+    hi = min(len(seq), cds_begin + max_shift + 1)
+
+    best: tuple[int, int, float] | None = None
+    for begin in range(lo, hi):
+        if seq[begin : begin + 3] != START_CODON:
+            continue
+        stop_offset = next_stop[begin]
+        if stop_offset < 0:
+            continue
+        stop = stop_offset + 3
+        if stop - begin < 3 * (min_protein_length + 1):
+            continue
+        if abs(stop - cds_stop) > max_shift:
+            continue
+        score = kozak_score(seq, begin)
+        if score is None:
+            continue
+        if best is None or score > best[2]:
+            best = (begin, stop, score)
+    return best
+
+
 # -------------------------------------------------------------------------------------------------
 # Repair
 # -------------------------------------------------------------------------------------------------

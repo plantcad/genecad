@@ -346,3 +346,99 @@ def test_kozak_score_is_deterministic_and_finite():
     assert score is not None
     assert score == fix_orf.kozak_score(seq, 6)  # deterministic
     assert -1000 < score < 1000  # sane magnitude, not NaN/inf
+
+
+# -------------------------------------------------------------------------------------------------
+# first_exon_length and find_best_start_by_kozak (Task 2)
+# -------------------------------------------------------------------------------------------------
+
+
+def test_first_exon_length_single_exon_cds():
+    """CDS entirely within the transcript's last (only) exon: length is the
+    full CDS span."""
+    transcript = fix_orf.Transcript(
+        mrna=None, children=[], seqid="chr1", strand="+",
+        exon_offsets=[0], exons=[(101, 200)],
+    )
+    assert fix_orf.first_exon_length(transcript, begin=10, stop=90) == 80
+
+
+def test_first_exon_length_cds_spanning_a_splice_junction():
+    """CDS starts in the first exon and continues into the second: length is
+    only the portion up to the first splice junction."""
+    transcript = fix_orf.Transcript(
+        mrna=None, children=[], seqid="chr1", strand="+",
+        exon_offsets=[0, 10], exons=[(101, 110), (151, 200)],
+    )
+    assert fix_orf.first_exon_length(transcript, begin=4, stop=22) == 6
+
+
+@pytest.fixture
+def tiny_kozak_pwm(monkeypatch):
+    """A 2-up/2-down window PWM that strongly prefers C at position -2 and
+    position +2, and is neutral everywhere else -- gives every test in this
+    file a predictable, hand-computable Kozak score."""
+    monkeypatch.setattr(fix_orf, "KOZAK_WINDOW_UPSTREAM", 2)
+    monkeypatch.setattr(fix_orf, "KOZAK_WINDOW_DOWNSTREAM", 2)
+    strong = (-4.0, 4.0, -4.0, -4.0)  # prefers C
+    neutral = (0.0, 0.0, 0.0, 0.0)
+    monkeypatch.setattr(
+        fix_orf,
+        "KOZAK_PWM_LOG_ODDS",
+        (strong, neutral, neutral, neutral, neutral, neutral, strong),
+    )
+    monkeypatch.setattr(fix_orf, "KOZAK_BACKGROUND", (0.25, 0.25, 0.25, 0.25))
+
+
+# Shared 26 nt spliced sequence for find_best_start_by_kozak and
+# repair_transcript tests below. Two in-frame ATGs, 9 nt (3 codons) apart so
+# they share a reading frame and a stop codon:
+#   t[0:4)    leading (no ATG)
+#   t[4:7)    "weak" candidate ATG
+#   t[7:10)   codon (Lys)
+#   t[10:13)  codon (Ala) -- also carries the "strong" candidate's -2/-1 context
+#   t[13:16)  "strong" candidate ATG (also codon 3 of the weak-start ORF)
+#   t[16:19)  codon (Ser/Leu) -- also carries the "strong" candidate's +1/+2 context
+#   t[19:22)  TAA stop, shared by both candidates (same frame)
+#   t[22:26)  trailing (no ATG)
+# "WEAK_STRONG": weak candidate has poor Kozak context, strong candidate has
+# good Kozak context -- this is the sequence used by the "should repair" test.
+WEAK_STRONG_SEQ = "CCAAATGAAAGCGATGTCATAACCCC"
+# "STRONG_WEAK": flip which candidate has the good context -- the original
+# (short) start is well-supported and must be left alone.
+STRONG_WEAK_SEQ = "CCCAATGACAGAGATGTTATAACCCC"
+# "WEAK_WEAK": neither candidate has good context -- nothing to switch to,
+# should be flagged instead.
+WEAK_WEAK_SEQ = "CCAAATGAAAGAGATGTTATAACCCC"
+
+
+def test_find_best_start_by_kozak_prefers_the_better_scoring_candidate(tiny_kozak_pwm):
+    result = fix_orf.find_best_start_by_kozak(
+        WEAK_STRONG_SEQ, cds_begin=4, cds_stop=22, max_shift=300, min_protein_length=1
+    )
+    assert result is not None
+    begin, stop, score = result
+    assert (begin, stop) == (13, 22)
+    assert score == pytest.approx(8.0)
+
+
+def test_find_best_start_by_kozak_can_return_the_original_when_it_scores_best(tiny_kozak_pwm):
+    result = fix_orf.find_best_start_by_kozak(
+        STRONG_WEAK_SEQ, cds_begin=4, cds_stop=22, max_shift=300, min_protein_length=1
+    )
+    assert result is not None
+    begin, stop, score = result
+    assert (begin, stop) == (4, 22)
+    assert score == pytest.approx(8.0)
+
+
+def test_find_best_start_by_kozak_returns_none_outside_the_shift_window(tiny_kozak_pwm):
+    """The strong candidate is 9 nt from cds_begin; a 3 nt window excludes it,
+    so only the (weak) original is a valid candidate."""
+    result = fix_orf.find_best_start_by_kozak(
+        WEAK_STRONG_SEQ, cds_begin=4, cds_stop=22, max_shift=3, min_protein_length=1
+    )
+    assert result is not None
+    begin, stop, score = result
+    assert (begin, stop) == (4, 22)
+    assert score == pytest.approx(-8.0)
