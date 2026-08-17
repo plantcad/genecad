@@ -536,6 +536,10 @@ def repair_transcript(
     max_shift: int,
     min_protein_length: int,
     require_canonical: bool,
+    fix_weak_starts: bool,
+    weak_start_threshold: int,
+    kozak_margin: float,
+    weak_kozak_threshold: float,
 ) -> tuple[Result, list[Record] | None]:
     """Evaluate and, if needed and possible, repair one transcript's CDS."""
     cds_records = [r for r in transcript.children if r.type == CDS]
@@ -575,6 +579,37 @@ def repair_transcript(
     ambiguous = "N" in seq[begin:stop]
 
     if not ambiguous and is_complete_orf(seq, begin, stop, min_protein_length):
+        if (
+            fix_weak_starts
+            and first_exon_length(transcript, begin, stop) < weak_start_threshold
+        ):
+            original_score = kozak_score(seq, begin)
+            alt = find_best_start_by_kozak(
+                seq, begin, stop, max_shift, min_protein_length
+            )
+            if (
+                alt is not None
+                and original_score is not None
+                and alt[2] > original_score + kozak_margin
+            ):
+                new_begin, new_stop, _ = alt
+                records = rebuild_children(
+                    transcript, new_begin, new_stop, transcript.children
+                )
+                return (
+                    Result(
+                        "repaired",
+                        issue="weak_start_kozak",
+                        shift5=new_begin - begin,
+                        shift3=new_stop - stop,
+                    ),
+                    records,
+                )
+            candidate_scores = [
+                s for s in (original_score, alt[2] if alt else None) if s is not None
+            ]
+            if candidate_scores and max(candidate_scores) < weak_kozak_threshold:
+                return Result("complete", issue="weak_kozak_support"), None
         return Result("complete"), None
 
     if "N" in seq:
@@ -665,6 +700,10 @@ def fix_orf(
     min_protein_length: int,
     require_canonical: bool,
     report_path: str | None,
+    fix_weak_starts: bool = True,
+    weak_start_threshold: int = 9,
+    kozak_margin: float = 1.0,
+    weak_kozak_threshold: float = 0.0,
 ) -> Counter:
     logger.info(f"Reading GFF {input_gff}")
     header, records = read_gff(input_gff)
@@ -710,6 +749,10 @@ def fix_orf(
                 max_shift=max_shift,
                 min_protein_length=min_protein_length,
                 require_canonical=require_canonical,
+                fix_weak_starts=fix_weak_starts,
+                weak_start_threshold=weak_start_threshold,
+                kozak_margin=kozak_margin,
+                weak_kozak_threshold=weak_kozak_threshold,
             )
             mrna_id = transcript.mrna.id or ""
             results[mrna_id] = result
@@ -849,6 +892,35 @@ def main() -> None:
         "Off by default: an ORF built on untrustworthy splice calls is not trustworthy.",
     )
     parser.add_argument(
+        "--no-fix-weak-starts",
+        dest="fix_weak_starts",
+        action="store_false",
+        help="Disable Kozak-context re-ranking of already-valid but "
+        "suspiciously short first exons. On by default.",
+    )
+    parser.add_argument(
+        "--weak-start-threshold",
+        type=int,
+        default=9,
+        help="First coding exon length (nt) below which alternative start "
+        "codons are considered, when --no-fix-weak-starts is not set.",
+    )
+    parser.add_argument(
+        "--kozak-margin",
+        type=float,
+        default=1.0,
+        help="Minimum Kozak log2-odds advantage an alternative start codon "
+        "must have over the original to trigger a switch.",
+    )
+    parser.add_argument(
+        "--weak-kozak-threshold",
+        type=float,
+        default=0.0,
+        help="Kozak log2-odds score below which even the best candidate "
+        "start is flagged (orf_issue=weak_kozak_support) rather than kept "
+        "silently.",
+    )
+    parser.add_argument(
         "--report",
         default=None,
         help="Optional TSV path for per-transcript status output",
@@ -863,6 +935,10 @@ def main() -> None:
         min_protein_length=args.min_protein_length,
         require_canonical=not args.allow_noncanonical_introns,
         report_path=args.report,
+        fix_weak_starts=args.fix_weak_starts,
+        weak_start_threshold=args.weak_start_threshold,
+        kozak_margin=args.kozak_margin,
+        weak_kozak_threshold=args.weak_kozak_threshold,
     )
 
 

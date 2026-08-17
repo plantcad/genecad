@@ -100,6 +100,10 @@ def run(tmp_path, blocks, strand, intron=CANONICAL_INTRON, **kwargs):
         "min_protein_length": 10,
         "require_canonical": True,
         "report_path": None,
+        "fix_weak_starts": True,
+        "weak_start_threshold": 9,
+        "kozak_margin": 1.0,
+        "weak_kozak_threshold": 0.0,
     }
     options.update(kwargs)
     stats = fix_orf.fix_orf(
@@ -357,8 +361,12 @@ def test_first_exon_length_single_exon_cds():
     """CDS entirely within the transcript's last (only) exon: length is the
     full CDS span."""
     transcript = fix_orf.Transcript(
-        mrna=None, children=[], seqid="chr1", strand="+",
-        exon_offsets=[0], exons=[(101, 200)],
+        mrna=None,
+        children=[],
+        seqid="chr1",
+        strand="+",
+        exon_offsets=[0],
+        exons=[(101, 200)],
     )
     assert fix_orf.first_exon_length(transcript, begin=10, stop=90) == 80
 
@@ -367,8 +375,12 @@ def test_first_exon_length_cds_spanning_a_splice_junction():
     """CDS starts in the first exon and continues into the second: length is
     only the portion up to the first splice junction."""
     transcript = fix_orf.Transcript(
-        mrna=None, children=[], seqid="chr1", strand="+",
-        exon_offsets=[0, 10], exons=[(101, 110), (151, 200)],
+        mrna=None,
+        children=[],
+        seqid="chr1",
+        strand="+",
+        exon_offsets=[0, 10],
+        exons=[(101, 110), (151, 200)],
     )
     assert fix_orf.first_exon_length(transcript, begin=4, stop=22) == 6
 
@@ -422,7 +434,9 @@ def test_find_best_start_by_kozak_prefers_the_better_scoring_candidate(tiny_koza
     assert score == pytest.approx(8.0)
 
 
-def test_find_best_start_by_kozak_can_return_the_original_when_it_scores_best(tiny_kozak_pwm):
+def test_find_best_start_by_kozak_can_return_the_original_when_it_scores_best(
+    tiny_kozak_pwm,
+):
     result = fix_orf.find_best_start_by_kozak(
         STRONG_WEAK_SEQ, cds_begin=4, cds_stop=22, max_shift=300, min_protein_length=1
     )
@@ -442,3 +456,153 @@ def test_find_best_start_by_kozak_returns_none_outside_the_shift_window(tiny_koz
     begin, stop, score = result
     assert (begin, stop) == (4, 22)
     assert score == pytest.approx(-8.0)
+
+
+# -------------------------------------------------------------------------------------------------
+# repair_transcript weak-start end-to-end wiring (Task 3)
+# -------------------------------------------------------------------------------------------------
+
+# Genomic layout for the weak-start tests below (plus strand):
+#   FLANK(100) | exon1 (101-110, 10nt) | intron (111-150, 40nt canonical) |
+#   exon2 (151-166, 16nt) | FLANK(100)
+# Spliced transcript = exon1 + exon2 = the 26 nt sequences from Task 2.
+WEAK_START_INTRON = "GT" + "T" * 36 + "AG"  # 40 nt, canonical
+
+# Original (input) annotation: CDS = genomic (105,110)+(151,162), a 6 nt
+# first coding exon -- already a *complete*, valid ORF (matches
+# WEAK_STRONG_SEQ / STRONG_WEAK_SEQ / WEAK_WEAK_SEQ's t[4:22) ORF), so it
+# will hit the new is_complete_orf branch rather than the existing repair
+# path.
+WEAK_START_BLOCKS = [
+    (101, 104, "five_prime_UTR", "."),
+    (105, 110, "CDS", "0"),
+    (151, 162, "CDS", "0"),
+    (163, 166, "three_prime_UTR", "."),
+]
+
+
+def build_weak_start_chromosome(spliced_seq: str) -> str:
+    exon1, exon2 = spliced_seq[:10], spliced_seq[10:]
+    locus = exon1 + WEAK_START_INTRON + exon2
+    assert len(locus) == 10 + 40 + 16
+    return FLANK + locus + FLANK
+
+
+def run_weak_start(tmp_path, spliced_seq, **kwargs):
+    gff = tmp_path / "in.gff"
+    fasta = tmp_path / "genome.fa"
+    out = tmp_path / "out.gff"
+    gff.write_text(build_gff(WEAK_START_BLOCKS, "+"))
+    fasta.write_text(">chr1\n" + build_weak_start_chromosome(spliced_seq) + "\n")
+
+    options: dict[str, object] = {
+        "max_shift": 300,
+        "min_protein_length": 1,
+        "require_canonical": True,
+        "report_path": None,
+        "fix_weak_starts": True,
+        "weak_start_threshold": 9,
+        "kozak_margin": 1.0,
+        "weak_kozak_threshold": 0.0,
+    }
+    options.update(kwargs)
+    stats = fix_orf.fix_orf(
+        input_gff=str(gff),
+        input_fasta=str(fasta),
+        output_gff=str(out),
+        **options,  # pyrefly: ignore[bad-argument-type]
+    )
+    _, records = fix_orf.read_gff(str(out))
+    return stats, records
+
+
+def test_weak_start_with_a_better_candidate_is_repaired(tiny_kozak_pwm, tmp_path):
+    stats, records = run_weak_start(tmp_path, WEAK_STRONG_SEQ)
+
+    assert stats["repaired"] == 1
+    assert exonic(records) == sorted(
+        [
+            (101, 110, "five_prime_UTR", "."),
+            (151, 153, "five_prime_UTR", "."),
+            (154, 162, "CDS", "0"),
+            (163, 166, "three_prime_UTR", "."),
+        ]
+    )
+    attributes = mrna_attributes(records)
+    assert attributes["orf_status"] == "repaired"
+    assert attributes["orf_issue"] == "weak_start_kozak"
+
+
+def test_genuinely_well_supported_short_first_exon_is_left_alone(
+    tiny_kozak_pwm, tmp_path
+):
+    stats, records = run_weak_start(tmp_path, STRONG_WEAK_SEQ)
+
+    assert stats["complete"] == 1
+    assert stats["repaired"] == 0
+    assert exonic(records) == sorted(WEAK_START_BLOCKS)
+    attributes = mrna_attributes(records)
+    assert attributes["orf_status"] == "complete"
+    assert "orf_issue" not in attributes
+
+
+def test_weak_start_with_no_good_candidate_is_flagged_not_repaired(
+    tiny_kozak_pwm, tmp_path
+):
+    stats, records = run_weak_start(tmp_path, WEAK_WEAK_SEQ)
+
+    assert stats["complete"] == 1
+    assert stats["repaired"] == 0
+    assert exonic(records) == sorted(WEAK_START_BLOCKS)
+    attributes = mrna_attributes(records)
+    assert attributes["orf_status"] == "complete"
+    assert attributes["orf_issue"] == "weak_kozak_support"
+
+
+def test_fix_weak_starts_can_be_opted_out(tiny_kozak_pwm, tmp_path):
+    """The same sequence that gets repaired by default must be left
+    completely alone with --no-fix-weak-starts (fix_weak_starts=False)."""
+    stats, records = run_weak_start(tmp_path, WEAK_STRONG_SEQ, fix_weak_starts=False)
+
+    assert stats["repaired"] == 0
+    assert stats["complete"] == 1
+    assert exonic(records) == sorted(WEAK_START_BLOCKS)
+    assert "orf_issue" not in mrna_attributes(records)
+
+
+def test_weak_start_search_does_not_trigger_for_a_long_first_exon(
+    tiny_kozak_pwm, tmp_path
+):
+    """A transcript whose first exon is already >= weak_start_threshold must
+    not be touched, even with a weak Kozak score -- this only reuses
+    WEAK_STRONG_SEQ's sequence bytes but treats the whole thing as single
+    long exon by not splitting it across a splice junction, so
+    first_exon_length is the full 18 nt CDS length, well above the
+    threshold."""
+    gff = tmp_path / "in.gff"
+    fasta = tmp_path / "genome.fa"
+    out = tmp_path / "out.gff"
+    # Single-exon layout: the whole spliced sequence in one genomic block.
+    blocks = [
+        (101, 104, "five_prime_UTR", "."),
+        (105, 122, "CDS", "0"),
+        (123, 126, "three_prime_UTR", "."),
+    ]
+    gff.write_text(build_gff(blocks, "+"))
+    fasta.write_text(">chr1\n" + FLANK + WEAK_STRONG_SEQ + FLANK + "\n")
+    stats = fix_orf.fix_orf(
+        input_gff=str(gff),
+        input_fasta=str(fasta),
+        output_gff=str(out),
+        max_shift=300,
+        min_protein_length=1,
+        require_canonical=True,
+        report_path=None,
+        fix_weak_starts=True,
+        weak_start_threshold=9,
+        kozak_margin=1.0,
+        weak_kozak_threshold=0.0,
+    )
+    assert stats["repaired"] == 0
+    _, records = fix_orf.read_gff(str(out))
+    assert exonic(records) == sorted(blocks)
