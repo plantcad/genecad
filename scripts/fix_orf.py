@@ -26,6 +26,15 @@ The repair is deliberately constrained so that it cannot invent gene structure:
     (minimum total boundary movement), and movement is capped by --max-shift.
     Truncating a long CDS down to a short ORF is therefore rejected: it would
     require a large 3' shift.
+6.  Even when the predicted CDS is already a valid ORF, if its first exon
+    is shorter than --weak-start-threshold, alternative start codons within
+    the same already-predicted exonic sequence are considered and the one
+    with the strongest Kozak-context support is preferred, provided it
+    beats the original by --kozak-margin. This still only relabels
+    predicted exonic sequence (rule 2 still applies) -- it never invents
+    new gene structure. Transcripts whose best candidate is still weak
+    (--weak-kozak-threshold) are flagged (orf_issue=weak_kozak_support)
+    rather than forced. Disable with --no-fix-weak-starts.
 
 Transcripts that cannot be repaired under these rules are *not* forced into an
 ORF.  They are passed through unchanged and flagged (partial=true, orf_issue=…,
@@ -702,8 +711,8 @@ def fix_orf(
     report_path: str | None,
     fix_weak_starts: bool = True,
     weak_start_threshold: int = 9,
-    kozak_margin: float = 1.0,
-    weak_kozak_threshold: float = 0.0,
+    kozak_margin: float = 0.5,
+    weak_kozak_threshold: float = 2.0,
 ) -> Counter:
     logger.info(f"Reading GFF {input_gff}")
     header, records = read_gff(input_gff)
@@ -908,14 +917,14 @@ def main() -> None:
     parser.add_argument(
         "--kozak-margin",
         type=float,
-        default=1.0,
+        default=0.5,
         help="Minimum Kozak log2-odds advantage an alternative start codon "
         "must have over the original to trigger a switch.",
     )
     parser.add_argument(
         "--weak-kozak-threshold",
         type=float,
-        default=0.0,
+        default=2.0,
         help="Kozak log2-odds score below which even the best candidate "
         "start is flagged (orf_issue=weak_kozak_support) rather than kept "
         "silently.",
