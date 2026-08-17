@@ -102,8 +102,8 @@ def run(tmp_path, blocks, strand, intron=CANONICAL_INTRON, **kwargs):
         "report_path": None,
         "fix_weak_starts": True,
         "weak_start_threshold": 9,
-        "kozak_margin": 1.0,
-        "weak_kozak_threshold": 0.0,
+        "kozak_margin": 0.5,
+        "weak_kozak_threshold": 5.0,
     }
     options.update(kwargs)
     stats = fix_orf.fix_orf(
@@ -458,6 +458,120 @@ def test_find_best_start_by_kozak_returns_none_outside_the_shift_window(tiny_koz
     assert score == pytest.approx(-8.0)
 
 
+def test_find_best_start_by_kozak_never_returns_an_out_of_frame_candidate(
+    tiny_kozak_pwm,
+):
+    """Regression for the frame-changing switch bug: an out-of-frame ATG with
+    a strong Kozak context must lose to an in-frame ATG with an equally
+    strong context, even though the out-of-frame candidate is found first
+    and would win under a pure score comparison.
+
+    Layout (offsets in a 45 nt sequence, all non-codon positions filled with
+    neutral 'C'):
+      offset 6   cds_begin's own ATG, weak context (non-C at -2/+2) -> -8.0
+      offset 13  out-of-frame ATG (13 - 6 = 7, not a multiple of 3), strong
+                 context (default 'C' filler at -2/+2) -> +8.0, with its own
+                 downstream in-frame (class 1 mod 3) TAA stop at offset 22
+      offset 30  in-frame ATG (30 - 6 = 24, a multiple of 3), strong context
+                 -> +8.0, sharing cds_begin's downstream in-frame (class 0
+                 mod 3) TAA stop at offset 39
+    Without the frame filter, offset 13 is encountered first during the scan
+    and ties offset 30's score, so it (wrongly) wins.  With the filter,
+    offset 13 is skipped entirely and offset 30 is the correct winner.
+    """
+    seq = list("C" * 45)
+
+    def set_codon(i: int, codon: str) -> None:
+        seq[i : i + 3] = list(codon)
+
+    cds_begin = 6
+    set_codon(cds_begin, "ATG")
+    seq[cds_begin - 2] = "A"  # weak: non-C at -2
+    seq[cds_begin + 4] = "A"  # weak: non-C at +2
+
+    out_of_frame = cds_begin + 7  # 13, not a multiple of 3 from cds_begin
+    set_codon(out_of_frame, "ATG")
+
+    in_frame_alt = cds_begin + 24  # 30, a multiple of 3 from cds_begin
+    set_codon(in_frame_alt, "ATG")
+
+    set_codon(22, "TAA")  # first in-frame stop for out_of_frame's own class
+    set_codon(39, "TAA")  # first in-frame stop for cds_begin/in_frame_alt's class
+
+    seq = "".join(seq)
+
+    result = fix_orf.find_best_start_by_kozak(
+        seq, cds_begin=cds_begin, cds_stop=42, max_shift=300, min_protein_length=1
+    )
+
+    assert result is not None
+    begin, stop, score = result
+    assert (begin - cds_begin) % 3 == 0, (
+        f"find_best_start_by_kozak returned an out-of-frame candidate: "
+        f"begin={begin}, cds_begin={cds_begin}"
+    )
+    assert (begin, stop) == (in_frame_alt, 42)
+    assert score == pytest.approx(8.0)
+    # The frame-preserving property this fix guarantees: a same-frame switch
+    # can never move the stop codon.
+    assert stop == 42
+
+
+def test_find_best_start_by_kozak_rejects_a_disjoint_upstream_orf(tiny_kozak_pwm):
+    """Regression, found on real Oropetium thomaeum production data: a
+    same-frame ATG is not automatically part of the *same* ORF. An ATG
+    upstream of cds_begin, still inside the exonic (e.g. 5' UTR) sequence,
+    can have its own short in-frame stop before ever reaching cds_begin --
+    a disjoint little ORF (a real uORF, or just incidental sequence) that
+    happens to score well on Kozak context alone, since kozak_score() only
+    looks at the +/-6 nt immediately around the ATG. Switching to it would
+    silently replace the gene's actual protein with this unrelated
+    fragment. find_best_start_by_kozak must reject any candidate whose own
+    forced stop is not cds_stop itself, even when it shares cds_begin's
+    reading frame and out-scores the real start.
+
+    Layout (40 nt, 'C' filler elsewhere):
+      offset 8   disjoint upstream ATG, strong context (default 'C' filler
+                 at -2/+2) -> +8.0, but its own first in-frame stop is at
+                 offset 14 (TAA) -- 9 nt later, nowhere near cds_stop.
+      offset 20  cds_begin, weak context (non-C at -2/+2) -> -8.0, whose
+                 real forced stop is the TAA at offset 32 (cds_stop = 35).
+    Offset 8 is in cds_begin's reading frame (20 - 8 = 12) and scores
+    higher, so without the stop-preserving filter it would wrongly win.
+    """
+    seq = list("C" * 40)
+
+    def set_codon(i: int, codon: str) -> None:
+        seq[i : i + 3] = list(codon)
+
+    set_codon(8, "ATG")  # disjoint upstream ATG, strong context
+    set_codon(14, "TAA")  # its own forced stop -- not cds_stop
+
+    cds_begin = 20
+    set_codon(cds_begin, "ATG")
+    seq[cds_begin - 2] = "A"  # weak: non-C at -2
+    seq[cds_begin + 4] = "A"  # weak: non-C at +2
+    set_codon(32, "TAA")  # cds_begin's real forced stop
+    cds_stop = 35
+
+    seq = "".join(seq)
+
+    result = fix_orf.find_best_start_by_kozak(
+        seq, cds_begin=cds_begin, cds_stop=cds_stop, max_shift=300, min_protein_length=1
+    )
+
+    assert result is not None
+    begin, stop, score = result
+    assert stop == cds_stop, (
+        f"find_best_start_by_kozak returned a candidate whose forced stop "
+        f"({stop}) is not the original cds_stop ({cds_stop}) -- it switched "
+        f"to a disjoint ORF instead of a different start for the same one."
+    )
+    # With the disjoint candidate correctly excluded, only the (weak)
+    # original remains a valid candidate.
+    assert (begin, stop, score) == (cds_begin, cds_stop, pytest.approx(-8.0))
+
+
 # -------------------------------------------------------------------------------------------------
 # repair_transcript weak-start end-to-end wiring (Task 3)
 # -------------------------------------------------------------------------------------------------
@@ -467,6 +581,7 @@ def test_find_best_start_by_kozak_returns_none_outside_the_shift_window(tiny_koz
 #   exon2 (151-166, 16nt) | FLANK(100)
 # Spliced transcript = exon1 + exon2 = the 26 nt sequences from Task 2.
 WEAK_START_INTRON = "GT" + "T" * 36 + "AG"  # 40 nt, canonical
+WEAK_START_NONCANONICAL_INTRON = "AA" + "T" * 36 + "CC"  # 40 nt, non-canonical
 
 # Original (input) annotation: CDS = genomic (105,110)+(151,162), a 6 nt
 # first coding exon -- already a *complete*, valid ORF (matches
@@ -481,19 +596,23 @@ WEAK_START_BLOCKS = [
 ]
 
 
-def build_weak_start_chromosome(spliced_seq: str) -> str:
+def build_weak_start_chromosome(
+    spliced_seq: str, intron: str = WEAK_START_INTRON
+) -> str:
     exon1, exon2 = spliced_seq[:10], spliced_seq[10:]
-    locus = exon1 + WEAK_START_INTRON + exon2
+    locus = exon1 + intron + exon2
     assert len(locus) == 10 + 40 + 16
     return FLANK + locus + FLANK
 
 
-def run_weak_start(tmp_path, spliced_seq, **kwargs):
+def run_weak_start(tmp_path, spliced_seq, intron=WEAK_START_INTRON, **kwargs):
     gff = tmp_path / "in.gff"
     fasta = tmp_path / "genome.fa"
     out = tmp_path / "out.gff"
     gff.write_text(build_gff(WEAK_START_BLOCKS, "+"))
-    fasta.write_text(">chr1\n" + build_weak_start_chromosome(spliced_seq) + "\n")
+    fasta.write_text(
+        ">chr1\n" + build_weak_start_chromosome(spliced_seq, intron) + "\n"
+    )
 
     options: dict[str, object] = {
         "max_shift": 300,
@@ -502,8 +621,8 @@ def run_weak_start(tmp_path, spliced_seq, **kwargs):
         "report_path": None,
         "fix_weak_starts": True,
         "weak_start_threshold": 9,
-        "kozak_margin": 1.0,
-        "weak_kozak_threshold": 0.0,
+        "kozak_margin": 0.5,
+        "weak_kozak_threshold": 5.0,
     }
     options.update(kwargs)
     stats = fix_orf.fix_orf(
@@ -518,6 +637,54 @@ def run_weak_start(tmp_path, spliced_seq, **kwargs):
 
 def test_weak_start_with_a_better_candidate_is_repaired(tiny_kozak_pwm, tmp_path):
     stats, records = run_weak_start(tmp_path, WEAK_STRONG_SEQ)
+
+    assert stats["repaired"] == 1
+    assert exonic(records) == sorted(
+        [
+            (101, 110, "five_prime_UTR", "."),
+            (151, 153, "five_prime_UTR", "."),
+            (154, 162, "CDS", "0"),
+            (163, 166, "three_prime_UTR", "."),
+        ]
+    )
+    attributes = mrna_attributes(records)
+    assert attributes["orf_status"] == "repaired"
+    assert attributes["orf_issue"] == "weak_start_kozak"
+
+
+def test_weak_start_noncanonical_intron_blocks_switch_by_default(
+    tiny_kozak_pwm, tmp_path
+):
+    """The same sequence/candidate that gets switched in
+    test_weak_start_with_a_better_candidate_is_repaired must NOT be switched
+    when the transcript's intron is non-canonical: an active repair needs
+    trustworthy splice calls, same as the pre-existing invalid-ORF repair
+    path. The transcript is left as its already-valid original ORF."""
+    stats, records = run_weak_start(
+        tmp_path, WEAK_STRONG_SEQ, intron=WEAK_START_NONCANONICAL_INTRON
+    )
+
+    assert stats["repaired"] == 0
+    assert stats["complete"] == 1
+    assert exonic(records) == sorted(WEAK_START_BLOCKS)
+    attributes = mrna_attributes(records)
+    assert attributes["orf_status"] == "complete"
+    assert "orf_issue" not in attributes
+
+
+def test_weak_start_noncanonical_intron_switch_can_be_opted_into(
+    tiny_kozak_pwm, tmp_path
+):
+    """The same non-canonical-intron transcript IS switched when
+    require_canonical=False, mirroring
+    test_noncanonical_introns_can_be_opted_into for the existing repair
+    path."""
+    stats, records = run_weak_start(
+        tmp_path,
+        WEAK_STRONG_SEQ,
+        intron=WEAK_START_NONCANONICAL_INTRON,
+        require_canonical=False,
+    )
 
     assert stats["repaired"] == 1
     assert exonic(records) == sorted(
