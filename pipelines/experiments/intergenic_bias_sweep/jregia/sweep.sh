@@ -8,10 +8,12 @@ set -euo pipefail
 #   - gffcompare must be on PATH
 #
 # Usage:
-#   bash pipelines/experiments/intergenic_bias_sweep/sweep.sh
+#   OUTPUT_DIR=... REF_GFF=... INPUT_FASTA=... \
+#   bash pipelines/experiments/intergenic_bias_sweep/jregia/sweep.sh
 
 OUTPUT_DIR="${OUTPUT_DIR:?OUTPUT_DIR must be set}"
 REF_GFF="${REF_GFF:?REF_GFF must be set}"
+INPUT_FASTA="${INPUT_FASTA:?INPUT_FASTA must be set (the chr1.fa used for prediction; enables frame-aware decoding)}"
 GFFCOMPARE="${GFFCOMPARE:-$WORK/repos/misc/gffcompare/gffcompare}"
 REQUIRE_UTRS="${REQUIRE_UTRS:-yes}"
 
@@ -37,42 +39,35 @@ for BIAS in $BIAS_VALUES; do
     SWEEP_DIR="$PIPELINE_DIR/sweep_bias_${BIAS}"
     mkdir -p "$SWEEP_DIR"
 
-    # Step 1: Detect intervals
-    python scripts/predict.py detect_intervals \
-        --input-dir "$PREDICTIONS_ZARR" \
-        --output "$SWEEP_DIR/intervals.zarr" \
-        --decoding-methods "direct,viterbi" \
-        --remove-incomplete-features yes \
+    # Step 1: Detect intervals (frame-aware, since --input-fasta is given).
+    # Incomplete features are removed by default (pass --keep-incomplete-features to keep them).
+    python scripts/detect_intervals.py \
+        -i "$PREDICTIONS_ZARR" \
+        -o "$SWEEP_DIR/intervals.zarr" \
+        --domain plant \
+        --input-fasta "$INPUT_FASTA" \
         --intergenic-bias "$BIAS"
 
-    # Step 2: Export raw GFF
-    python scripts/predict.py export_gff \
-        --input "$SWEEP_DIR/intervals.zarr" \
-        --output "$SWEEP_DIR/predictions__raw.gff" \
-        --decoding-method viterbi \
-        --min-transcript-length 3 \
-        --strip-introns yes
+    # Step 2: Export raw GFF (introns are stripped by default)
+    python scripts/export_gff.py \
+        -i "$SWEEP_DIR/intervals.zarr" \
+        -o "$SWEEP_DIR/predictions__raw.gff" \
+        --min-transcript-length 3
 
-    # Step 3: Filter small features
-    python scripts/gff.py filter_to_min_feature_length \
-        --input "$SWEEP_DIR/predictions__raw.gff" \
-        --output "$SWEEP_DIR/predictions__feat_len_2.gff" \
+    REQUIRE_UTRS_FLAG=()
+    [ "$REQUIRE_UTRS" = "yes" ] && REQUIRE_UTRS_FLAG=(--require-utrs)
+
+    # Step 3: Filter small features, short genes, and (optionally) require
+    # UTRs -- all three filters run in one pass, in that fixed order.
+    python scripts/filter_raw_gff.py \
+        -i "$SWEEP_DIR/predictions__raw.gff" \
+        -o "$SWEEP_DIR/predictions.gff" \
         --feature-types "five_prime_UTR,three_prime_UTR,CDS" \
-        --min-length 2
+        --min-feature-length 2 \
+        --min-gene-length 30 \
+        "${REQUIRE_UTRS_FLAG[@]}"
 
-    # Step 4: Filter short genes
-    python scripts/gff.py filter_to_min_gene_length \
-        --input "$SWEEP_DIR/predictions__feat_len_2.gff" \
-        --output "$SWEEP_DIR/predictions__gene_len_30.gff" \
-        --min-length 30
-
-    # Step 5: Filter to valid genes
-    python scripts/gff.py filter_to_valid_genes \
-        --input "$SWEEP_DIR/predictions__gene_len_30.gff" \
-        --output "$SWEEP_DIR/predictions.gff" \
-        --require-utrs "$REQUIRE_UTRS"
-
-    # Step 6: Run gffcompare
+    # Step 4: Run gffcompare
     "$GFFCOMPARE" \
         -r "$REF_GFF" \
         -C -o "$SWEEP_DIR/gffcompare" \
