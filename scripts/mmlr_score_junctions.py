@@ -1,3 +1,12 @@
+"""Step 2 of MMLR: score each junction from mmlr_prepare_junctions.py with a
+PlantCAD/PlantCAD2 masked-language model.
+
+For every junction, a window of sequence centered on it is fed to the model
+with the motif bases masked out; the Masked Motif score is the mean predicted
+probability the model assigns to the *actual* (reference) base at each masked
+position. Requires a CUDA GPU. See docs/masked_motif_logistic_regression.md.
+"""
+
 import argparse
 
 import numpy as np
@@ -25,6 +34,10 @@ class ScoreList:
 
 
 def has_canonical_tag(tags) -> bool:
+    """Check whether a GFF feature's qualifier dict marks it canonical, under
+    either of the two labeling schemes accepted by --tag-canonical:
+    `canonical_transcript=1` or `tag=Ensembl_canonical`.
+    """
     if "canonical_transcript" in tags.keys():
         return "1" in tags["canonical_transcript"]
     elif "tag" in tags.keys():
@@ -44,6 +57,9 @@ def strand_string(x):
 
 
 def to_junc(x):
+    """Inverse of Junc.__str__: parse the junction-type string written to the
+    Step 1 output table back into a Junc enum member.
+    """
     if x == "TIS":
         return Junc.TIS
     elif x == "TTS":
@@ -57,6 +73,15 @@ def to_junc(x):
 
 
 class JunctionDataset(Dataset):
+    """Produces one masked, tokenized sequence window per junction row.
+
+    Each window is `window_size` bases centered on the junction's `pos`
+    (`self.token` is the center index), padded with "N" at chromosome edges.
+    The 2-3 bases making up the motif (start/stop codon, or the first/last two
+    intron bases of a splice site) are replaced with the model's mask token so
+    the model must predict them from context alone.
+    """
+
     def __init__(self, fastas, gff, chrom_list, df, tokenizer, window_size):
         self.fastas = fastas  # dict of seq records
         self.chrom_list = chrom_list
@@ -75,6 +100,8 @@ class JunctionDataset(Dataset):
         chrom = self.chrom_list[self.df["chrom"].iloc[idx]]
 
         if start < 0:
+            # Junction is near the start of the chromosome: shift the window
+            # right and left-pad with N so it still spans window_size bases.
             sequence = str(self.fastas[chrom][0:end].seq.upper()).rjust(
                 self.window_size, "N"
             )
@@ -83,6 +110,7 @@ class JunctionDataset(Dataset):
             if end > chrom_end:
                 end = chrom_end
 
+            # Right-pad with N if the window runs past the chromosome end.
             sequence = str(self.fastas[chrom][start:end].seq.upper()).ljust(
                 self.window_size, "N"
             )
@@ -107,6 +135,10 @@ class JunctionDataset(Dataset):
 
         mask_tokens = np.zeros(self.window_size, dtype=bool)
 
+        # `pos`/self.token is the first base of the motif in strand orientation
+        # (see mmlr_prepare_junctions.get_junctions), so which offsets get
+        # masked - and whether TIS/TTS or Donor/Acceptor is used - depends on
+        # strand: a plus-strand TIS is a minus-strand TTS's mirror image, etc.
         if (strand == 1 and junction == Junc.TIS) or (
             strand == -1 and junction == Junc.TTS
         ):
@@ -139,6 +171,8 @@ class JunctionDataset(Dataset):
 
 
 def get_longest_transcripts(gff, out_df):
+    """Flag, per gene, the transcript with the longest total CDS length (used
+    for the `longest` output column)."""
     # identify transcript with longest CDS
     longest_transcripts = [False] * out_df.shape[0]
 
@@ -338,17 +372,26 @@ def main():
                 batch["sequence"][prob_idx][token_idx] for token_idx in masked_indices
             ]
             ref_index = [nts.index(x) if x in nts else -1 for x in ref_alleles]
+            # Non-ACGT reference bases (e.g. "N") have no matching model
+            # probability, so they're scored as 0 rather than looked up.
             ref_probs = [
                 probs[prob_idx, mask_idx, ref_idx] if ref_idx >= 0 else 0.0
                 for mask_idx, ref_idx in zip(masked_indices, ref_index)
             ]
 
+            # Masked Motif score: mean predicted probability of the *observed*
+            # base at each masked position in the motif.
             avg_ref_prob = np.mean(ref_probs)
 
             idx = int(names[prob_idx])
 
             jtype = df["junction"].iloc[idx]
 
+            # A junction row's `mRNA` column is either a single sub_features
+            # index, or (after merge_entries in Step 1) a comma-separated list
+            # of indices shared by multiple transcripts - resolve to mRNA IDs
+            # either way so the score below is applied to every transcript
+            # that shares this junction.
             if type(df["mRNA"].iloc[idx]) is not str:
                 mRNA_names = [
                     gff[df["chrom"].iloc[idx]]
@@ -373,6 +416,8 @@ def main():
                     tts[out_df.index.get_loc(mRNA_name)] = avg_ref_prob
 
                 elif jtype == Junc.DONOR:
+                    # A transcript may have multiple donor/acceptor sites, so
+                    # scores accumulate in a ScoreList rather than overwriting.
                     out_df["donor"].loc[mRNA_name].scores.append(avg_ref_prob)
                 else:
                     out_df["acceptor"].loc[mRNA_name].scores.append(avg_ref_prob)

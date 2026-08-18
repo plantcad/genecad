@@ -1,3 +1,15 @@
+"""Step 3 (optional) of MMLR: fit the logistic regression classifier that turns
+per-junction Masked Motif scores into a single "is this a real protein-coding
+gene" probability.
+
+Uses positive-unlabeled (PU) learning because the `validated` column only
+marks a stringent, experimentally-supported subset of true genes as positive;
+everything else is unlabeled (could be a real gene or a mis-annotation), not a
+confirmed negative. Two separate models are trained - multi-exon transcripts
+use TIS/TTS/donor/acceptor scores, single-exon transcripts (no splice sites)
+use only TIS/TTS. See docs/masked_motif_logistic_regression.md.
+"""
+
 import argparse
 import json
 
@@ -12,12 +24,31 @@ logging.basicConfig()
 
 
 def to_average(x):
+    """Collapse a transcript's comma-separated per-site donor/acceptor scores
+    (one per intron) into a single mean feature value."""
     y = [float(y) for y in x.split(",")]
     return sum(y) / len(y)
 
 
 def fit_model(train_x, train_y, positive_rate=0.75):
-    # Adapted from https://github.com/hkiyomaru/pu-learning
+    """Fit a logistic regression classifier from positive-unlabeled data.
+
+    Adapted from https://github.com/hkiyomaru/pu-learning (weighted PU
+    learning via SAR-EM-style reweighting):
+    1. Fit an initial ("propensity") classifier on the raw labels, where
+       unlabeled examples (train_y == 0) are treated as negative just to
+       estimate how gene-like each unlabeled example looks.
+    2. `c` estimates the probability that a truly-positive example ends up
+       labeled, given `positive_rate` (the assumed overall fraction of
+       examples that are real genes) and the observed count of labeled
+       positives vs. unlabeled examples.
+    3. Each unlabeled example is then duplicated into a weighted positive copy
+       and a weighted negative copy, with weights derived from its propensity
+       score and `c`, so unlabeled data contributes soft evidence for both
+       classes instead of being forced into one label.
+    4. The final classifier is refit on labeled positives (weight 1) plus
+       these reweighted unlabeled copies.
+    """
     _clf = LogisticRegression().fit(train_x, train_y)
 
     train_x_labeled = train_x[train_y == 1]
@@ -66,6 +97,10 @@ def fit_model(train_x, train_y, positive_rate=0.75):
 
 
 def validate(test_file, multi_exon_model, single_exon_model):
+    """Report recall and positive-prediction rate of both trained models on an
+    independent validation table (e.g. from another species). Only recall is
+    meaningful here since, under PU learning, `validated == False` doesn't mean
+    "confirmed negative" - so precision/specificity can't be computed."""
     validation_data = pd.read_csv(test_file, sep="\t")
 
     valid_single_exon_df = validation_data[validation_data["donor"].isna()]
@@ -113,6 +148,12 @@ def validate(test_file, multi_exon_model, single_exon_model):
 
 
 def train(train_file, test_prop, estimated_positive_prop, rng):
+    """Train and held-out-evaluate the multi-exon and single-exon MMLR models.
+
+    Transcripts are routed to the multi-exon or single-exon model based on
+    whether they have a donor score (single-exon transcripts have no introns,
+    so `donor`/`acceptor` are NaN for them).
+    """
     training_data = pd.read_csv(train_file, sep="\t")
 
     # Need separate models for with/without splice sites
@@ -256,7 +297,8 @@ def main():
         f"Single-exon model: y = sig({sem_coef[0]} * TIS + {sem_coef[1]} * TTS + {sem_intercept})"
     )
 
-    # Save parameters to dictionary
+    # Save parameters to dictionary; consumed by mmlr_classify_transcripts.py
+    # (see its default_dict for the equivalent GeneCAD-paper weights).
     out_dict = {}
 
     out_dict["multi_intercept"] = mem_intercept

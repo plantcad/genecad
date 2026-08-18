@@ -1,3 +1,11 @@
+"""Step 1 of MMLR: extract TIS/TTS/Donor/Acceptor junctions from a GFF3 annotation.
+
+For each protein-coding mRNA, walks its 5'UTR/CDS/3'UTR sub-features in genomic
+order to enumerate junction positions, then collapses junctions that are shared
+across multiple transcripts (e.g. due to alternative splicing) into a single row.
+See docs/masked_motif_logistic_regression.md for the full pipeline and output format.
+"""
+
 import argparse
 from enum import Enum
 
@@ -27,6 +35,25 @@ class Junc(Enum):
 
 
 def get_junctions(gff, chrom_idx, gene_idx, mRNA_idx):
+    """Enumerate junction positions/types for a single mRNA.
+
+    Junctions are found by walking each feature list (5'UTR, CDS, 3'UTR) in
+    genomic order and treating the gap between consecutive features of the same
+    type as an intron (donor at the end of the upstream exon, acceptor at the
+    start of the downstream exon). TIS/TTS fall at the first/last base of the
+    CDS. Because introns can also fall *between* feature types (e.g. between the
+    last 5'UTR exon and the first CDS exon), each of those boundaries is checked
+    separately ("intron perfectly splits..." blocks) so that junction isn't missed.
+
+    Orientation of pos_list/jtype_list mirrors gene.location.strand: on the plus
+    strand junctions are appended 5'->3' (UTR, then TIS, CDS introns, TTS, UTR);
+    on the minus strand the same walk is done in GFF/plus-strand coordinate order,
+    but donor/acceptor and TIS/TTS labels are swapped since transcription runs
+    the opposite direction. `pos` always points at the first base of the motif
+    in the strand's own reading direction (BioPython locations are 0-based,
+    half-open, so `location.end` is the base just past a feature and
+    `location.start - 1` is the base just before the next one).
+    """
     gene = gff[chrom_idx].features[gene_idx]
     mRNA = gene.sub_features[mRNA_idx]
 
@@ -88,6 +115,9 @@ def get_junctions(gff, chrom_idx, gene_idx, mRNA_idx):
             jtype_list.append(Junc.ACCEPTOR)
 
     else:
+        # Minus strand: iterate in the same (plus-strand) coordinate order as
+        # above, but donor/acceptor and TIS/TTS are swapped since the mRNA's
+        # 5'->3' direction is reversed relative to genomic coordinates.
         for idx in range(len(three_prime_utr) - 1):
             pos_list.append(three_prime_utr[idx].location.end)
             jtype_list.append(Junc.ACCEPTOR)
@@ -145,6 +175,14 @@ def get_junctions(gff, chrom_idx, gene_idx, mRNA_idx):
 
 
 def merge_entries(y):
+    """Collapse one (chrom, gene, pos, junction) group into a single row.
+
+    `y` is a (group_key, group_df) tuple from a pandas groupby. When multiple
+    mRNAs of the same gene share an identical junction position/type (e.g. an
+    intron retained in every isoform), this merges them into one row whose
+    `mRNA` column is a comma-separated list of the contributing mRNA indices,
+    rather than emitting redundant duplicate junctions.
+    """
     if y[1].shape[0] > 1:
         z = ",".join([str(ent) for ent in list(y[1]["mRNA"])])
         return pd.DataFrame(
@@ -161,6 +199,12 @@ def merge_entries(y):
 
 
 def load_gff(gff_filename):
+    """Parse a GFF3 into per-chromosome feature trees, keeping only
+    protein-coding content: mRNAs without a CDS are dropped, each remaining
+    mRNA's sub-features are restricted to CDS/UTR and sorted by position, and
+    genes left with no valid mRNA are removed entirely. Also used by
+    mmlr_score_junctions.py so both scripts see the same filtered gene set.
+    """
     gff = [chrom for chrom in parse(gff_filename)]
 
     # remove transcripts without CDSs, and genes without at least one mRNA
@@ -228,6 +272,7 @@ def main():
     gff = load_gff(args.input_gff)
 
     logger.info("Getting junction locations")
+    # One small DataFrame of junctions per mRNA; concatenated below into one table.
     junctions = [
         get_junctions(gff, chrom_idx, gene_idx, mRNA_idx)
         for chrom_idx in range(len(gff))
@@ -238,6 +283,8 @@ def main():
     df = pd.concat(junctions, ignore_index=True)
 
     logger.info("Merging redundant entries")
+    # Group identical junctions (same chrom/gene/pos/type) across alternative
+    # transcripts so each unique site is only scored once downstream.
     x = iter(df.groupby(["chrom", "gene", "pos", "junction"], sort=False))
     # Launch threads
     with Pool(args.num_workers) as p:

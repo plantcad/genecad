@@ -1,3 +1,8 @@
+"""Step 4 of MMLR: apply a trained (or default GeneCAD) classifier to score
+transcripts, and optionally tag a GFF3 with a pass/fail filter based on those
+scores. See docs/masked_motif_logistic_regression.md.
+"""
+
 import os.path
 
 import numpy as np
@@ -24,6 +29,12 @@ default_dict = {
 
 
 def load_models(json_path):
+    """Build the multi-exon and single-exon LogisticRegression classifiers
+    from stored coefficients (from mmlr_train_classifier.py's --output-json,
+    or the GeneCAD-paper defaults above) rather than by calling .fit(). The
+    coef_/intercept_/classes_ attributes are set directly so the models are
+    ready for .predict()/.predict_proba() without any training data.
+    """
     if json_path is not None:
         with open(json_path) as file:
             models_dict = json.load(file)
@@ -56,11 +67,15 @@ def load_models(json_path):
 
 
 def to_average(x):
+    """Collapse a transcript's comma-separated per-site donor/acceptor scores
+    into a single mean feature value (matches mmlr_train_classifier.to_average
+    so scoring uses the same features the classifier was trained on)."""
     y = [float(y) for y in x.split(",")]
     return sum(y) / len(y)
 
 
 def tag_to_dict(x):
+    """Parse a GFF3 attributes field (`key=val;key=val;...`) into a dict."""
     out_dict = {}
 
     for y in x.split(";"):
@@ -72,6 +87,10 @@ def tag_to_dict(x):
 
 # score genes in table
 def score_table(input_df, multi_exon_model, single_exon_model):
+    """Route each transcript to the multi-exon or single-exon model based on
+    whether it has a donor score, then attach the model's hard prediction
+    (`filter`, 0/1) and positive-class probability (`score`) as new columns.
+    """
     single_exon_df = input_df[input_df["donor"].isna()].copy()
     multi_exon_df = input_df[input_df["donor"].notna()].copy()
 
@@ -107,6 +126,10 @@ def score_table(input_df, multi_exon_model, single_exon_model):
 
 # Annotate GFF with model scores
 def annotate_gff(df_scored, gff_path, out_dir):
+    """Stream the input GFF3 line by line, writing a copy with a
+    `passPlantCADFilter` tag added to each `gene` and `mRNA` feature line.
+    An mRNA is tagged 1 if its own `filter` prediction is 1; a gene is tagged
+    1 if *any* of its transcripts passed (np.any over the gene's group)."""
     base_name = os.path.basename(gff_path).split(".gff")[0]
 
     df_scored.index = df_scored["transcript"]
