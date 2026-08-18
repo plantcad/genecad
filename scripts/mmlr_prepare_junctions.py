@@ -208,7 +208,7 @@ def load_gff(gff_filename):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Gene Annotation Training CRF")
+    parser = argparse.ArgumentParser(description="Identify unique Gene Junctions")
     parser.add_argument(
         "--input-gff",
         "-i",

@@ -6,7 +6,7 @@ from torch.utils.data import Dataset
 from tqdm import tqdm
 from transformers import AutoTokenizer, AutoModelForMaskedLM
 from torch.utils.data import DataLoader
-from scripts.gff_zero_shot_preprocess import load_gff, Junc
+from scripts.mmlr_prepare_junctions import load_gff, Junc
 from Bio import SeqIO
 import pandas as pd
 from dataclasses import dataclass
@@ -31,6 +31,16 @@ def has_canonical_tag(tags) -> bool:
         return "Ensembl_canonical" in tags["tag"]
     else:
         return False
+
+
+# convert 1/-1 to +/-
+def strand_string(x):
+    if x == 1:
+        return "+"
+    elif x == -1:
+        return "-"
+    else:
+        return "."
 
 
 def to_junc(x):
@@ -128,9 +138,32 @@ class JunctionDataset(Dataset):
         }
 
 
+def get_longest_transcripts(gff, out_df):
+    # identify transcript with longest CDS
+    longest_transcripts = [False] * out_df.shape[0]
+
+    for chrom in gff:
+        for gene in chrom.features:
+            longest_transcript = np.argmax(
+                [
+                    np.sum(
+                        [
+                            (exon.location.end + 1) - exon.location.start
+                            for exon in mRNA.sub_features
+                        ]
+                    )
+                    for mRNA in gene.sub_features
+                ]
+            )
+            transcript_name = gene.sub_features[longest_transcript].id
+            longest_transcripts[out_df.index.get_loc(transcript_name)] = True
+
+    return longest_transcripts
+
+
 def main():
     # parse arguments
-    parser = argparse.ArgumentParser(description="Gene Annotation Training CRF")
+    parser = argparse.ArgumentParser(description="Generate Masked Motif scores")
     parser.add_argument(
         "--input-gff",
         "-i",
@@ -144,19 +177,29 @@ def main():
     parser.add_argument(
         "--input-junctions", "-j", type=str, required=True, help="junctions file"
     )
-    parser.add_argument("--output", type=str, required=True, help="output table path")
     parser.add_argument(
-        "--model-path", type=str, required=True, help="Path to the pre-trained model"
+        "--output-table", "-o", type=str, required=True, help="output table path"
+    )
+
+    parser.add_argument(
+        "--model-path",
+        type=str,
+        default="kuleshov-group/PlantCAD2-Medium-l48-d1024",  # pragma: allowlist secret
+        help="Path to the pre-trained model. PlantCAD or PlantCAD2 models may be used. "
+        "Default: kuleshov-group/PlantCAD2-Medium-l48-d1024",
     )
     parser.add_argument(
-        "--batch-size", type=int, default=16, help="Batch size for data loading"
+        "--batch-size",
+        type=int,
+        default=16,
+        help="Batch size for data loading. Default: 16",
     )
     parser.add_argument("--gpu", type=int, default=0, help="GPU device to use")
     parser.add_argument(
         "--window-size",
         type=int,
         default=8192,
-        help="Size of the window for processing sequences. Must be divisible by 4",
+        help="Size of the window for processing sequences. Must be divisible by 2. Default: 8192",
     )
     parser.add_argument(
         "--tag-canonical",
@@ -213,8 +256,8 @@ def main():
                     gene.id,
                     mRNA.id,
                     mRNA.location.start,
-                    mRNA.location.end,
-                    gene.strand,
+                    mRNA.location.end - 1,
+                    strand_string(gene.location.strand),
                     has_canonical_tag(mRNA.qualifiers),
                     ScoreList([]),
                     ScoreList([]),
@@ -242,9 +285,9 @@ def main():
                     chrom.id,
                     gene.id,
                     mRNA.id,
-                    mRNA.range[0],
-                    mRNA.range[1],
-                    gene.strand,
+                    mRNA.location.start,
+                    mRNA.location.end - 1,
+                    strand_string(gene.location.strand),
                     ScoreList([]),
                     ScoreList([]),
                 )
@@ -266,26 +309,9 @@ def main():
 
     out_df.index = out_df["transcript"]
 
-    # identify transcript with longest CDS
-    longest_transcripts = [False] * out_df.shape[0]
-
-    for chrom in gff:
-        for gene in tqdm(chrom.features):
-            longest_transcript = np.argmax(
-                [
-                    np.sum(
-                        [
-                            (exon.location.end + 1) - exon.location.start
-                            for exon in mRNA.sub_features
-                        ]
-                    )
-                    for mRNA in gene.sub_features
-                ]
-            )
-            transcript_name = gene.sub_features[longest_transcript].id
-            longest_transcripts[out_df.index.get_loc(transcript_name)] = True
-
+    longest_transcripts = get_longest_transcripts(gff, out_df)
     out_df["longest"] = longest_transcripts
+
     print("calculating zero-shot scores")
     nucleotides = list("acgt")
     nts = ["A", "C", "G", "T"]
@@ -354,7 +380,7 @@ def main():
     out_df["TIS"] = tis
     out_df["TTS"] = tts
     print("Writing")
-    out_df.to_csv(args.output, sep="\t", index=False, header=True)
+    out_df.to_csv(args.output_table, sep="\t", index=False, header=True)
 
 
 if __name__ == "__main__":
