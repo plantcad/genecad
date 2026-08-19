@@ -77,7 +77,7 @@ def get_junctions(gff, chrom_idx, gene_idx, mRNA_idx):
             jtype_list.append(Junc.ACCEPTOR)
 
         # case: intron perfectly splits 5' utr and cds
-        if len(five_prime_utr) > 1:
+        if len(five_prime_utr) >= 1:
             if five_prime_utr[-1].location.end != cds[0].location.start:
                 pos_list.append(five_prime_utr[-1].location.end)
                 jtype_list.append(Junc.DONOR)
@@ -99,7 +99,7 @@ def get_junctions(gff, chrom_idx, gene_idx, mRNA_idx):
         jtype_list.append(Junc.TTS)
 
         # case: intron perfectly splits 5' utr and cds
-        if len(three_prime_utr) > 1:
+        if len(three_prime_utr) >= 1:
             if cds[-1].location.end != three_prime_utr[0].location.start:
                 pos_list.append(cds[-1].location.end)
                 jtype_list.append(Junc.DONOR)

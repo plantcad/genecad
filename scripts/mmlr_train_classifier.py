@@ -48,6 +48,9 @@ def fit_model(train_x, train_y, positive_rate=0.75):
        classes instead of being forced into one label.
     4. The final classifier is refit on labeled positives (weight 1) plus
        these reweighted unlabeled copies.
+
+       NOTE: under many circumstances, values for w_pos can be greater than 1, which makes values of
+       w_neg negative
     """
     _clf = LogisticRegression().fit(train_x, train_y)
 

@@ -182,7 +182,7 @@ def get_longest_transcripts(gff, out_df):
                 [
                     np.sum(
                         [
-                            (exon.location.end + 1) - exon.location.start
+                            (exon.location.end) - exon.location.start
                             for exon in mRNA.sub_features
                         ]
                     )
