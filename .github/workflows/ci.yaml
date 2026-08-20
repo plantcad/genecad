@@ -21,7 +21,14 @@ jobs:
         uses: astral-sh/setup-uv@v4
       - name: Install dependencies
         run: |
-          uv sync --group dev
+          uv sync --group dev --extra test
+      - name: Verify torch-dependent tests can actually run
+        # Guards against a repeat of the bug this fixes: test_frame_crf.py and
+        # test_dataset.py both gate on `pytest.importorskip("torch")`, so if
+        # this import ever silently breaks again, those files go quiet
+        # (skipped, not failed) and `uv run pytest` below still exits 0.
+        run: |
+          uv run python -c "import torch, lightning, torchmetrics; from src import modeling"
       - name: Run pre-commit
         run: |
           uv run pre-commit run --all-files
