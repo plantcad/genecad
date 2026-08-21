@@ -34,7 +34,15 @@ The repair is deliberately constrained so that it cannot invent gene structure:
     5'UTR on that exon) is shorter than --weak-start-threshold, alternative
     start codons within the same already-predicted exonic sequence are
     considered and the one with the strongest Kozak-context support is
-    preferred, provided it beats the original by --kozak-margin. Candidates
+    preferred, provided it beats the original by --kozak-margin. --kozak-margin
+    is a floor, not a fixed value: by default it is raised per genome by
+    calibrate_kozak_margin, which checks the same switch logic against this
+    genome's own unambiguous start codons and raises the margin only as far
+    as needed to keep the measured rate of switching away from a known-correct
+    start at or below 2% (see calibrate_kozak_margin's docstring for the
+    cross-species numbers behind that -- one held-out species had a
+    quiet-but-real 8-9% false-positive rate at the fixed default that this
+    catches). Disable with --no-calibrate-kozak-margin. Candidates
     are restricted to the original start's reading frame *and* to those
     whose own forced stop is the original stop codon unchanged, so a switch
     can only move the TIS -- it can never change the stop codon or the
@@ -751,6 +759,141 @@ def iter_fasta(path: str):
             yield seqid, "".join(chunks)
 
 
+def locate_cds(transcript: Transcript, chrom: str) -> tuple[str, int, int] | None:
+    """(spliced_seq, begin, stop) for a transcript's predicted CDS in transcript
+    coordinates, or None if it can't be located. stop is exclusive. Shared
+    setup between repair_transcript and calibrate_kozak_margin."""
+    cds_records = [r for r in transcript.children if r.type == CDS]
+    if not cds_records:
+        return None
+    transcript.build_exons()
+    if transcript.length == 0:
+        return None
+    seq = transcript.spliced_sequence(chrom)
+    if len(seq) != transcript.length:
+        return None
+    coding_first = min(r.start for r in cds_records)
+    coding_last = max(r.end for r in cds_records)
+    if transcript.strand == "+":
+        begin = transcript.genomic_to_transcript(coding_first)
+        stop_inclusive = transcript.genomic_to_transcript(coding_last)
+    else:
+        begin = transcript.genomic_to_transcript(coding_last)
+        stop_inclusive = transcript.genomic_to_transcript(coding_first)
+    if begin is None or stop_inclusive is None:
+        return None
+    stop = stop_inclusive + 1
+    cds_length = sum(r.end - r.start + 1 for r in cds_records)
+    if stop - begin != cds_length:
+        return None
+    return seq, begin, stop
+
+
+# Target false-positive rate for calibrate_kozak_margin: the fraction of a
+# genome's own already-correct start codons the calibrated margin is allowed
+# to risk switching away from. 2% was picked the same way exon_length
+# strictness and the Kozak margin/threshold defaults were: bracketed against
+# real cross-species validation, not guessed. See calibrate_kozak_margin.
+KOZAK_MARGIN_TARGET_FP_RATE = 0.02
+
+
+def calibrate_kozak_margin(
+    by_seqid: dict[str, list[Transcript]],
+    input_fasta: str,
+    max_shift: int,
+    min_protein_length: int,
+    weak_start_threshold: int,
+    default_margin: float,
+    min_confident: int = 200,
+) -> float:
+    """Pick --kozak-margin for this genome instead of trusting one fixed
+    value for every species.
+
+    A single cross-species Kozak PWM does not carry the same reliability
+    into every genome it is applied to -- the model's own weak-start
+    candidates are ambiguous by construction, so there is no direct way to
+    check the margin against them, but every genome already has thousands of
+    transcripts whose start is *not* ambiguous (first coding exon well clear
+    of weak_start_threshold, complete ORF, canonical introns). Those are
+    known-correct starts. Running the same find_best_start_by_kozak logic
+    against them, at the default margin, measures directly how often this
+    genome's Kozak scores would talk the rule into switching away from a
+    start already known to be right -- a per-genome reliability estimate
+    that needs no assumption about what a "universal" Kozak signal looks
+    like, and no borrowed cross-species data.
+
+    The margin is raised only as far as needed to keep that measured
+    false-positive rate at or below KOZAK_MARGIN_TARGET_FP_RATE (the
+    (1 - KOZAK_MARGIN_TARGET_FP_RATE) quantile of the score-gap distribution
+    over known-correct starts), never lowered below default_margin.
+
+    Cross-species validation (Othomaeum, Rcommunis, Cquinoa, Oeuropaea;
+    reference-annotated, held out from PWM fitting): at the fixed default
+    margin, aggregate precision on switches that actually changed TIS
+    correctness was 66.3% (63 correct / 32 wrong), but Cquinoa alone was
+    net negative (9 correct / 12 wrong) -- its own confident starts showed
+    an 8-9% false-positive rate against the default margin, far above the
+    other three species. Per-genome calibration raised Cquinoa's margin
+    enough to stop triggering wrong switches there (0/0) while leaving the
+    other three species' margins close to the default, moving aggregate
+    precision to 78.3% (18/23) with no species left net negative.
+
+    Falls back to default_margin if there are too few confident transcripts
+    (under 200) to calibrate against reliably -- e.g. a single small
+    scaffold processed on its own.
+    """
+    gaps: list[float] = []
+    n_confident = 0
+
+    for seqid, chrom in iter_fasta(input_fasta):
+        if seqid not in by_seqid:
+            continue
+        for transcript in by_seqid[seqid]:
+            located = locate_cds(transcript, chrom)
+            if located is None:
+                continue
+            seq, begin, stop = located
+            if "N" in seq[begin:stop]:
+                continue
+            if not is_complete_orf(seq, begin, stop, min_protein_length):
+                continue
+            if first_exon_length(transcript, begin, stop) < weak_start_threshold:
+                continue  # the ambiguous population itself -- must not leak into calibration
+            if has_noncanonical_introns(transcript, chrom):
+                continue
+            original_score = kozak_score(seq, begin)
+            if original_score is None:
+                continue
+            alt = find_best_start_by_kozak(
+                seq, begin, stop, max_shift, min_protein_length
+            )
+            n_confident += 1
+            if alt is not None:
+                gaps.append(alt[2] - original_score)
+
+    if n_confident < min_confident:
+        logger.warning(
+            f"Only {n_confident} confident in-genome start codons found; too few "
+            f"to calibrate --kozak-margin, keeping default {default_margin}"
+        )
+        return default_margin
+
+    gaps.sort()
+    n_would_switch = sum(1 for g in gaps if g > default_margin)
+    if gaps:
+        k = min(int(len(gaps) * (1 - KOZAK_MARGIN_TARGET_FP_RATE)), len(gaps) - 1)
+        calibrated = max(default_margin, gaps[k])
+    else:
+        calibrated = default_margin
+    logger.info(
+        f"Calibrated --kozak-margin {default_margin} -> {calibrated:.2f} from "
+        f"{n_confident} confident in-genome start codons ({n_would_switch}/"
+        f"{n_confident} = {100 * n_would_switch / n_confident:.2f}% would have "
+        f"been wrongly switched at the default margin)"
+    )
+    return calibrated
+
+
 def fix_orf(
     input_gff: str,
     input_fasta: str,
@@ -763,6 +906,7 @@ def fix_orf(
     weak_start_threshold: int = 9,
     kozak_margin: float = 3.0,
     weak_kozak_threshold: float = 5.0,
+    calibrate_margin: bool = True,
 ) -> Counter:
     logger.info(f"Reading GFF {input_gff}")
     header, records = read_gff(input_gff)
@@ -789,6 +933,16 @@ def fix_orf(
     by_seqid: dict[str, list[Transcript]] = defaultdict(list)
     for transcript in transcripts.values():
         by_seqid[transcript.seqid].append(transcript)
+
+    if fix_weak_starts and calibrate_margin:
+        kozak_margin = calibrate_kozak_margin(
+            by_seqid,
+            input_fasta,
+            max_shift,
+            min_protein_length,
+            weak_start_threshold,
+            kozak_margin,
+        )
 
     stats: Counter = Counter()
     shift_hist: Counter = Counter()
@@ -972,7 +1126,17 @@ def main() -> None:
         type=float,
         default=3.0,
         help="Minimum Kozak log2-odds advantage an alternative start codon "
-        "must have over the original to trigger a switch.",
+        "must have over the original to trigger a switch. Used as the floor "
+        "value calibrate_kozak_margin raises from per genome, unless "
+        "--no-calibrate-kozak-margin is set, in which case it is used as-is.",
+    )
+    parser.add_argument(
+        "--no-calibrate-kozak-margin",
+        dest="calibrate_margin",
+        action="store_false",
+        help="Use --kozak-margin as a fixed value for every genome instead of "
+        "raising it per genome from that genome's own confident (unambiguous) "
+        "start codons. On by default.",
     )
     parser.add_argument(
         "--weak-kozak-threshold",
@@ -1001,6 +1165,7 @@ def main() -> None:
         weak_start_threshold=args.weak_start_threshold,
         kozak_margin=args.kozak_margin,
         weak_kozak_threshold=args.weak_kozak_threshold,
+        calibrate_margin=args.calibrate_margin,
     )
 
 

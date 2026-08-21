@@ -773,3 +773,134 @@ def test_weak_start_search_does_not_trigger_for_a_long_first_exon(
     assert stats["repaired"] == 0
     _, records = fix_orf.read_gff(str(out))
     assert exonic(records) == sorted(blocks)
+
+
+# -------------------------------------------------------------------------------------------------
+# calibrate_kozak_margin
+# -------------------------------------------------------------------------------------------------
+
+
+def test_calibrate_kozak_margin_falls_back_when_too_few_confident_transcripts(
+    tmp_path,
+):
+    """An empty (or near-empty) genome has nothing to calibrate against --
+    calibrate_kozak_margin must return the default unchanged rather than
+    over-fitting a margin to a handful of transcripts."""
+    fasta = tmp_path / "genome.fa"
+    fasta.write_text(">chr1\n" + FLANK + "\n")
+    margin = fix_orf.calibrate_kozak_margin(
+        by_seqid={},
+        input_fasta=str(fasta),
+        max_shift=300,
+        min_protein_length=1,
+        weak_start_threshold=9,
+        default_margin=3.0,
+    )
+    assert margin == 3.0
+
+
+def build_confident_loci_chromosome(n: int) -> tuple[str, str]:
+    """n single-exon transcripts on chr1, each using WEAK_STRONG_SEQ's ORF: a
+    poor-Kozak-context start that is nonetheless the correct one, because the
+    exon it sits in is long enough that first_exon_length never dips below a
+    realistic weak_start_threshold. Every one of these is exactly the kind of
+    already-known-correct, unambiguous start calibrate_kozak_margin measures
+    against -- and because WEAK_STRONG_SEQ's alternate (offset 13) ATG always
+    outscores the true start, every one registers as a transcript the
+    uncalibrated default margin would wrongly switch away from.
+
+    Returns (gff_text, fasta_text).
+    """
+    locus_len = len(WEAK_STRONG_SEQ)
+    gap = 20
+    lines = ["##gff-version 3"]
+    body = []
+    for i in range(n):
+        start = 101 + i * (locus_len + gap)
+        gid, tid = f"g{i}", f"g{i}.t1"
+        lines.append(
+            f"chr1\ttest\tgene\t{start}\t{start + locus_len - 1}\t.\t+\t.\tID={gid}"
+        )
+        lines.append(
+            f"chr1\ttest\tmRNA\t{start}\t{start + locus_len - 1}\t.\t+\t.\tID={tid};Parent={gid}"
+        )
+        lines.append(
+            f"chr1\ttest\tfive_prime_UTR\t{start}\t{start + 3}\t.\t+\t.\tParent={tid}"
+        )
+        lines.append(
+            f"chr1\ttest\tCDS\t{start + 4}\t{start + 21}\t.\t+\t0\tParent={tid}"
+        )
+        lines.append(
+            f"chr1\ttest\tthree_prime_UTR\t{start + 22}\t{start + locus_len - 1}\t.\t+\t.\tParent={tid}"
+        )
+        body.append(WEAK_STRONG_SEQ + "T" * gap)
+    gff = "\n".join(lines) + "\n"
+    fasta = ">chr1\n" + FLANK + "".join(body) + FLANK + "\n"
+    return gff, fasta
+
+
+def run_calibration_scenario(tmp_path, n_confident, calibrate_margin):
+    """n_confident WEAK_STRONG_SEQ loci on chr1 (see
+    build_confident_loci_chromosome), plus one genuinely ambiguous
+    short-first-exon WEAK_STRONG_SEQ transcript on chr2 (same shape as
+    test_weak_start_with_a_better_candidate_is_repaired). Returns the
+    ambiguous transcript's mRNA attributes."""
+    confident_gff, confident_fasta = build_confident_loci_chromosome(n_confident)
+    # g1/g1.t1 collides with build_confident_loci_chromosome's own i=1 locus
+    # (Parent lookups are by ID regardless of seqid) -- rename to a unique ID.
+    ambiguous_gff = (
+        build_gff(WEAK_START_BLOCKS, "+")
+        .replace("chr1", "chr2")
+        .replace("Parent=g1.t1", "Parent=gamb.t1")
+        .replace("ID=g1.t1;Parent=g1", "ID=gamb.t1;Parent=gamb")
+        .replace("ID=g1\n", "ID=gamb\n")
+    )
+    ambiguous_fasta = ">chr2\n" + build_weak_start_chromosome(WEAK_STRONG_SEQ) + "\n"
+
+    gff = tmp_path / "in.gff"
+    fasta = tmp_path / "genome.fa"
+    out = tmp_path / "out.gff"
+    gff.write_text(confident_gff + "\n".join(ambiguous_gff.splitlines()[1:]) + "\n")
+    fasta.write_text(confident_fasta + ambiguous_fasta)
+
+    fix_orf.fix_orf(
+        input_gff=str(gff),
+        input_fasta=str(fasta),
+        output_gff=str(out),
+        max_shift=300,
+        min_protein_length=1,
+        require_canonical=True,
+        report_path=None,
+        fix_weak_starts=True,
+        weak_start_threshold=9,
+        kozak_margin=3.0,
+        weak_kozak_threshold=0.0,
+        calibrate_margin=calibrate_margin,
+    )
+    _, records = fix_orf.read_gff(str(out))
+    return next(r.attributes for r in records if r.type == "mRNA" and r.seqid == "chr2")
+
+
+def test_calibrated_margin_blocks_a_switch_the_default_margin_would_make(
+    tiny_kozak_pwm, tmp_path
+):
+    """250 confident transcripts all show the default margin would switch
+    away from a known-correct start (WEAK_STRONG_SEQ's alternate always
+    outscores its true start) -- calibration should pick this up and raise
+    the margin enough that the same switch no longer fires on a genuinely
+    ambiguous transcript with an identical score gap."""
+    attributes = run_calibration_scenario(tmp_path, 250, calibrate_margin=True)
+    assert attributes["orf_status"] == "complete"
+    assert (
+        "orf_issue" not in attributes or attributes["orf_issue"] != "weak_start_kozak"
+    )
+
+
+def test_calibration_can_be_turned_off(tiny_kozak_pwm, tmp_path):
+    """The same scenario with calibration disabled falls back to the fixed
+    default margin, which switches -- confirming the previous test's
+    "left alone" result comes from calibration, not from something else in
+    the fixture blocking the switch."""
+    attributes = run_calibration_scenario(tmp_path, 250, calibrate_margin=False)
+    assert attributes["orf_status"] == "repaired"
+    assert attributes["orf_issue"] == "weak_start_kozak"
