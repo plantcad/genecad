@@ -479,15 +479,15 @@ def test_find_best_start_by_kozak_never_returns_an_out_of_frame_candidate(
     and ties offset 30's score, so it (wrongly) wins.  With the filter,
     offset 13 is skipped entirely and offset 30 is the correct winner.
     """
-    seq = list("C" * 45)
+    chars = list("C" * 45)
 
     def set_codon(i: int, codon: str) -> None:
-        seq[i : i + 3] = list(codon)
+        chars[i : i + 3] = list(codon)
 
     cds_begin = 6
     set_codon(cds_begin, "ATG")
-    seq[cds_begin - 2] = "A"  # weak: non-C at -2
-    seq[cds_begin + 4] = "A"  # weak: non-C at +2
+    chars[cds_begin - 2] = "A"  # weak: non-C at -2
+    chars[cds_begin + 4] = "A"  # weak: non-C at +2
 
     out_of_frame = cds_begin + 7  # 13, not a multiple of 3 from cds_begin
     set_codon(out_of_frame, "ATG")
@@ -498,7 +498,7 @@ def test_find_best_start_by_kozak_never_returns_an_out_of_frame_candidate(
     set_codon(22, "TAA")  # first in-frame stop for out_of_frame's own class
     set_codon(39, "TAA")  # first in-frame stop for cds_begin/in_frame_alt's class
 
-    seq = "".join(seq)
+    seq = "".join(chars)
 
     result = fix_orf.find_best_start_by_kozak(
         seq, cds_begin=cds_begin, cds_stop=42, max_shift=300, min_protein_length=1
@@ -539,22 +539,22 @@ def test_find_best_start_by_kozak_rejects_a_disjoint_upstream_orf(tiny_kozak_pwm
     Offset 8 is in cds_begin's reading frame (20 - 8 = 12) and scores
     higher, so without the stop-preserving filter it would wrongly win.
     """
-    seq = list("C" * 40)
+    chars = list("C" * 40)
 
     def set_codon(i: int, codon: str) -> None:
-        seq[i : i + 3] = list(codon)
+        chars[i : i + 3] = list(codon)
 
     set_codon(8, "ATG")  # disjoint upstream ATG, strong context
     set_codon(14, "TAA")  # its own forced stop -- not cds_stop
 
     cds_begin = 20
     set_codon(cds_begin, "ATG")
-    seq[cds_begin - 2] = "A"  # weak: non-C at -2
-    seq[cds_begin + 4] = "A"  # weak: non-C at +2
+    chars[cds_begin - 2] = "A"  # weak: non-C at -2
+    chars[cds_begin + 4] = "A"  # weak: non-C at +2
     set_codon(32, "TAA")  # cds_begin's real forced stop
     cds_stop = 35
 
-    seq = "".join(seq)
+    seq = "".join(chars)
 
     result = fix_orf.find_best_start_by_kozak(
         seq, cds_begin=cds_begin, cds_stop=cds_stop, max_shift=300, min_protein_length=1
