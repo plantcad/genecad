@@ -611,37 +611,10 @@ def repair_transcript(
     weak_kozak_threshold: float,
 ) -> tuple[Result, list[Record] | None]:
     """Evaluate and, if needed and possible, repair one transcript's CDS."""
-    cds_records = [r for r in transcript.children if r.type == CDS]
-    if not cds_records:
-        return Result("skipped", "no_cds"), None
-
-    transcript.build_exons()
-    if transcript.length == 0:
-        return Result("skipped", "no_exons"), None
-
-    seq = transcript.spliced_sequence(chrom)
-    if len(seq) != transcript.length:
-        return Result("skipped", "sequence_length_mismatch"), None
-
-    # Locate the predicted CDS in transcript coordinates.
-    coding_first = min(r.start for r in cds_records)
-    coding_last = max(r.end for r in cds_records)
-    if transcript.strand == "+":
-        begin = transcript.genomic_to_transcript(coding_first)
-        stop_inclusive = transcript.genomic_to_transcript(coding_last)
-    else:
-        begin = transcript.genomic_to_transcript(coding_last)
-        stop_inclusive = transcript.genomic_to_transcript(coding_first)
-    if begin is None or stop_inclusive is None:
-        return Result("skipped", "cds_outside_exons"), None
-    stop = stop_inclusive + 1
-
-    cds_length = sum(r.end - r.start + 1 for r in cds_records)
-    if stop - begin != cds_length:
-        # The predicted CDS is not contiguous within the spliced transcript,
-        # which means UTR was called between two CDS blocks.  Repairing that
-        # would require changing the model's own feature layout.
-        return Result("partial", "discontiguous_cds"), None
+    located = locate_cds(transcript, chrom)
+    if isinstance(located, Result):
+        return located, None
+    seq, begin, stop = located
 
     missing_start = seq[begin : begin + 3] != START_CODON
     missing_stop = seq[stop - 3 : stop] not in STOP_CODONS
@@ -759,19 +732,21 @@ def iter_fasta(path: str):
             yield seqid, "".join(chunks)
 
 
-def locate_cds(transcript: Transcript, chrom: str) -> tuple[str, int, int] | None:
+def locate_cds(transcript: Transcript, chrom: str) -> tuple[str, int, int] | Result:
     """(spliced_seq, begin, stop) for a transcript's predicted CDS in transcript
-    coordinates, or None if it can't be located. stop is exclusive. Shared
-    setup between repair_transcript and calibrate_kozak_margin."""
+    coordinates, or a Result describing why it couldn't be located. stop is
+    exclusive. Shared setup between repair_transcript and
+    calibrate_kozak_margin -- the latter only cares whether this succeeded,
+    not why it failed, and skips the transcript on any Result return."""
     cds_records = [r for r in transcript.children if r.type == CDS]
     if not cds_records:
-        return None
+        return Result("skipped", "no_cds")
     transcript.build_exons()
     if transcript.length == 0:
-        return None
+        return Result("skipped", "no_exons")
     seq = transcript.spliced_sequence(chrom)
     if len(seq) != transcript.length:
-        return None
+        return Result("skipped", "sequence_length_mismatch")
     coding_first = min(r.start for r in cds_records)
     coding_last = max(r.end for r in cds_records)
     if transcript.strand == "+":
@@ -781,11 +756,14 @@ def locate_cds(transcript: Transcript, chrom: str) -> tuple[str, int, int] | Non
         begin = transcript.genomic_to_transcript(coding_last)
         stop_inclusive = transcript.genomic_to_transcript(coding_first)
     if begin is None or stop_inclusive is None:
-        return None
+        return Result("skipped", "cds_outside_exons")
     stop = stop_inclusive + 1
     cds_length = sum(r.end - r.start + 1 for r in cds_records)
     if stop - begin != cds_length:
-        return None
+        # The predicted CDS is not contiguous within the spliced transcript,
+        # which means UTR was called between two CDS blocks.  Repairing that
+        # would require changing the model's own feature layout.
+        return Result("partial", "discontiguous_cds")
     return seq, begin, stop
 
 
@@ -850,7 +828,7 @@ def calibrate_kozak_margin(
             continue
         for transcript in by_seqid[seqid]:
             located = locate_cds(transcript, chrom)
-            if located is None:
+            if isinstance(located, Result):
                 continue
             seq, begin, stop = located
             if "N" in seq[begin:stop]:
