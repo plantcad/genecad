@@ -409,6 +409,7 @@ def step_detect_intervals(
     decoding_methods: str,
     domain: str,
     script_dir: str,
+    input_fasta: str,
 ) -> None:
     if os.path.exists(intervals_zarr):
         logger.info("[3/3] intervals.zarr already exists — skipping interval detection")
@@ -429,6 +430,8 @@ def step_detect_intervals(
             "yes",
             "--domain",
             domain,
+            "--input-fasta",
+            input_fasta,
         ]
     )
 
@@ -576,6 +579,7 @@ def main() -> None:
         decoding_methods=args.decoding_methods,
         domain=args.domain,
         script_dir=SCRIPT_DIR,
+        input_fasta=args.fasta,
     )
 
     # --- Step 4: Load results and visualize ---

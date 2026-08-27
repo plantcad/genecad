@@ -1,6 +1,6 @@
 # Detailed documenation for predict.py
 
-Step [2/7] of the prediction pipeline performs multiclass classification on each base pair in the input sequence.
+Step [2/8] of the prediction pipeline performs multiclass classification on each base pair in the input sequence.
 
 > [NOTE!]
 > This script requires a CUDA GPU
