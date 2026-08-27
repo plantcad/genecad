@@ -344,12 +344,45 @@ def test_kozak_score_returns_none_for_ambiguous_bases():
     assert fix_orf.kozak_score(seq, fix_orf.KOZAK_WINDOW_UPSTREAM) is None
 
 
-def test_kozak_score_is_deterministic_and_finite():
-    seq = "CGCGCG" + "ATG" + "GCGCGC"
-    score = fix_orf.kozak_score(seq, 6)
+KOZAK_TEST_WINDOWS = [
+    "CGCGCG" + "ATG" + "GCGCGC",
+    "AAAAAA" + "ATG" + "TTTTTT",
+    "TGCATG" + "ATG" + "CATGCA",
+    "GGGGGG" + "ATG" + "AAAAAA",
+]
+
+
+@pytest.mark.parametrize("seq", KOZAK_TEST_WINDOWS)
+def test_kozak_score_is_deterministic(seq):
+    score = fix_orf.kozak_score(seq, fix_orf.KOZAK_WINDOW_UPSTREAM)
     assert score is not None
-    assert score == fix_orf.kozak_score(seq, 6)  # deterministic
-    assert -1000 < score < 1000  # sane magnitude, not NaN/inf
+    assert score == fix_orf.kozak_score(seq, fix_orf.KOZAK_WINDOW_UPSTREAM)
+
+
+def test_kozak_score_bounded_by_pwm_extremes():
+    """kozak_score is a per-column sum over a fixed table, so every window's
+    score falls between the sum of the row minima and the sum of the row
+    maxima. The window built from each column's best (worst) base hits that
+    bound exactly."""
+    max_window = "".join(
+        "ACGT"[row.index(max(row))] for row in fix_orf.KOZAK_PWM_LOG_ODDS
+    )
+    min_window = "".join(
+        "ACGT"[row.index(min(row))] for row in fix_orf.KOZAK_PWM_LOG_ODDS
+    )
+    max_score = sum(max(row) for row in fix_orf.KOZAK_PWM_LOG_ODDS)
+    min_score = sum(min(row) for row in fix_orf.KOZAK_PWM_LOG_ODDS)
+
+    assert fix_orf.kozak_score(
+        max_window, fix_orf.KOZAK_WINDOW_UPSTREAM
+    ) == pytest.approx(max_score)
+    assert fix_orf.kozak_score(
+        min_window, fix_orf.KOZAK_WINDOW_UPSTREAM
+    ) == pytest.approx(min_score)
+
+    for seq in KOZAK_TEST_WINDOWS:
+        score = fix_orf.kozak_score(seq, fix_orf.KOZAK_WINDOW_UPSTREAM)
+        assert min_score <= score <= max_score
 
 
 # -------------------------------------------------------------------------------------------------
