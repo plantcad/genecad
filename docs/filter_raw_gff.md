@@ -1,6 +1,6 @@
 # Detailed documentation for filter_raw_gff.py
 
-Step [5/7] of the prediction pipeline applies a basic set of filters to raw GeneCAD output, removing
+Step [5/8] of the prediction pipeline applies a basic set of filters to raw GeneCAD output, removing
 gene models and features that are abnormally short or that lack key components, such
 as coding sequences or UTRs.
 

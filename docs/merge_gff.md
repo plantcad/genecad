@@ -1,6 +1,6 @@
 # Detailed documentation for merge_gff.py
 
-Step [6/7] of the prediction pipeline merges a list of single-chromosome GFF files into one GFF file.
+Step [6/8] of the prediction pipeline merges a list of single-chromosome GFF files into one GFF file.
 
 ```
 python merge_gff.py \
@@ -20,4 +20,4 @@ specified directly.
 
 ### Next Step
 
-`python refine.py` [Refine Documentation](refine.md)
+`python fix_orf.py` [Fix ORF Documentation](fix_orf.md)

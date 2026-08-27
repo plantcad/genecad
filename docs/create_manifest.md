@@ -1,6 +1,6 @@
 # Detailed documentation for create_manifest.py
 
-Optional step between [1/7] and [2/7] of the prediction pipeline creates a keyfile that
+Optional step between [1/8] and [2/8] of the prediction pipeline creates a keyfile that
 coordinates processing multiple contigs at the same time.
 
 ```

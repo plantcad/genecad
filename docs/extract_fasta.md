@@ -1,6 +1,6 @@
 # Detailed documentation for extract_fasta.py
 
-Step [1/7] of the prediction pipeline prepares fasta sequences for inference.
+Step [1/8] of the prediction pipeline prepares fasta sequences for inference.
 
 ```
 python extract_fasta.py \

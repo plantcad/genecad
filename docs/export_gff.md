@@ -1,6 +1,6 @@
 # Detailed documentation for export_gff.py
 
-Step [4/7] of the prediction pipeline converts predicted intervals into a GFF3 formatted file.
+Step [4/8] of the prediction pipeline converts predicted intervals into a GFF3 formatted file.
 
 ```
 python export_gff.py \
