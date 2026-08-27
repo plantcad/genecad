@@ -86,14 +86,14 @@ class TestScoreTable:
     def make_models(self):
         # Simple weights so predictions are easy to reason about by hand:
         # multi-exon score = TIS (all other coefficients zero); single-exon
-        # score = TIS as well. Decision boundary at TIS == 0.
+        # score = TIS as well. Decision boundary at TIS == 0.5.
         weights = {
-            "multi_intercept": 0.0,
+            "multi_intercept": -0.5,
             "multi_TIS": 1.0,
             "multi_TTS": 0.0,
             "multi_Donor": 0.0,
             "multi_Acceptor": 0.0,
-            "single_intercept": 0.0,
+            "single_intercept": -0.5,
             "single_TIS": 1.0,
             "single_TTS": 0.0,
         }
