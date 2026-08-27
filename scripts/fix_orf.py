@@ -20,12 +20,37 @@ The repair is deliberately constrained so that it cannot invent gene structure:
 3.  Internal introns must be canonical (GT-AG / GC-AG / AT-AC) for a repair to
     be attempted.  If the model's own splice calls are not trustworthy, neither
     is any ORF built on top of them.  (Relax with --allow-noncanonical-introns.)
+    This applies to rule 6's weak-start switch too: a non-canonical intron
+    blocks the switch (but not the weak_kozak_support flag, which changes no
+    gene structure).
 4.  The repaired ORF must be fully valid: ATG start, length % 3 == 0, no
     in-frame stop, stop codon end.
 5.  Among valid solutions the one closest to the original prediction wins
     (minimum total boundary movement), and movement is capped by --max-shift.
     Truncating a long CDS down to a short ORF is therefore rejected: it would
     require a large 3' shift.
+6.  Even when the predicted CDS is already a valid ORF, if its first *coding*
+    exon (i.e. the CDS portion of the first exon it overlaps, not counting any
+    5'UTR on that exon) is shorter than --weak-start-threshold, alternative
+    start codons within the same already-predicted exonic sequence are
+    considered and the one with the strongest Kozak-context support is
+    preferred, provided it beats the original by --kozak-margin. --kozak-margin
+    is a floor, not a fixed value: by default it is raised per genome by
+    calibrate_kozak_margin, which checks the same switch logic against this
+    genome's own unambiguous start codons and raises the margin only as far
+    as needed to keep the measured rate of switching away from a known-correct
+    start at or below 2% (see calibrate_kozak_margin's docstring for the
+    cross-species numbers behind that -- one held-out species had a
+    quiet-but-real 8-9% false-positive rate at the fixed default that this
+    catches). Disable with --no-calibrate-kozak-margin. Candidates
+    are restricted to the original start's reading frame *and* to those
+    whose own forced stop is the original stop codon unchanged, so a switch
+    can only move the TIS -- it can never change the stop codon or the
+    encoded protein downstream of the new start. This still only relabels predicted
+    exonic sequence (rule 2 still applies) -- it never invents new gene
+    structure. Transcripts whose best candidate is still weak
+    (--weak-kozak-threshold) are flagged (orf_issue=weak_kozak_support)
+    rather than forced. Disable with --no-fix-weak-starts.
 
 Transcripts that cannot be repaired under these rules are *not* forced into an
 ORF.  They are passed through unchanged and flagged (partial=true, orf_issue=…,
@@ -54,6 +79,62 @@ START_CODON = "ATG"
 # Canonical intron donor/acceptor dinucleotide pairs, read 5'->3' on the
 # transcribed strand.  GT-AG and GC-AG are U2-type; AT-AC is U12-type.
 CANONICAL_SPLICE_PAIRS = frozenset((("GT", "AG"), ("GC", "AG"), ("AT", "AC")))
+
+# Log2-odds Kozak-context PWM: fit once, offline, from real confirmed start
+# codons pooled across multiple Phytozome plant species. Deliberately
+# excludes Oropetium thomaeum, the species used to validate this whole
+# change -- fitting and validating on the same species would be circular.
+# Window is [-KOZAK_WINDOW_UPSTREAM, ATG, +KOZAK_WINDOW_DOWNSTREAM] in
+# coding (5'->3') orientation, columns A/C/G/T.
+KOZAK_WINDOW_UPSTREAM = 6
+KOZAK_WINDOW_DOWNSTREAM = 6
+KOZAK_PWM_LOG_ODDS: tuple[tuple[float, float, float, float], ...] = (
+    (0.0136, -0.0756, 0.3939, -0.2537),
+    (-0.0890, 0.5300, -0.0483, -0.2820),
+    (0.3170, 0.0057, 0.2045, -0.5907),
+    (0.4690, -0.5523, 0.5644, -0.9349),
+    (0.2857, 0.7449, -0.6555, -0.7332),
+    (0.2614, 0.4346, 0.3240, -1.1425),
+    (1.6575, -19.6135, -19.6135, -20.4058),
+    (-20.4059, -19.6135, -19.6135, 1.6576),
+    (-20.4059, -19.6135, 2.4499, -20.4058),
+    (-0.4964, -0.9217, 1.5662, -1.2134),
+    (-0.0608, 0.9640, -0.0891, -0.9244),
+    (-0.4841, -0.3068, 0.8155, -0.0636),
+    (0.0288, -0.1188, 0.6590, -0.5329),
+    (-0.1478, 0.6393, 0.0373, -0.3954),
+    (-0.3735, 0.2646, 0.4629, -0.1626),
+)
+# Background base composition the PWM above was fit against. Not read by
+# kozak_score(): KOZAK_PWM_LOG_ODDS is already log-odds (foreground/background),
+# so the background is already baked into those numbers. Kept only as fitting
+# provenance/documentation -- do not wire it into the scoring math.
+KOZAK_BACKGROUND: tuple[float, float, float, float] = (0.3170, 0.1830, 0.1830, 0.3170)
+
+# Consensus: AAAAAAATGGCGAAT  (positions -6..ATG..+6)
+# Fit from 438262 confirmed start codons pooled across 11 species: Athaliana,
+# Bstricta, Crubella, Esalsugineum, Fvesca, Csativus, Cclementina,
+# Mtruncatula, Ljaponicus, Dcarota, Osativa.
+
+
+def kozak_score(seq: str, atg_offset: int) -> float | None:
+    """Log2-odds Kozak-context score for the ATG at transcript offset atg_offset.
+
+    None if the window falls outside seq, or contains a base other than
+    A/C/G/T (an assembly gap in the window makes the score meaningless).
+    """
+    lo = atg_offset - KOZAK_WINDOW_UPSTREAM
+    hi = atg_offset + 3 + KOZAK_WINDOW_DOWNSTREAM
+    if lo < 0 or hi > len(seq):
+        return None
+    window = seq[lo:hi]
+    score = 0.0
+    for i, base in enumerate(window):
+        if base not in "ACGT":
+            return None
+        score += KOZAK_PWM_LOG_ODDS[i]["ACGT".index(base)]
+    return score
+
 
 CDS = "CDS"
 FIVE_PRIME_UTR = "five_prime_UTR"
@@ -355,6 +436,92 @@ def find_best_orf(
     return best
 
 
+def first_exon_length(transcript: Transcript, begin: int, stop: int) -> int:
+    """Length, in transcript coordinates, of the CDS's first coding exon.
+
+    The CDS is already known contiguous within the spliced transcript (the
+    caller has already ruled out ``discontiguous_cds``), so the first splice
+    junction after ``begin`` -- the smallest exon offset strictly greater
+    than ``begin`` -- caps the first coding exon, or ``stop`` does if
+    ``begin`` falls in the CDS's last exon.
+    """
+    later_offsets = [o for o in transcript.exon_offsets if o > begin]
+    first_exon_end = min(later_offsets) if later_offsets else stop
+    return min(first_exon_end, stop) - begin
+
+
+def find_best_start_by_kozak(
+    seq: str,
+    cds_begin: int,
+    cds_stop: int,
+    max_shift: int,
+    min_protein_length: int,
+) -> tuple[int, int, float] | None:
+    """Best-Kozak-scoring valid ORF within max_shift of (cds_begin, cds_stop),
+    among candidates that preserve both cds_begin's reading frame and
+    cds_stop exactly.
+
+    Same candidate space as find_best_orf -- every in-frame ATG within the
+    window, each with its forced downstream in-frame stop -- but ranked by
+    kozak_score() instead of boundary movement, and restricted to
+    candidates that (a) share cds_begin's reading frame and (b) whose
+    forced downstream stop is cds_stop itself, unchanged. This repair only
+    re-picks *which* start codon within an already-valid ORF is used; it
+    must never change the reading frame or the stop codon, either of which
+    would silently replace the protein with an unrelated one chosen on 5'
+    evidence alone.
+
+    Both restrictions are necessary, not just the frame one: a same-frame
+    candidate upstream of cds_begin (still within the exonic sequence, e.g.
+    in the 5' UTR) is not guaranteed to reach cds_stop without hitting an
+    earlier in-frame stop first -- that region was never covered by the
+    original ORF's own validity check, so it may harbor a short, unrelated
+    upstream ORF (a real uORF, or just incidental sequence) that happens to
+    have a strong Kozak context purely because Kozak scoring only looks at
+    +/-6 nt around the ATG, independent of what follows. Requiring
+    stop == cds_stop explicitly rules those out, rather than relying on it
+    holding "naturally" -- confirmed against real genome-scale data that it
+    does not hold naturally for every same-frame candidate in the window.
+    Candidates whose Kozak window falls outside the sequence (kozak_score
+    returns None) are skipped: there is nothing to compare.
+
+    Returns
+    -------
+    tuple[int, int, float] | None
+        (begin, stop, kozak_score) for the winner, or None if no valid
+        candidate in the window has a computable Kozak score.
+    """
+    next_stop = build_next_in_frame_stop(seq)
+    lo = max(0, cds_begin - max_shift)
+    hi = min(len(seq), cds_begin + max_shift + 1)
+
+    best: tuple[int, int, float] | None = None
+    for begin in range(lo, hi):
+        if (begin - cds_begin) % 3 != 0:
+            continue
+        if seq[begin : begin + 3] != START_CODON:
+            continue
+        stop_offset = next_stop[begin]
+        if stop_offset < 0:
+            continue
+        stop = stop_offset + 3
+        if stop != cds_stop:
+            # The candidate's own downstream path hits an earlier (or
+            # later) in-frame stop than the original -- it is not a
+            # different start for the same ORF, it is a different ORF.
+            continue
+        if stop - begin < 3 * (min_protein_length + 1):
+            continue
+        if abs(stop - cds_stop) > max_shift:
+            continue
+        score = kozak_score(seq, begin)
+        if score is None:
+            continue
+        if best is None or score > best[2]:
+            best = (begin, stop, score)
+    return best
+
+
 # -------------------------------------------------------------------------------------------------
 # Repair
 # -------------------------------------------------------------------------------------------------
@@ -418,51 +585,82 @@ def rebuild_children(
     return records
 
 
+def has_noncanonical_introns(transcript: Transcript, chrom: str) -> bool:
+    """True if any of the transcript's introns has a non-canonical donor/acceptor pair."""
+    for intron_start, intron_end in transcript.introns():
+        if intron_end < intron_start:
+            return True
+        donor = chrom[intron_start - 1 : intron_start + 1].upper()
+        acceptor = chrom[intron_end - 2 : intron_end].upper()
+        if transcript.strand == "-":
+            donor, acceptor = revcomp(acceptor), revcomp(donor)
+        if (donor, acceptor) not in CANONICAL_SPLICE_PAIRS:
+            return True
+    return False
+
+
 def repair_transcript(
     transcript: Transcript,
     chrom: str,
     max_shift: int,
     min_protein_length: int,
     require_canonical: bool,
+    fix_weak_starts: bool,
+    weak_start_threshold: int,
+    kozak_margin: float,
+    weak_kozak_threshold: float,
 ) -> tuple[Result, list[Record] | None]:
     """Evaluate and, if needed and possible, repair one transcript's CDS."""
-    cds_records = [r for r in transcript.children if r.type == CDS]
-    if not cds_records:
-        return Result("skipped", "no_cds"), None
-
-    transcript.build_exons()
-    if transcript.length == 0:
-        return Result("skipped", "no_exons"), None
-
-    seq = transcript.spliced_sequence(chrom)
-    if len(seq) != transcript.length:
-        return Result("skipped", "sequence_length_mismatch"), None
-
-    # Locate the predicted CDS in transcript coordinates.
-    coding_first = min(r.start for r in cds_records)
-    coding_last = max(r.end for r in cds_records)
-    if transcript.strand == "+":
-        begin = transcript.genomic_to_transcript(coding_first)
-        stop_inclusive = transcript.genomic_to_transcript(coding_last)
-    else:
-        begin = transcript.genomic_to_transcript(coding_last)
-        stop_inclusive = transcript.genomic_to_transcript(coding_first)
-    if begin is None or stop_inclusive is None:
-        return Result("skipped", "cds_outside_exons"), None
-    stop = stop_inclusive + 1
-
-    cds_length = sum(r.end - r.start + 1 for r in cds_records)
-    if stop - begin != cds_length:
-        # The predicted CDS is not contiguous within the spliced transcript,
-        # which means UTR was called between two CDS blocks.  Repairing that
-        # would require changing the model's own feature layout.
-        return Result("partial", "discontiguous_cds"), None
+    located = locate_cds(transcript, chrom)
+    if isinstance(located, Result):
+        return located, None
+    seq, begin, stop = located
 
     missing_start = seq[begin : begin + 3] != START_CODON
     missing_stop = seq[stop - 3 : stop] not in STOP_CODONS
     ambiguous = "N" in seq[begin:stop]
 
     if not ambiguous and is_complete_orf(seq, begin, stop, min_protein_length):
+        if (
+            fix_weak_starts
+            and first_exon_length(transcript, begin, stop) < weak_start_threshold
+        ):
+            original_score = kozak_score(seq, begin)
+            alt = find_best_start_by_kozak(
+                seq, begin, stop, max_shift, min_protein_length
+            )
+            # An active repair still needs trustworthy splice calls to build
+            # on, exactly like the invalid-ORF repair path below -- but a
+            # non-canonical intron only blocks the *switch*, not the
+            # informational weak_kozak_support flag, since flagging never
+            # changes gene structure.
+            blocked_by_noncanonical_introns = require_canonical and (
+                has_noncanonical_introns(transcript, chrom)
+            )
+            if (
+                not blocked_by_noncanonical_introns
+                and alt is not None
+                and original_score is not None
+                and alt[2] > original_score + kozak_margin
+            ):
+                new_begin, new_stop, _ = alt
+                records = rebuild_children(
+                    transcript, new_begin, new_stop, transcript.children
+                )
+                return (
+                    Result(
+                        "repaired",
+                        issue="weak_start_kozak",
+                        shift5=new_begin - begin,
+                        shift3=new_stop - stop,
+                    ),
+                    records,
+                )
+            candidate_scores = [
+                s for s in (original_score, alt[2] if alt else None) if s is not None
+            ]
+            if candidate_scores and max(candidate_scores) < weak_kozak_threshold:
+                return Result("complete", issue="weak_kozak_support"), None
         return Result("complete"), None
 
     if "N" in seq:
@@ -479,18 +677,7 @@ def repair_transcript(
         )
 
     # Introns must be trustworthy before an ORF is built on top of them.
-    noncanonical = 0
-    for intron_start, intron_end in transcript.introns():
-        if intron_end < intron_start:
-            noncanonical += 1
-            continue
-        donor = chrom[intron_start - 1 : intron_start + 1].upper()
-        acceptor = chrom[intron_end - 2 : intron_end].upper()
-        if transcript.strand == "-":
-            donor, acceptor = revcomp(acceptor), revcomp(donor)
-        if (donor, acceptor) not in CANONICAL_SPLICE_PAIRS:
-            noncanonical += 1
-    if noncanonical and require_canonical:
+    if has_noncanonical_introns(transcript, chrom) and require_canonical:
         return (
             Result(
                 "partial",
@@ -545,6 +732,146 @@ def iter_fasta(path: str):
             yield seqid, "".join(chunks)
 
 
+def locate_cds(transcript: Transcript, chrom: str) -> tuple[str, int, int] | Result:
+    """(spliced_seq, begin, stop) for a transcript's predicted CDS in transcript
+    coordinates, or a Result describing why it couldn't be located. stop is
+    exclusive. Shared setup between repair_transcript and
+    calibrate_kozak_margin -- the latter only cares whether this succeeded,
+    not why it failed, and skips the transcript on any Result return."""
+    cds_records = [r for r in transcript.children if r.type == CDS]
+    if not cds_records:
+        return Result("skipped", "no_cds")
+    transcript.build_exons()
+    if transcript.length == 0:
+        return Result("skipped", "no_exons")
+    seq = transcript.spliced_sequence(chrom)
+    if len(seq) != transcript.length:
+        return Result("skipped", "sequence_length_mismatch")
+    coding_first = min(r.start for r in cds_records)
+    coding_last = max(r.end for r in cds_records)
+    if transcript.strand == "+":
+        begin = transcript.genomic_to_transcript(coding_first)
+        stop_inclusive = transcript.genomic_to_transcript(coding_last)
+    else:
+        begin = transcript.genomic_to_transcript(coding_last)
+        stop_inclusive = transcript.genomic_to_transcript(coding_first)
+    if begin is None or stop_inclusive is None:
+        return Result("skipped", "cds_outside_exons")
+    stop = stop_inclusive + 1
+    cds_length = sum(r.end - r.start + 1 for r in cds_records)
+    if stop - begin != cds_length:
+        # The predicted CDS is not contiguous within the spliced transcript,
+        # which means UTR was called between two CDS blocks.  Repairing that
+        # would require changing the model's own feature layout.
+        return Result("partial", "discontiguous_cds")
+    return seq, begin, stop
+
+
+# Target false-positive rate for calibrate_kozak_margin: the fraction of a
+# genome's own already-correct start codons the calibrated margin is allowed
+# to risk switching away from. 2% was picked the same way exon_length
+# strictness and the Kozak margin/threshold defaults were: bracketed against
+# real cross-species validation, not guessed. See calibrate_kozak_margin.
+KOZAK_MARGIN_TARGET_FP_RATE = 0.02
+
+
+def calibrate_kozak_margin(
+    by_seqid: dict[str, list[Transcript]],
+    input_fasta: str,
+    max_shift: int,
+    min_protein_length: int,
+    weak_start_threshold: int,
+    default_margin: float,
+    min_confident: int = 200,
+) -> float:
+    """Pick --kozak-margin for this genome instead of trusting one fixed
+    value for every species.
+
+    A single cross-species Kozak PWM does not carry the same reliability
+    into every genome it is applied to -- the model's own weak-start
+    candidates are ambiguous by construction, so there is no direct way to
+    check the margin against them, but every genome already has thousands of
+    transcripts whose start is *not* ambiguous (first coding exon well clear
+    of weak_start_threshold, complete ORF, canonical introns). Those are
+    known-correct starts. Running the same find_best_start_by_kozak logic
+    against them, at the default margin, measures directly how often this
+    genome's Kozak scores would talk the rule into switching away from a
+    start already known to be right -- a per-genome reliability estimate
+    that needs no assumption about what a "universal" Kozak signal looks
+    like, and no borrowed cross-species data.
+
+    The margin is raised only as far as needed to keep that measured
+    false-positive rate at or below KOZAK_MARGIN_TARGET_FP_RATE (the
+    (1 - KOZAK_MARGIN_TARGET_FP_RATE) quantile of the score-gap distribution
+    over known-correct starts), never lowered below default_margin.
+
+    Cross-species validation (Othomaeum, Rcommunis, Cquinoa, Oeuropaea;
+    reference-annotated, held out from PWM fitting): at the fixed default
+    margin, aggregate precision on switches that actually changed TIS
+    correctness was 66.3% (63 correct / 32 wrong), but Cquinoa alone was
+    net negative (9 correct / 12 wrong) -- its own confident starts showed
+    an 8-9% false-positive rate against the default margin, far above the
+    other three species. Per-genome calibration raised Cquinoa's margin
+    enough to stop triggering wrong switches there (0/0) while leaving the
+    other three species' margins close to the default, moving aggregate
+    precision to 78.3% (18/23) with no species left net negative.
+
+    Falls back to default_margin if there are too few confident transcripts
+    (under 200) to calibrate against reliably -- e.g. a single small
+    scaffold processed on its own.
+    """
+    gaps: list[float] = []
+    n_confident = 0
+
+    for seqid, chrom in iter_fasta(input_fasta):
+        if seqid not in by_seqid:
+            continue
+        for transcript in by_seqid[seqid]:
+            located = locate_cds(transcript, chrom)
+            if isinstance(located, Result):
+                continue
+            seq, begin, stop = located
+            if "N" in seq[begin:stop]:
+                continue
+            if not is_complete_orf(seq, begin, stop, min_protein_length):
+                continue
+            if first_exon_length(transcript, begin, stop) < weak_start_threshold:
+                continue  # the ambiguous population itself -- must not leak into calibration
+            if has_noncanonical_introns(transcript, chrom):
+                continue
+            original_score = kozak_score(seq, begin)
+            if original_score is None:
+                continue
+            alt = find_best_start_by_kozak(
+                seq, begin, stop, max_shift, min_protein_length
+            )
+            n_confident += 1
+            if alt is not None:
+                gaps.append(alt[2] - original_score)
+
+    if n_confident < min_confident:
+        logger.warning(
+            f"Only {n_confident} confident in-genome start codons found; too few "
+            f"to calibrate --kozak-margin, keeping default {default_margin}"
+        )
+        return default_margin
+
+    gaps.sort()
+    n_would_switch = sum(1 for g in gaps if g > default_margin)
+    if gaps:
+        k = min(int(len(gaps) * (1 - KOZAK_MARGIN_TARGET_FP_RATE)), len(gaps) - 1)
+        calibrated = max(default_margin, gaps[k])
+    else:
+        calibrated = default_margin
+    logger.info(
+        f"Calibrated --kozak-margin {default_margin} -> {calibrated:.2f} from "
+        f"{n_confident} confident in-genome start codons ({n_would_switch}/"
+        f"{n_confident} = {100 * n_would_switch / n_confident:.2f}% would have "
+        f"been wrongly switched at the default margin)"
+    )
+    return calibrated
+
+
 def fix_orf(
     input_gff: str,
     input_fasta: str,
@@ -553,6 +880,11 @@ def fix_orf(
     min_protein_length: int,
     require_canonical: bool,
     report_path: str | None,
+    fix_weak_starts: bool = True,
+    weak_start_threshold: int = 9,
+    kozak_margin: float = 3.0,
+    weak_kozak_threshold: float = 5.0,
+    calibrate_margin: bool = True,
 ) -> Counter:
     logger.info(f"Reading GFF {input_gff}")
     header, records = read_gff(input_gff)
@@ -580,6 +912,16 @@ def fix_orf(
     for transcript in transcripts.values():
         by_seqid[transcript.seqid].append(transcript)
 
+    if fix_weak_starts and calibrate_margin:
+        kozak_margin = calibrate_kozak_margin(
+            by_seqid,
+            input_fasta,
+            max_shift,
+            min_protein_length,
+            weak_start_threshold,
+            kozak_margin,
+        )
+
     stats: Counter = Counter()
     shift_hist: Counter = Counter()
     results: dict[str, Result] = {}
@@ -598,6 +940,10 @@ def fix_orf(
                 max_shift=max_shift,
                 min_protein_length=min_protein_length,
                 require_canonical=require_canonical,
+                fix_weak_starts=fix_weak_starts,
+                weak_start_threshold=weak_start_threshold,
+                kozak_margin=kozak_margin,
+                weak_kozak_threshold=weak_kozak_threshold,
             )
             mrna_id = transcript.mrna.id or ""
             results[mrna_id] = result
@@ -689,7 +1035,10 @@ def fix_orf(
     )
     issues = {k[6:]: v for k, v in stats.items() if k.startswith("issue:")}
     if issues:
-        logger.info("  unrepaired, by reason:")
+        # Not all issues mean "unrepaired": weak_start_kozak is a repair
+        # that happened (status=repaired) but is still worth surfacing here;
+        # the others (noncanonical_intron, ambiguous_bases, ...) are not.
+        logger.info("  by issue:")
         for reason, count in sorted(issues.items(), key=lambda kv: -kv[1]):
             logger.info(f"    {reason:24s} {count:8d}")
     if shift_hist:
@@ -737,6 +1086,45 @@ def main() -> None:
         "Off by default: an ORF built on untrustworthy splice calls is not trustworthy.",
     )
     parser.add_argument(
+        "--no-fix-weak-starts",
+        dest="fix_weak_starts",
+        action="store_false",
+        help="Disable Kozak-context re-ranking of already-valid but "
+        "suspiciously short first exons. On by default.",
+    )
+    parser.add_argument(
+        "--weak-start-threshold",
+        type=int,
+        default=9,
+        help="First coding exon length (nt) below which alternative start "
+        "codons are considered, when --no-fix-weak-starts is not set.",
+    )
+    parser.add_argument(
+        "--kozak-margin",
+        type=float,
+        default=3.0,
+        help="Minimum Kozak log2-odds advantage an alternative start codon "
+        "must have over the original to trigger a switch. Used as the floor "
+        "value calibrate_kozak_margin raises from per genome, unless "
+        "--no-calibrate-kozak-margin is set, in which case it is used as-is.",
+    )
+    parser.add_argument(
+        "--no-calibrate-kozak-margin",
+        dest="calibrate_margin",
+        action="store_false",
+        help="Use --kozak-margin as a fixed value for every genome instead of "
+        "raising it per genome from that genome's own confident (unambiguous) "
+        "start codons. On by default.",
+    )
+    parser.add_argument(
+        "--weak-kozak-threshold",
+        type=float,
+        default=5.0,
+        help="Kozak log2-odds score below which even the best candidate "
+        "start is flagged (orf_issue=weak_kozak_support) rather than kept "
+        "silently.",
+    )
+    parser.add_argument(
         "--report",
         default=None,
         help="Optional TSV path for per-transcript status output",
@@ -751,6 +1139,11 @@ def main() -> None:
         min_protein_length=args.min_protein_length,
         require_canonical=not args.allow_noncanonical_introns,
         report_path=args.report,
+        fix_weak_starts=args.fix_weak_starts,
+        weak_start_threshold=args.weak_start_threshold,
+        kozak_margin=args.kozak_margin,
+        weak_kozak_threshold=args.weak_kozak_threshold,
+        calibrate_margin=args.calibrate_margin,
     )
 
 

@@ -2,7 +2,7 @@
 
 # GeneCAD: Plant Genome Annotation with a DNA Foundation Model
 
-![](https://img.shields.io/badge/version-0.4.1-blue)
+![](https://img.shields.io/badge/version-0.4.2-blue)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![CI](https://github.com/plantcad/genecad/actions/workflows/ci.yaml/badge.svg)](https://github.com/plantcad/genecad/actions/workflows/ci.yaml)
 [![bioRxiv](https://img.shields.io/badge/bioRxiv-10.1101/2025.10.31.685877-b31b1b.svg)](https://doi.org/10.1101/2025.10.31.685877)
@@ -392,7 +392,8 @@ Refer to the `docs/` folder for full parameter lists for each step/script.
 4. [Export GFFs](docs/export_gff.md) - `scripts/export_gff.py` - Converts the genomic intervals to GFF format.
 5. [Filter GFFs](docs/filter_raw_gff.md) - `scripts/filter_raw_gff.py` - Removes fragmented or excessively short gene models.
 6. [Merge Chromosme GFFs](docs/merge_gff.md) - `scripts/merge_gff.py` - Merges per-chromosome GFF files into a single unified file.
-7. [Refine with ReelProtein](docs/refine.md) - `scripts/refine.py` - **REQUIRES GPU** - Uses ReelProtein to evaluate  and filter gene models for likely
+7. [Repair ORFs](docs/fix_orf.md) - `scripts/fix_orf.py` - Repairs CDS boundaries against the genome sequence so each transcript is a valid, translatable ORF.
+8. [Refine with ReelProtein](docs/refine.md) - `scripts/refine.py` - **REQUIRES GPU** - Uses ReelProtein to evaluate  and filter gene models for likely
 protein functionality and merges gene fragments.
 
 #### Outputs
