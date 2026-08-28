@@ -2,7 +2,7 @@
 
 # GeneCAD: Plant Genome Annotation with a DNA Foundation Model
 
-![](https://img.shields.io/badge/version-0.4.2-blue)
+![](https://img.shields.io/badge/version-0.4.3-blue)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![CI](https://github.com/plantcad/genecad/actions/workflows/ci.yaml/badge.svg)](https://github.com/plantcad/genecad/actions/workflows/ci.yaml)
 [![bioRxiv](https://img.shields.io/badge/bioRxiv-10.1101/2025.10.31.685877-b31b1b.svg)](https://doi.org/10.1101/2025.10.31.685877)
@@ -53,6 +53,7 @@ v0.1.0 or earlier, we recommend installing the latest version and re-running all
   * [Predict](#predict)
   * [Evaluate](#evaluate)
   * [Summarize](#summarize)
+  * [Masked Motif Logistic Regression](#masked-motif-logistic-regression)
 * [Troubleshooting](#troubleshooting)
 * [Citation](#citation)
 * [Development](#development)
@@ -641,6 +642,19 @@ It is usually called `train.zarr` or `valid.zarr`
 * `--limit` - Limits the number of samples to summarize for debugging purposes
 
 ---
+
+### Masked Motif Logistic Regression
+
+Masked Motif Logistic Regression (MMLR) is used to evaluate gene models and choose training genomes
+with high-confidence annotations. It calculates zero-shot PlantCAD masked motif scores for
+four major features: start codon, stop codon, and donor and acceptor dinucleotides, if present. Then,
+a simple logistic regression model fit to maize classical genes using a positive-unlabeled learning method
+predicts whether each transcript is likely to be a functional protein-coding gene.
+
+Use this pipeline to exclude low-confidence gene models from training or to evaluate gene
+models produced by annotation pipelines.
+
+For detailed information and usage instructions, see the [MMLR Documentation Page](docs/masked_motif_logistic_regression.md)
 
 ## Troubleshooting
 
