@@ -13,6 +13,7 @@ import pandas as pd
 import numpy as np
 from Bio import SeqIO
 from Bio.SeqFeature import SeqFeature
+from src.atomic_io import atomic_output_path
 from src.gff_parser import parse as parse_gff
 from src.dataset import (
     DEFAULT_SEQUENCE_CHUNK_SIZE,
@@ -468,19 +469,80 @@ def extract_fasta_file(
     if tokenizer_path:
         tokenizer = _load_tokenizer(tokenizer_path)
 
-    # Extract sequences
-    _extract_fasta_sequences(
-        species_id=species_id,
-        fasta_file=fasta_file,
-        chrom_map=chrom_map,
-        output_path=output_path,
-        chunk_size=chunk_size,
-        tokenizer=tokenizer,
-    )
+    # Extract sequences. Written to a .tmp path and only promoted to
+    # output_path on success, so a killed run never leaves a partial Zarr
+    # store at the path predict.sh's resume check looks for.
+    with atomic_output_path(output_path) as tmp_output_path:
+        _extract_fasta_sequences(
+            species_id=species_id,
+            fasta_file=fasta_file,
+            chrom_map=chrom_map,
+            output_path=tmp_output_path,
+            chunk_size=chunk_size,
+            tokenizer=tokenizer,
+        )
 
     dt = open_datatree(output_path)
     logger.info(f"Final data tree:\n{dt}")
     logger.info("Done")
+
+
+def extract_fasta_manifest(
+    species_id: str,
+    fasta_file: str,
+    entries: list[dict],
+    chunk_size: int = DEFAULT_SEQUENCE_CHUNK_SIZE,
+    tokenizer_path: str | None = None,
+) -> None:
+    """Extract many chromosomes from one FASTA file with a single linear scan.
+
+    `extract_fasta_file` is called once per chromosome by the prediction
+    pipeline; each call re-parses `fasta_file` from the start looking for its
+    one target record, which costs O(chromosome count x file size) overall
+    on a genome with many contigs/scaffolds. This instead takes every
+    chromosome that still needs extracting in one manifest and writes each to
+    its own Zarr store (per `entry["output_zarr"]`) in a single pass over the
+    file, while every other pipeline step keeps reading from those same
+    per-chromosome paths untouched.
+
+    Parameters
+    ----------
+    species_id : str
+        Species ID to process
+    fasta_file : str
+        Path to input FASTA file
+    entries : list[dict]
+        One dict per chromosome, each with 'chromosome_id' (the FASTA record
+        ID to extract) and 'output_zarr' (its own output Zarr path).
+    chunk_size : int, optional
+        Size of chunks to write to Zarr
+    tokenizer_path : str, optional
+        Path to tokenizer if tokenizing sequences
+    """
+    chrom_map = {entry["chromosome_id"]: entry["chromosome_id"] for entry in entries}
+    chrom_output_paths = {
+        entry["chromosome_id"]: entry["output_zarr"] for entry in entries
+    }
+
+    for target_path in chrom_output_paths.values():
+        target_dir = os.path.dirname(target_path)
+        if target_dir and not os.path.exists(target_dir):
+            os.makedirs(target_dir, exist_ok=True)
+
+    tokenizer = None
+    if tokenizer_path:
+        tokenizer = _load_tokenizer(tokenizer_path)
+
+    _extract_fasta_sequences(
+        species_id=species_id,
+        fasta_file=fasta_file,
+        chrom_map=chrom_map,
+        chrom_output_paths=chrom_output_paths,
+        chunk_size=chunk_size,
+        tokenizer=tokenizer,
+    )
+
+    logger.info(f"Done: {len(entries)} chromosome(s) extracted in one pass")
 
 
 # TODO: duplicated - move to dedicated utils file in src
@@ -504,10 +566,25 @@ def _extract_fasta_sequences(
     species_id: str,
     fasta_file: str,
     chrom_map: dict[str, str] | None,
-    output_path: str,
+    output_path: str | None = None,
+    chrom_output_paths: dict[str, str] | None = None,
     chunk_size: int,
     tokenizer: Tokenizer | None = None,
 ):
+    """Parse `fasta_file` once and write each matched chromosome to Zarr.
+
+    Exactly one of `output_path` (every chromosome written into one shared
+    Zarr store, as separate groups) or `chrom_output_paths` (a per-chromosome
+    map to its own, independent Zarr store) must be given. The latter is what
+    lets many chromosomes share a single linear scan of `fasta_file` while
+    still landing at the separate per-chromosome paths the rest of the
+    pipeline expects.
+    """
+    if (output_path is None) == (chrom_output_paths is None):
+        raise ValueError(
+            "Exactly one of output_path or chrom_output_paths must be given"
+        )
+
     # Process each species config
 
     logger.info(f"[species={species_id}] Processing FASTA file: {fasta_file}")
@@ -611,22 +688,49 @@ def _extract_fasta_sequences(
 
         # Set chunking and save
         ds = set_dimension_chunks(ds, "sequence", chunk_size)
-        logger.info(
-            f"[species={species_id}] Saving {chrom_id} dataset to {output_path}"
-        )
-        ds.to_zarr(
-            output_path,
-            group=f"{species_id}/{chrom_id}",
-            zarr_format=2,
-            consolidated=True,
-            mode="w",
-        )
+        if chrom_output_paths is not None:
+            # Each chromosome gets its own store, so it can be written
+            # atomically without disturbing the others written in this
+            # same pass over the FASTA file.
+            target_path = chrom_output_paths[chrom_id]
+            logger.info(
+                f"[species={species_id}] Saving {chrom_id} dataset to {target_path}"
+            )
+            with atomic_output_path(target_path) as tmp_target_path:
+                ds.to_zarr(
+                    tmp_target_path,
+                    group=f"{species_id}/{chrom_id}",
+                    zarr_format=2,
+                    consolidated=True,
+                    mode="w",
+                )
+        else:
+            # All chromosomes share one store as separate groups, so it can
+            # only be promoted atomically once as a whole by the caller
+            # (see extract_fasta_file), not per group here.
+            logger.info(
+                f"[species={species_id}] Saving {chrom_id} dataset to {output_path}"
+            )
+            ds.to_zarr(
+                output_path,
+                group=f"{species_id}/{chrom_id}",
+                zarr_format=2,
+                consolidated=True,
+                mode="w",
+            )
 
-    logger.info(
-        f"[species={species_id}] Saved {len(sequence_records)} chromosome sequences to {output_path}"
-        if sequence_records
-        else f"[species={species_id}] No sequences were extracted"
-    )
+    if not sequence_records:
+        logger.info(f"[species={species_id}] No sequences were extracted")
+    elif chrom_output_paths is not None:
+        logger.info(
+            f"[species={species_id}] Saved {len(sequence_records)} chromosome "
+            f"sequences to their own Zarr stores"
+        )
+    else:
+        logger.info(
+            f"[species={species_id}] Saved {len(sequence_records)} chromosome "
+            f"sequences to {output_path}"
+        )
 
 
 def create_token_map(
@@ -675,7 +779,18 @@ def main():
         "chromosome mapping as 'src1:dst1,src2:dst2,...'. Optional.",
     )
     parser.add_argument(
-        "--output-zarr", "-o", required=True, help="Path to output file"
+        "--output-zarr",
+        "-o",
+        default=None,
+        help="Path to output file. Required if --manifest is not specified.",
+    )
+    parser.add_argument(
+        "--manifest",
+        type=str,
+        default=None,
+        help="Manifest json for multi-chromosome runs sharing one FASTA scan. "
+        "Each entry needs 'chromosome_id' and 'output_zarr'. Required if "
+        "--output-zarr is not specified.",
     )
     parser.add_argument(
         "--model-checkpoint",
@@ -715,13 +830,31 @@ def main():
             )
             raise RuntimeError
 
-    extract_fasta_file(
-        args.species_id,
-        args.input_fasta,
-        args.chrom_map,
-        args.output_zarr,
-        tokenizer_path=base_model_path,
-    )
+    if args.manifest is None:
+        if args.output_zarr is None:
+            logger.error(
+                "Error: one of the following must be provided:\n"
+                "--manifest\n OR \n --output-zarr"
+            )
+            raise RuntimeError
+
+        extract_fasta_file(
+            args.species_id,
+            args.input_fasta,
+            args.chrom_map,
+            args.output_zarr,
+            tokenizer_path=base_model_path,
+        )
+    else:
+        with open(args.manifest) as fh:
+            entries = json.load(fh)
+
+        extract_fasta_manifest(
+            args.species_id,
+            args.input_fasta,
+            entries,
+            tokenizer_path=base_model_path,
+        )
 
 
 if __name__ == "__main__":

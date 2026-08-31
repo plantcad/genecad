@@ -77,6 +77,10 @@ Batch size auto-detection:
   On failure the batch size is reduced by 20% and retried (up to 20 times). This finds
   a near-optimal size rather than jumping to half. The final working value is printed
   so you can pin it with '-b N' on future runs and skip probing entirely.
+  Whatever value a chromosome succeeds with is also cached per GPU under
+  <output-dir>/.state/ and reused as the starting point for the next chromosome
+  on that GPU, so probing/retrying only happens once per GPU as long as the
+  hardware and free VRAM stay the same.
 
 Multi-GPU dispatch (chosen automatically):
   chromosomes < GPUs  →  DDP (torchrun): all GPUs collaborate on each chromosome.
@@ -330,6 +334,14 @@ export PYTHONPATH="$SCRIPT_DIR${PYTHONPATH:+:$PYTHONPATH}"
 
 mkdir -p "$OUTPUT_DIR"
 
+# Per-GPU batch size learned from the last successful chromosome on that GPU
+# (or a shared "ddp" key in DDP mode). Chromosomes are processed sequentially
+# per GPU (see the round-robin dispatch below), so a plain file is a safe way
+# to carry the value forward without needing shell-level shared state across
+# the background subshells each chromosome runs in.
+BATCH_SIZE_STATE_DIR="$OUTPUT_DIR/.state"
+mkdir -p "$BATCH_SIZE_STATE_DIR"
+
 # =================================================================
 # Step 1: Discover chromosomes from FASTA headers
 # =================================================================
@@ -431,6 +443,61 @@ echo "$CHROM_IDS"
 echo ""
 
 # =================================================================
+# Step 1.5: Batch-extract sequences for all chromosomes in one pass
+# =================================================================
+# extract_fasta.py's per-chromosome mode (used below as a fallback) re-parses
+# the whole FASTA file from the start for every chromosome it's asked for —
+# O(chromosome count x file size) overall on assemblies with many
+# contigs/scaffolds. Do it once instead: collect every chromosome that still
+# needs its sequences.zarr and hand them all to extract_fasta.py in a single
+# pass over the file via --manifest. Each chromosome is still written
+# atomically to its own independent path (see atomic_output_path in
+# src/atomic_io.py), so this composes with per-chromosome resume exactly as
+# before.
+echo "================================================================="
+echo "Extracting sequences for all chromosomes (single pass over FASTA)..."
+echo "================================================================="
+EXTRACT_MANIFEST="$BATCH_SIZE_STATE_DIR/extract_manifest.json"
+EXTRACT_MANIFEST_COUNT=$(CHROM_IDS="$CHROM_IDS" OUTPUT_DIR="$OUTPUT_DIR" $PYTHON - "$EXTRACT_MANIFEST" <<'PYEOF'
+import json
+import os
+import sys
+
+manifest_path = sys.argv[1]
+output_dir = os.environ["OUTPUT_DIR"]
+chrom_ids = [c for c in os.environ["CHROM_IDS"].splitlines() if c.strip()]
+
+entries = []
+for chrom_id in chrom_ids:
+    chrom_dir = os.path.join(output_dir, chrom_id)
+    sequences_zarr = os.path.join(chrom_dir, f"sequences_{chrom_id}.zarr")
+    filtered_gff = os.path.join(chrom_dir, f"predictions_filtered_{chrom_id}.gff")
+    # Skip chromosomes that already have sequences.zarr, or are already
+    # fully done (no need to re-extract sequences for those on resume).
+    if os.path.exists(sequences_zarr) or os.path.isfile(filtered_gff):
+        continue
+    entries.append({"chromosome_id": chrom_id, "output_zarr": sequences_zarr})
+
+with open(manifest_path, "w") as fh:
+    json.dump(entries, fh)
+
+print(len(entries))
+PYEOF
+)
+
+if [[ "$EXTRACT_MANIFEST_COUNT" -gt 0 ]]; then
+    echo "Extracting $EXTRACT_MANIFEST_COUNT chromosome(s) needing sequences.zarr..."
+    $PYTHON "$SCRIPT_DIR/scripts/extract_fasta.py" \
+        --species-id "$SPECIES_ID" \
+        --input-fasta "$INPUT_FILE" \
+        --model-path "$TOKENIZER_PATH" \
+        --manifest "$EXTRACT_MANIFEST"
+else
+    echo "All chromosomes already have sequences.zarr — nothing to extract."
+fi
+echo ""
+
+# =================================================================
 # Step 2: Per-chromosome pipeline (all 6 steps)
 # =================================================================
 
@@ -474,6 +541,23 @@ process_chromosome() {
     else
         local gpu_id="$GPU_ID"
         local bs="$BATCH_SIZE"
+        # Reuse the batch size the last chromosome on this GPU actually
+        # succeeded with, instead of re-probing from the initial VRAM-based
+        # guess (and re-triggering the same OOM retries) on every chromosome.
+        # Chromosomes on a given GPU run one at a time (see the round-robin
+        # dispatch below / the sequential DDP loop), so this file is never
+        # read and written concurrently for the same key.
+        local cache_key="ddp"
+        [[ "$PREDICT_MODE" != "ddp" && "$PREDICT_MODE" != "ddp_slurm" ]] && cache_key="$gpu_id"
+        local batch_size_cache_file="$BATCH_SIZE_STATE_DIR/batch_size_${cache_key}.txt"
+        if [[ -f $batch_size_cache_file ]]; then
+            local cached_bs
+            cached_bs=$(cat "$batch_size_cache_file" 2>/dev/null)
+            if [[ "$cached_bs" =~ ^[0-9]+$ ]] && [[ "$cached_bs" -ge 1 ]]; then
+                echo "${LOG_PREFIX} [2/8] Using batch size ${cached_bs} learned from a previous chromosome on this GPU (was ${bs})."
+                bs="$cached_bs"
+            fi
+        fi
         local attempt=0
         local max_attempts=20  # 20% reduction per step: ~20 steps to go from 256→1
         local success=0
@@ -525,6 +609,7 @@ process_chromosome() {
             fi
             if [[ $exit_code -eq 0 ]]; then
                 success=1
+                echo "$bs" > "$batch_size_cache_file"
                 if [[ $attempt -gt 0 ]]; then
                     echo "${LOG_PREFIX} [2/8] Succeeded with batch size ${bs} after ${attempt} retry(s)."
                     echo "${LOG_PREFIX}   TIP: Add '-b ${bs}' to future runs to skip probing."
@@ -536,7 +621,14 @@ process_chromosome() {
             [[ $next_bs -lt 1 ]] && next_bs=1
             echo "${LOG_PREFIX} [2/8] Failed (exit ${exit_code}). Reducing batch size by 20%%: ${bs} → ${next_bs}..."
             bs=$next_bs
-            rm -rf $PREDICTIONS_DIR
+            # predict.py now writes to PREDICTIONS_DIR.tmp and only renames it
+            # onto PREDICTIONS_DIR once the whole call succeeds (see
+            # scripts/predict.py's atomic rename-after-barrier), so a failed
+            # attempt's partial output lands in .tmp, not PREDICTIONS_DIR
+            # itself. Clear both, or the next attempt's writer sees the
+            # previous attempt's partial strand data already sitting in
+            # .tmp and appends onto it instead of starting clean.
+            rm -rf "$PREDICTIONS_DIR" "${PREDICTIONS_DIR}.tmp"
             attempt=$(( attempt + 1 ))
         done
         if [[ $success -ne 1 ]]; then
@@ -600,7 +692,7 @@ fi
 
 export -f process_chromosome
 export OUTPUT_DIR SPECIES_ID BASE_MODEL HEAD_MODEL TOKENIZER_PATH DTYPE PYTHON PYTHONPATH
-export GPU_LIST_STR NUM_GPUS
+export GPU_LIST_STR NUM_GPUS BATCH_SIZE_STATE_DIR
 
 CHR_ARRAY=()
 while IFS= read -r chr; do
