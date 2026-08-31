@@ -1,6 +1,7 @@
 import argparse
 import logging
 from numpy import typing as npt
+from src.atomic_io import atomic_output_path
 from src.sequence import (
     convert_entity_labels_to_intervals,
     regularize_transition_matrix,
@@ -302,7 +303,11 @@ def detect_intervals(
     logger.info(f"Final results:\n{result}")
 
     logger.info(f"Saving results to output path {output}")
-    result.to_zarr(output, zarr_format=2, mode="w", consolidated=True)
+    # Write to a .tmp path and rename onto `output` only once fully written,
+    # so a killed run never leaves a partial Zarr store at the path
+    # predict.sh's resume check looks for.
+    with atomic_output_path(output) as tmp_output:
+        result.to_zarr(tmp_output, zarr_format=2, mode="w", consolidated=True)
 
     logger.info("Done")
 

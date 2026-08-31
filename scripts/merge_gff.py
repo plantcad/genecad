@@ -17,6 +17,8 @@ import re
 import sys
 from pathlib import Path
 
+from src.atomic_io import atomic_output_path
+
 
 def prefix_ids_in_attributes(attributes: str, chrom_prefix: str) -> str:
     """Prefix all ID= and Parent= values in a GFF attributes string."""
@@ -41,7 +43,9 @@ def merge_gff_files(input_files: list[str], output_file: str) -> None:
     total_genes = 0
     total_lines = 0
 
-    with open(output_file, "w") as out_fh:
+    with atomic_output_path(output_file) as tmp_output_file, open(
+        tmp_output_file, "w"
+    ) as out_fh:
         for input_path in input_files:
             path = Path(input_path)
             if not path.exists():

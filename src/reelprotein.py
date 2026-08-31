@@ -13,6 +13,8 @@ import xgboost as xgb
 from transformers import T5EncoderModel, T5Tokenizer
 from huggingface_hub import snapshot_download
 
+from src.atomic_io import atomic_output_path
+
 # Initialize module logger
 logger = logging.getLogger(__name__)
 
@@ -798,7 +800,8 @@ def generate_final_gff(
     df1 = predictions_df[predictions_df["Predicted_Label"] == 1].copy()
     if df1.empty and not keep_unmerged:
         logger.warning("[WARN] No positive predictions found. Writing empty GFF.")
-        open(output_gff_path, "w").close()
+        with atomic_output_path(output_gff_path) as tmp_output_gff_path:
+            open(tmp_output_gff_path, "w").close()
         return
 
     # Extract Gene groupings from ProteinIDs
@@ -890,7 +893,9 @@ def generate_final_gff(
     items.sort(key=_item_sort_key)
 
     # Write Output
-    with open(output_gff_path, "w") as out:
+    with atomic_output_path(output_gff_path) as tmp_output_gff_path, open(
+        tmp_output_gff_path, "w"
+    ) as out:
         out.writelines(header)
         for itm in items:
             if itm["type"] == "single":

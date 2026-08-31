@@ -7,6 +7,7 @@ import tqdm
 from typing import Literal
 from pydantic import BaseModel, Field, field_validator, ValidationInfo
 import xarray as xr
+from src.atomic_io import atomic_output_path
 from src.dataset import open_datatree
 from src.schema import GffFeatureType
 import pandas as pd
@@ -402,7 +403,9 @@ def generate_gff(
     gff_lines = ["##gff-version 3"] + [rec.to_line() for rec in gff_records]
     logger.info(f"Writing {len(gff_lines)} lines to {output_path}")
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
-    with open(output_path, "w") as f:
+    with atomic_output_path(output_path) as tmp_output_path, open(
+        tmp_output_path, "w"
+    ) as f:
         f.write("\n".join(gff_lines) + "\n")
 
 

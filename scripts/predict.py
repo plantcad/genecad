@@ -2,6 +2,7 @@ import argparse
 import dataclasses
 import logging
 import os
+import shutil
 import tqdm
 from typing import Any
 from numpy import typing as npt
@@ -778,7 +779,13 @@ def create_predictions(
         for i, entry in enumerate(entries):
             chromosome_id = entry["chromosome_id"]
             input_zarr = entry["sequence_zarr"]
-            output_dir = entry["predictions_dir"]
+            final_output_dir = entry["predictions_dir"]
+            # All ranks write their shard into a shared .tmp directory; it is
+            # only promoted to final_output_dir after every rank has finished
+            # writing (see barrier() below), so a killed run never leaves a
+            # partial predictions dir at the path predict.sh's resume check
+            # looks for.
+            tmp_output_dir = final_output_dir.rstrip("/") + ".tmp"
 
             logger.info(
                 f"[{i + 1}/{len(entries)}] Running predictions for "
@@ -797,7 +804,7 @@ def create_predictions(
                 chromosome_id=chromosome_id,
                 model_checkpoint=model_checkpoint,
                 model_path=model_path,
-                output_dir=output_dir,
+                output_dir=tmp_output_dir,
                 batch_size=batch_size,
                 window_size=window_size,
                 stride=stride,
@@ -805,7 +812,15 @@ def create_predictions(
                 tqdm_position=tqdm_position,
             )
 
-            # All ranks must finish this sequence before moving to the next.
+            # All ranks must finish writing this sequence's shard before the
+            # .tmp directory is promoted to its final name.
+            barrier()
+            if is_main_process():
+                if os.path.isdir(final_output_dir):
+                    shutil.rmtree(final_output_dir)
+                os.replace(tmp_output_dir, final_output_dir)
+            # Hold every rank here until the rename is visible before any
+            # rank starts the next chromosome or exits.
             barrier()
 
         if is_main_process():

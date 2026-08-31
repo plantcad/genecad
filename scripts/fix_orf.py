@@ -71,6 +71,8 @@ import sys
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 
+from src.atomic_io import atomic_output_path
+
 logger = logging.getLogger(__name__)
 
 STOP_CODONS = frozenset(("TAA", "TAG", "TGA"))
@@ -1001,7 +1003,9 @@ def fix_orf(
     output.sort(key=lambda r: (r.order, r.start, r.end, r.type))
 
     logger.info(f"Writing {len(output)} records to {output_gff}")
-    with open(output_gff, "w") as fh:
+    with atomic_output_path(output_gff) as tmp_output_gff, open(
+        tmp_output_gff, "w"
+    ) as fh:
         for line in header:
             fh.write(line + "\n")
         for record in output:
