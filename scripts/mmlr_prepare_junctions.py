@@ -15,6 +15,7 @@ import logging
 from src.gff_parser import parse
 
 logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO)
 
 
 class Junc(Enum):
@@ -49,7 +50,8 @@ def get_junctions(gff, chrom_idx, gene_idx, mRNA_idx):
     strand junctions are appended 5'->3' (UTR, then TIS, CDS introns, TTS, UTR);
     on the minus strand the same walk is done in GFF/plus-strand coordinate order,
     but donor/acceptor and TIS/TTS labels are swapped since transcription runs
-    the opposite direction. `pos` always points at the first base of the motif
+    the opposite direction. `pos` always points at the first base of the TIS and Donor
+    motifs or the last base of TTS and Acceptor motifs
     in the strand's own reading direction (BioPython locations are 0-based,
     half-open, so `location.end` is the base just past a feature and
     `location.start - 1` is the base just before the next one).

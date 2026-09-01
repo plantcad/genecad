@@ -8,6 +8,7 @@ position. Requires a CUDA GPU. See docs/masked_motif_logistic_regression.md.
 """
 
 import argparse
+import sys
 
 import numpy as np
 import torch
@@ -20,8 +21,11 @@ from Bio import SeqIO
 import pandas as pd
 from dataclasses import dataclass
 from warnings import simplefilter
+import logging
 
 simplefilter(action="ignore", category=pd.errors.PerformanceWarning)
+logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO)
 
 
 # simple dataclass to handle multiple donor/acceptor splice site scores
@@ -244,12 +248,23 @@ def main():
 
     args = parser.parse_args()
 
+    if not torch.cuda.is_available():
+        logger.error(
+            "Error: CUDA not detected. This script requires an available NVIDIA GPU with a CUDA driver."
+        )
+        sys.exit(1)
+
     device = "cuda:" + str(args.gpu)
     junction_df = args.input_junctions
     window_size = args.window_size
     batch_size = args.batch_size
     model_path = args.model_path
-    print("loading files")
+
+    if window_size % 2 != 0:
+        logger.error(f"Error: window size must be even. Size set is {window_size}")
+        sys.exit(1)
+
+    logger.info("loading files")
 
     # load gff
     gff = load_gff(args.input_gff)
@@ -258,13 +273,13 @@ def main():
 
     fastas = SeqIO.to_dict(SeqIO.parse(args.input_fasta, "fasta"))
 
-    print("load junctions")
+    logger.info("load junctions")
     df = pd.read_csv(junction_df, sep="\t")
 
     # convert string back into junction class
     df["junction"] = df["junction"].apply(to_junc)
 
-    print("load model")
+    logger.info("load model")
     tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
 
     ds = JunctionDataset(
@@ -346,7 +361,7 @@ def main():
     longest_transcripts = get_longest_transcripts(gff, out_df)
     out_df["longest"] = longest_transcripts
 
-    print("calculating zero-shot scores")
+    logger.info("calculating zero-shot scores")
     nucleotides = list("acgt")
     nts = ["A", "C", "G", "T"]
 
@@ -424,7 +439,7 @@ def main():
 
     out_df["TIS"] = tis
     out_df["TTS"] = tts
-    print("Writing")
+    logger.info("writing results")
     out_df.to_csv(args.output_table, sep="\t", index=False, header=True)
 
 

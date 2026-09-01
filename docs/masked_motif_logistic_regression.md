@@ -30,7 +30,7 @@ python mmlr_prepare_junctions.py \
 
 * `--input-gff`, `-i` - path to the input gff3 file. Required.
 * `--output-table`, `-o` - path to the output table of junctions. Required.
-* `--num-workers` - Number of worker threads to use when removing redundant junctions. Default is 1 (single-threaded)
+* `--num-workers` - Number of worker processes to use when removing redundant junctions. Default is 1 (single-threaded)
 
 ### Output
 
@@ -39,8 +39,9 @@ has the following columns:
 * chrom - index of the chromosome/contig, as determined by the order in the GFF file
 * gene - index of the gene, sorted by start position and excluding non-protein-coding genes
 * mRNA - comma-separated list of indices of the mRNA in which this junction appears
-* pos - position of the first base pair in the motif, specific to strand. E.g. the "A" in a start codon's ATG, or the
-"T" in the CAT codon on the negative strand.
+* pos - position of the first base pair in start motifs (TIS and Donor), or last base pair of end motifs
+(TTS and Acceptor), specific to strand. e.g. the "A" in a start codon's ATG, or the "T" in the CAT codon on the
+negative strand.
 * junction - junction type. One of: TIS, TTS, Donor, Acceptor
 
 ## Step 2: Score Junctions
@@ -57,9 +58,9 @@ canonical codons/splice site motifs are accepted.
 python mmlr_score_junctions.py \
 --input-gff gene_annotations.gff3 \
 --input-fasta assembly.fa \
---input-juctions junctions.tsv \
+--input-junctions junctions.tsv \
 --model-path kuleshov-group/PlantCAD2-Medium-l48-d1024 \
---output scored_junctions.tsv
+--output-table scored_junctions.tsv
 ```
 
 ### Parameters
@@ -85,6 +86,7 @@ The output is a tab-separated table contains one line for each protein-coding tr
 * transcript - transcript ID
 * start - transcript start position
 * end - transcript end position
+* strand - `+` or `-` to indicate gene strand
 * canonical - (optional) True if transcript is labeled canonical in the GFF file, false otherwise
 * donor - comma-separated list of donor splice site Masked Motif scores
 * acceptor - comma-separated list of acceptor splice site Masked Motif scores
@@ -103,10 +105,10 @@ PlantCAD and GeneCAD papers.
 This script trains an MMLR Classifier using a positive-unlabeled learning method adapted
 from [hkiyomaru/pu-learning](https://github.com/hkiyomaru/pu-learning). Training and validation data
 are produced by the Step 2 script `mmlr_score_junctions.py`, but require one more column, labeled `validated`.
-This column should contain true/false values indicated whether each transcript has experimental evidence
+This column should contain boolean values (0/1) indicated whether each transcript has experimental evidence
 supporting its designation as a true protein-coding gene (e.g. proteomic data, functional studies, etc.). You may
-use whatever method of validation best suits your dataset, but we recommend using a stringent cutoff. `false` values
-do not necessarily indicate a pseudogene or other mis-annotation under this positive-unlabeled learning scheme: instead
+use whatever method of validation best suits your dataset, but we recommend using a stringent cutoff. A 0 in this column
+does not necessarily indicate a pseudogene or other mis-annotation under this positive-unlabeled learning scheme: instead
 it is a neutral label.
 
 This script trains two models: one for genes with multiple exons, and one for single-exon genes. The reason for

@@ -18,16 +18,10 @@ import pandas as pd
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import recall_score
 import logging
+from scripts.mmlr_classify_transcripts import to_average
 
 logger = logging.getLogger(__name__)
-logging.basicConfig()
-
-
-def to_average(x):
-    """Collapse a transcript's comma-separated per-site donor/acceptor scores
-    (one per intron) into a single mean feature value."""
-    y = [float(y) for y in x.split(",")]
-    return sum(y) / len(y)
+logging.basicConfig(level=logging.INFO)
 
 
 def fit_model(train_x, train_y, positive_rate=0.75):
@@ -205,7 +199,7 @@ def train(train_file, test_prop, estimated_positive_prop, rng):
 
     ## Train for single exon transcripts
 
-    test_indices = np.random.choice(
+    test_indices = rng.choice(
         np.arange(single_exon_y.shape[0]), se_test_prop, replace=False
     )
     test_x = single_exon_x[test_indices,]

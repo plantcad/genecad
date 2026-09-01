@@ -13,7 +13,7 @@ import argparse
 import logging
 
 logger = logging.getLogger(__name__)
-logging.basicConfig()
+logging.basicConfig(level=logging.INFO)
 
 # Values from GeneCAD paper
 default_dict = {

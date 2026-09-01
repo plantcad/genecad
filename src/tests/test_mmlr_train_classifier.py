@@ -172,16 +172,9 @@ class TestTrain:
         assert multi_exon_model.coef_.shape == (1, 4)
         assert single_exon_model.coef_.shape == (1, 2)
 
-    def test_single_exon_split_ignores_passed_in_rng_seed(self, tmp_path):
-        """Documents a finding: train() splits the multi-exon train/test set
-        using the `rng` argument (np.random.Generator, seeded via --seed),
-        but splits the single-exon set using the *global* np.random.choice
-        instead (see scripts/mmlr_train_classifier.py, single-exon block).
-        As a result, --seed only makes the multi-exon model's train/test
-        split (and therefore its fitted coefficients) reproducible; the
-        single-exon model's split - and hence its coefficients - varies run
-        to run regardless of --seed, unless the *global* numpy RNG happens to
-        be in the same state for other reasons.
+    def test_rng_seed_reproduces_results(self, tmp_path):
+        """Checks that coefficients from training are reproduceable given the same
+        rng seed.
         """
         df = make_training_table()
         train_path = tmp_path / "training.tsv"
@@ -203,13 +196,10 @@ class TestTrain:
             rng=np.random.default_rng(42),
         )
 
-        # Multi-exon split is controlled by `rng`, seeded identically both
+        # Multi-exon and single-exon splits are controlled by `rng`, seeded identically both
         # times, so its fitted coefficients should match.
         np.testing.assert_allclose(multi_a.coef_, multi_b.coef_)
-
-        # Single-exon split is controlled by the global RNG, which differed
-        # between the two calls, so its coefficients are expected to differ.
-        assert not np.allclose(single_a.coef_, single_b.coef_)
+        np.testing.assert_allclose(single_a.coef_, single_b.coef_)
 
 
 class TestMain:
