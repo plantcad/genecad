@@ -561,6 +561,113 @@ def _load_tokenizer(tokenizer_path: str) -> Tokenizer:
     return tokenizer
 
 
+def _write_chromosome_zarr(
+    *,
+    species_id: str,
+    chrom_id: str,
+    record: SeqIO.SeqRecord,
+    target_path: str,
+    atomic: bool,
+    chunk_size: int,
+    tokenizer: Tokenizer | None,
+) -> None:
+    """Convert one parsed FASTA record to arrays and write it to Zarr.
+
+    `atomic` selects between a store dedicated to this one chromosome (wrapped
+    in `atomic_output_path` here) and a shared multi-chromosome store whose
+    caller handles atomicity for the whole store, once, after every group has
+    been written (see `extract_fasta_file`).
+    """
+    # Convert sequences to arrays
+    seq_str = str(record.seq)
+    seq_array = np.array(list(seq_str), dtype="S1")
+    seq_mask = np.char.isupper(seq_array)
+    rev_comp = str(record.seq.complement())
+    rev_array = np.array(list(rev_comp), dtype="S1")
+    rev_mask = np.char.isupper(rev_array)
+    chrom_length = len(seq_str)
+
+    seq_arrays = np.vstack([seq_array, rev_array])
+    assert seq_arrays.shape == (2, chrom_length)
+    seq_masks = np.vstack([seq_mask, rev_mask])
+    assert seq_masks.shape == (2, chrom_length)
+
+    # Create dataset with base sequences
+    logger.info(f"[species={species_id}] Creating dataset...")
+    ds = xr.Dataset(
+        data_vars={
+            "sequence_tokens": (["strand", "sequence"], seq_arrays),
+            "sequence_masks": (["strand", "sequence"], seq_masks),
+        },
+        coords={
+            "strand": ["positive", "negative"],
+            "sequence": np.arange(chrom_length),
+        },
+        attrs={"species_id": species_id, "chromosome_id": chrom_id},
+    )
+
+    # Add tokenized sequences if tokenizer provided
+    if tokenizer:
+        # Tokenize sequences for both strands
+        input_ids = []
+
+        for i, seq in enumerate([seq_array, rev_array]):
+            strand = ["forward", "reverse"][i]
+            logger.info(
+                f"[species={species_id}] Tokenizing {strand} strand: {''.join(np.char.decode(seq[:64]))} ..."
+            )
+            token_ids = tokenizer(seq)
+            logger.info(
+                f"[species={species_id}] Token ID frequencies: {pd.Series(token_ids).value_counts().to_dict()}"
+            )
+            # Fail on presence of any tokens not explicitly defined in the tokenizer
+            # or added as a special case by FASTA_OOV_TOKENS
+            if np.any(token_ids < 0):
+                bad_tokens = pd.Series(
+                    # pyrefly: ignore  # bad-argument-type
+                    np.char.decode(token_ids[token_ids < 0])
+                ).value_counts()
+                raise ValueError(
+                    f"Found {len(bad_tokens)} unmapped tokens in "
+                    f"{strand} strand for {species_id}/{chrom_id}; "
+                    f"Frequencies:\n{bad_tokens.head(15)}"
+                )
+            assert token_ids.shape == (chrom_length,)
+            input_ids.append(token_ids)
+
+        # Add tokenized data to dataset
+        input_ids = np.vstack(input_ids)
+        assert input_ids.shape == (2, chrom_length)
+        ds["sequence_input_ids"] = (["strand", "sequence"], input_ids)
+
+    # Set chunking and save
+    ds = set_dimension_chunks(ds, "sequence", chunk_size)
+    logger.info(f"[species={species_id}] Saving {chrom_id} dataset to {target_path}")
+    if atomic:
+        # Each chromosome gets its own store, so it can be written atomically
+        # without disturbing the others written in this same pass over the
+        # FASTA file.
+        with atomic_output_path(target_path) as tmp_target_path:
+            ds.to_zarr(
+                tmp_target_path,
+                group=f"{species_id}/{chrom_id}",
+                zarr_format=2,
+                consolidated=True,
+                mode="w",
+            )
+    else:
+        # All chromosomes share one store as separate groups, so it can only
+        # be promoted atomically once as a whole by the caller (see
+        # extract_fasta_file), not per group here.
+        ds.to_zarr(
+            target_path,
+            group=f"{species_id}/{chrom_id}",
+            zarr_format=2,
+            consolidated=True,
+            mode="w",
+        )
+
+
 def _extract_fasta_sequences(
     *,
     species_id: str,
@@ -579,13 +686,16 @@ def _extract_fasta_sequences(
     lets many chromosomes share a single linear scan of `fasta_file` while
     still landing at the separate per-chromosome paths the rest of the
     pipeline expects.
+
+    Each matched record is converted and written out as soon as it's parsed,
+    rather than collected and processed after the full scan, so peak memory
+    is bounded by one chromosome at a time -- not by how many chromosomes are
+    in `chrom_map` -- even though the file is still only scanned once.
     """
     if (output_path is None) == (chrom_output_paths is None):
         raise ValueError(
             "Exactly one of output_path or chrom_output_paths must be given"
         )
-
-    # Process each species config
 
     logger.info(f"[species={species_id}] Processing FASTA file: {fasta_file}")
 
@@ -594,10 +704,9 @@ def _extract_fasta_sequences(
     open_func = gzip.open if real_path.endswith(".gz") else open
     mode = "rt" if real_path.endswith(".gz") else "r"
 
-    # Dictionary to collect sequences by species/chromosome
-    sequence_records = {}
+    extracted_count = 0
 
-    # Parse FASTA file
+    # Parse FASTA file, writing each matched chromosome out immediately
     with open_func(fasta_file, mode) as file:
         for record in SeqIO.parse(file, "fasta"):
             raw_id = record.id
@@ -611,124 +720,38 @@ def _extract_fasta_sequences(
                 chrom_id = chrom_map[raw_id]
             else:
                 chrom_id = raw_id
-            sequence_records[(species_id, chrom_id)] = record
+
             logger.info(
-                f"[species={species_id}] Added {chrom_id} (from {raw_id}), length: {len(record.seq)}"
+                f"[species={species_id}] Processing {chrom_id} (from {raw_id}), length: {len(record.seq)}"
             )
-
-    logger.info(
-        f"[species={species_id}] Found {len(sequence_records)} total chromosomes"
-    )
-
-    # Process each chromosome and save to Zarr
-    for (species_id, chrom_id), record in sequence_records.items():
-        logger.info(f"[species={species_id}] Processing chromosome: {chrom_id}")
-
-        # Convert sequences to arrays
-        seq_str = str(record.seq)
-        seq_array = np.array(list(seq_str), dtype="S1")
-        seq_mask = np.char.isupper(seq_array)
-        rev_comp = str(record.seq.complement())
-        rev_array = np.array(list(rev_comp), dtype="S1")
-        rev_mask = np.char.isupper(rev_array)
-        chrom_length = len(seq_str)
-
-        seq_arrays = np.vstack([seq_array, rev_array])
-        assert seq_arrays.shape == (2, chrom_length)
-        seq_masks = np.vstack([seq_mask, rev_mask])
-        assert seq_masks.shape == (2, chrom_length)
-
-        # Create dataset with base sequences
-        logger.info(f"[species={species_id}] Creating dataset...")
-        ds = xr.Dataset(
-            data_vars={
-                "sequence_tokens": (["strand", "sequence"], seq_arrays),
-                "sequence_masks": (["strand", "sequence"], seq_masks),
-            },
-            coords={
-                "strand": ["positive", "negative"],
-                "sequence": np.arange(chrom_length),
-            },
-            attrs={"species_id": species_id, "chromosome_id": chrom_id},
-        )
-
-        # Add tokenized sequences if tokenizer provided
-        if tokenizer:
-            # Tokenize sequences for both strands
-            input_ids = []
-
-            for i, seq in enumerate([seq_array, rev_array]):
-                strand = ["forward", "reverse"][i]
-                logger.info(
-                    f"[species={species_id}] Tokenizing {strand} strand: {''.join(np.char.decode(seq[:64]))} ..."
-                )
-                token_ids = tokenizer(seq)
-                logger.info(
-                    f"[species={species_id}] Token ID frequencies: {pd.Series(token_ids).value_counts().to_dict()}"
-                )
-                # Fail on presence of any tokens not explicitly defined in the tokenizer
-                # or added as a special case by FASTA_OOV_TOKENS
-                if np.any(token_ids < 0):
-                    bad_tokens = pd.Series(
-                        # pyrefly: ignore  # bad-argument-type
-                        np.char.decode(token_ids[token_ids < 0])
-                    ).value_counts()
-                    raise ValueError(
-                        f"Found {len(bad_tokens)} unmapped tokens in "
-                        f"{strand} strand for {species_id}/{chrom_id}; "
-                        f"Frequencies:\n{bad_tokens.head(15)}"
-                    )
-                assert token_ids.shape == (chrom_length,)
-                input_ids.append(token_ids)
-
-            # Add tokenized data to dataset
-            input_ids = np.vstack(input_ids)
-            assert input_ids.shape == (2, chrom_length)
-            ds["sequence_input_ids"] = (["strand", "sequence"], input_ids)
-
-        # Set chunking and save
-        ds = set_dimension_chunks(ds, "sequence", chunk_size)
-        if chrom_output_paths is not None:
-            # Each chromosome gets its own store, so it can be written
-            # atomically without disturbing the others written in this
-            # same pass over the FASTA file.
-            target_path = chrom_output_paths[chrom_id]
-            logger.info(
-                f"[species={species_id}] Saving {chrom_id} dataset to {target_path}"
+            _write_chromosome_zarr(
+                species_id=species_id,
+                chrom_id=chrom_id,
+                record=record,
+                target_path=(
+                    chrom_output_paths[chrom_id]
+                    if chrom_output_paths is not None
+                    else output_path
+                ),
+                atomic=chrom_output_paths is not None,
+                chunk_size=chunk_size,
+                tokenizer=tokenizer,
             )
-            with atomic_output_path(target_path) as tmp_target_path:
-                ds.to_zarr(
-                    tmp_target_path,
-                    group=f"{species_id}/{chrom_id}",
-                    zarr_format=2,
-                    consolidated=True,
-                    mode="w",
-                )
-        else:
-            # All chromosomes share one store as separate groups, so it can
-            # only be promoted atomically once as a whole by the caller
-            # (see extract_fasta_file), not per group here.
-            logger.info(
-                f"[species={species_id}] Saving {chrom_id} dataset to {output_path}"
-            )
-            ds.to_zarr(
-                output_path,
-                group=f"{species_id}/{chrom_id}",
-                zarr_format=2,
-                consolidated=True,
-                mode="w",
-            )
+            extracted_count += 1
+            # Let the parsed record (and its full sequence string) be freed
+            # before the next iteration reads the next one.
+            del record
 
-    if not sequence_records:
+    if extracted_count == 0:
         logger.info(f"[species={species_id}] No sequences were extracted")
     elif chrom_output_paths is not None:
         logger.info(
-            f"[species={species_id}] Saved {len(sequence_records)} chromosome "
+            f"[species={species_id}] Saved {extracted_count} chromosome "
             f"sequences to their own Zarr stores"
         )
     else:
         logger.info(
-            f"[species={species_id}] Saved {len(sequence_records)} chromosome "
+            f"[species={species_id}] Saved {extracted_count} chromosome "
             f"sequences to {output_path}"
         )
 
