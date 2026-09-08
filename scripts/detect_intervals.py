@@ -247,7 +247,7 @@ def detect_intervals(
     ----------
     args : argparse.Namespace
         Command-line arguments where ``args.input_dir`` points to
-        ``predictions.*.zarr`` files produced by inference.
+        committed prediction segments (or legacy ``predictions.*.zarr`` rank stores).
     """
     logger.info(
         f"Detecting intervals from rank files in {input_dir} and saving to {output}"

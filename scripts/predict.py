@@ -2,21 +2,37 @@ import argparse
 import dataclasses
 import logging
 import os
-import shutil
+import hashlib
+import gc
+from time import perf_counter
+from contextlib import nullcontext
 import tqdm
 from typing import Any
 from numpy import typing as npt
 from zarr.errors import GroupNotFoundError
 import json
+from src.atomic_io import atomic_output_path
 from src.config import WINDOW_SIZE
 from src.sequence import (
     create_sequence_windows,
+    create_index_windows,
 )
 import torch
 import numpy as np
 import xarray as xr
 from transformers import AutoModel, AutoConfig, AutoTokenizer
 from src.dataset import open_datatree, set_dimension_chunks
+from src.prediction_checkpoint import (
+    commit_segment,
+    file_hashes,
+    fingerprint,
+    prepare_run,
+    segments,
+    finish_run,
+    pending_batches,
+    prediction_lock,
+    PredictionResumeError,
+)
 from src.modeling import GeneClassifier, GeneClassifierConfig
 from src.dist import (
     barrier,
@@ -29,6 +45,29 @@ from src.dist import (
 import torch._dynamo
 
 logger = logging.getLogger(__name__)
+
+
+def prediction_model_digest(base_model, classifier, tokenizer) -> str:
+    digest = hashlib.sha256()
+    for label, model in (("base", base_model), ("classifier", classifier)):
+        digest.update(label.encode())
+        if model is None:
+            continue
+        config = (
+            dataclasses.asdict(model.config)
+            if dataclasses.is_dataclass(model.config)
+            else model.config.to_dict()
+        )
+        digest.update(json.dumps(config, sort_keys=True, default=str).encode())
+        for name, tensor in sorted(model.state_dict().items()):
+            digest.update(f"{name}:{tensor.dtype}:{tuple(tensor.shape)}".encode())
+            flat = tensor.detach().reshape(-1)
+            for start in range(0, flat.numel(), 1_000_000):
+                chunk = flat[start : start + 1_000_000].contiguous().cpu()
+                digest.update(chunk.view(torch.uint8).numpy().tobytes())
+    digest.update(fingerprint(tokenizer.get_vocab()).encode())
+    digest.update(str(tokenizer.unk_token_id).encode())
+    return digest.hexdigest()
 
 
 def batched(input_list: list[Any], batch_size: int) -> list[list[Any]]:
@@ -257,11 +296,11 @@ def load_seq_data(input_zarr: str, chromosome_id: str, species_id: str) -> xr.Da
         sequences = open_datatree(input_zarr, consolidated=False)
         logger.info(f"Input sequences:\n{sequences}")
     except GroupNotFoundError as e:
-        print(e)
         logger.error(
             f"File {input_zarr} is not formatted as an input sequence datatree. \n"
-            f"Check that it is the output of the command extract.py extract_fasta_file"
+            f"Check that it is the output of scripts/extract_fasta.py"
         )
+        raise ValueError(f"Invalid sequence store: {input_zarr}") from e
 
     # Check if species exists
     if species_id not in sequences:
@@ -288,7 +327,8 @@ def load_seq_data(input_zarr: str, chromosome_id: str, species_id: str) -> xr.Da
     logger.info(
         f"Selecting data for species '{species_id}' and chromosome '{chromosome_id}'"
     )
-    ds = sequences[species_id][chromosome_id].ds
+    ds = sequences[species_id][chromosome_id].to_dataset()
+    ds.set_close(sequences.close)
 
     logger.info(f"Loaded dataset with dimensions: {dict(ds.sizes)}")
     return ds
@@ -297,6 +337,119 @@ def load_seq_data(input_zarr: str, chromosome_id: str, species_id: str) -> xr.Da
 # -------------------------------------------------------------------------------------------------
 # Create predictions
 # -------------------------------------------------------------------------------------------------
+
+
+@torch.inference_mode()
+def _predict_window_batch(
+    window_batch,
+    sequence_coordinates,
+    base_model,
+    classifier,
+    window_size,
+    device,
+    strand,
+    species_id,
+    chromosome_id,
+    model_checkpoint,
+    model_path,
+) -> xr.Dataset:
+    token_class_names = classifier.config.token_class_names
+    feature_class_names = classifier.config.token_entity_names_with_background()
+    num_token_classes = len(token_class_names)
+    num_feature_classes = len(feature_class_names)
+    negative_strand = strand == "negative"
+    current_batch_size = len(window_batch)
+
+    # Get equally sized sequence windows to process for batch
+    input_ids = np.array([w[0] for w in window_batch])
+    input_ids = torch.tensor(input_ids, device=device)
+    assert input_ids.shape == (current_batch_size, window_size)
+
+    # Generate embeddings, if necessary
+    inputs_embeds = None
+    if classifier.config.use_precomputed_base_encodings:
+        # pyrefly: ignore  # not-callable
+        inputs_embeds = base_model(input_ids=input_ids).last_hidden_state
+        assert inputs_embeds.ndim == 3
+        assert inputs_embeds.shape[:2] == (current_batch_size, window_size)
+
+    # Get predictions from classifier
+    # pyrefly: ignore  # not-callable
+    token_logits = classifier(input_ids=input_ids, inputs_embeds=inputs_embeds)
+    assert token_logits.shape == (
+        current_batch_size,
+        window_size,
+        num_token_classes,
+    )
+
+    # Aggregate token logits to entity/feature logits
+    feature_logits = classifier.aggregate_logits(token_logits)
+    assert feature_logits.shape == (
+        current_batch_size,
+        window_size,
+        num_feature_classes,
+    )
+
+    token_logits = token_logits.float().cpu().numpy()
+    feature_logits = feature_logits.float().cpu().numpy()
+
+    # Extract valid regions from the processed windows
+    token_logits_arrays, feature_logits_arrays, sequence_coord_arrays = (
+        [],
+        [],
+        [],
+    )
+    for i in range(current_batch_size):
+        _, local_window, global_window = window_batch[i]
+        token_logits_window = token_logits[i, local_window[0] : local_window[1], :]
+        feature_logits_window = feature_logits[i, local_window[0] : local_window[1], :]
+        # pyrefly: ignore  # index-error
+        sequence_coords_window = sequence_coordinates[
+            # pyrefly: ignore  # index-error
+            global_window[0] : global_window[1]
+        ]
+        token_logits_arrays.append(token_logits_window)
+        feature_logits_arrays.append(feature_logits_window)
+        sequence_coord_arrays.append(sequence_coords_window)
+
+    # Concatenate all extracted regions
+    token_logits = np.concatenate(token_logits_arrays, axis=0)
+    feature_logits = np.concatenate(feature_logits_arrays, axis=0)
+    sequence_coords = np.concatenate(sequence_coord_arrays, axis=0)
+
+    # Flip back to 3'->5' if on negative strand
+    if negative_strand:
+        token_logits = flip(token_logits)
+        feature_logits = flip(feature_logits)
+        sequence_coords = flip(sequence_coords)
+
+    # Create resulting dataset for batch
+    result = xr.Dataset(
+        data_vars={
+            "token_logits": (["sequence", "token"], token_logits),
+            "feature_logits": (["sequence", "feature"], feature_logits),
+        },
+        coords={
+            "sequence": sequence_coords,
+            "token": token_class_names,
+            "feature": feature_class_names,
+        },
+        attrs={
+            "strand": strand,
+            "species_id": species_id,
+            "chromosome_id": chromosome_id,
+            "model_checkpoint": model_checkpoint,
+            "model_path": model_path,
+        },
+    )
+
+    # Assign predictions as max logits
+    result["token_predictions"] = result.token_logits.argmax(dim="token")
+    result["feature_predictions"] = result.feature_logits.argmax(dim="feature")
+
+    # Chunk in sequence dim only and save
+    result = set_dimension_chunks(result, "sequence", result.sizes["sequence"])
+    return result
 
 
 @torch.inference_mode()
@@ -315,7 +468,7 @@ def _create_predictions(
     stride: int,
     device: str,
     tqdm_position: int | None,
-) -> xr.DataTree:
+) -> int:
     """Generate token and feature predictions in strided windows.
 
     Parameters
@@ -349,10 +502,7 @@ def _create_predictions(
     tqdm_position: int | None
         optional tqdm row to use
 
-    Returns
-    -------
-    xr.DataTree
-        Data tree containing predictions for both forward and reverse strands.
+    Completed batches are committed to independent Zarr segments in output_dir.
     """
     # Get distributed processing info
     rank, world_size = process_group()
@@ -368,8 +518,9 @@ def _create_predictions(
         if 0 <= gpu_index < len(visible_gpu_ids):
             gpu_label = visible_gpu_ids[gpu_index]
 
-    # Construct rank-specific output path
-    dataset_path = os.path.join(output_dir, f"predictions.{rank}.zarr")
+    # Snapshot progress on every rank before any rank starts writing.
+    completed = segments(output_dir, verify=False)
+    barrier()
 
     logger.info(
         f"Generating predictions with {batch_size=}, {window_size=}, {stride=} ({rank=}, {world_size=})"
@@ -381,11 +532,8 @@ def _create_predictions(
         raise ValueError("Pad value from tokenizer.unk_token_id cannot be None")
     logger.info(f"Using pad_value={pad_value} (UNK token) for sequence padding")
 
-    # Process data for each strand separately
-    token_class_names = classifier.config.token_class_names
-    feature_class_names = classifier.config.token_entity_names_with_background()
-    num_token_classes = len(token_class_names)
-    num_feature_classes = len(feature_class_names)
+    # Keep an OOM-reduced cap across strands and return it for the next scaffold.
+    effective_batch_size = batch_size
 
     strands = ds.strand.values.tolist()
     assert set(strands) == {"positive", "negative"}
@@ -400,174 +548,86 @@ def _create_predictions(
         assert sequence_coordinates.ndim == 1
         # While not strictly necessary, ensure that coordinates are autoincrementing,
         # 0-based integers until there is a good reason to support any other coordinates
-        assert sequence_coordinates.tolist() == list(range(len(sequence_coordinates)))
+        if not np.array_equal(
+            sequence_coordinates, np.arange(len(sequence_coordinates))
+        ):
+            raise ValueError("Sequence coordinates must be contiguous and zero-based")
 
         # Flip token ids on negative strand from 3'->5' to 5'->3'
         if negative_strand:
             sequence_input_ids = flip(sequence_input_ids)
             sequence_coordinates = flip(sequence_coordinates)
 
-        # Create windows of input ids to process
-        windows: list[tuple[npt.ArrayLike, tuple[int, int], tuple[int, int]]] = list(
-            create_sequence_windows(
-                sequence_input_ids,
-                window_size=window_size,
-                stride=stride,
-                pad_value=pad_value,
-            )
+        # Generate window batches lazily; the padded strand remains in RAM.
+        padded_length = (
+            (len(sequence_input_ids) + window_size - 1) // window_size
+        ) * window_size
+        bounds = create_index_windows(padded_length, window_size, stride)
+        total_windows = int(np.count_nonzero(bounds[:, 2] < len(sequence_input_ids)))
+        windows = create_sequence_windows(
+            sequence_input_ids,
+            window_size=window_size,
+            stride=stride,
+            pad_value=pad_value,
         )
-
-        # Select windows for this rank
-        # pyrefly: ignore  # bad-assignment
-        windows = np.array(windows, dtype=object)
-        # pyrefly: ignore  # no-matching-overload
-        windows = np.array_split(windows, world_size)[rank]
-
-        # Skip this strand if no windows were assigned to this rank
-        # (can happen when the sequence is shorter than world_size windows)
-        if len(windows) == 0:
-            logger.warning(
-                f"Rank {rank}: no windows for strand '{strand}' — skipping "
-                f"(sequence may be shorter than window_size × world_size)"
-            )
-            continue
-
-        # Batch windows together using ceiling division so batch_size is an
-        # upper bound, not a lower bound.  e.g. 195 windows / batch 112 → 2
-        # batches of 98 and 97, not 1 batch of 195.
-        n_batches = max(1, (len(windows) + batch_size - 1) // batch_size)
-        window_batches = np.array_split(windows, n_batches)
-        logger.info(
-            f"Processing {len(windows)} windows in {len(window_batches)} batches of size {batch_size}"
+        batches = pending_batches(
+            windows,
+            completed,
+            strand,
+            rank,
+            world_size,
+            effective_batch_size,
+            total_windows,
         )
-
-        # Process batches — each rank occupies its own tqdm row so bars don't
-        # overwrite each other when world_size > 1.
-        for (
-            batch_index,
-            window_batch,
-        ) in enumerate(  # pyrefly: ignore[bad-argument-type]
-            tqdm.tqdm(
-                window_batches,
-                desc=f"[GPU {gpu_label} | {strand}]",
-                position=tqdm_position,
-                leave=False,
-                dynamic_ncols=True,
-            )
+        for window_ids, window_batch in tqdm.tqdm(
+            batches,
+            desc=f"[GPU {gpu_label} | {strand}]",
+            position=tqdm_position,
+            leave=False,
+            dynamic_ncols=True,
         ):
-            current_batch_size = len(window_batch)
-
-            # Get equally sized sequence windows to process for batch
-            input_ids = np.array([w[0] for w in window_batch])
-            input_ids = torch.tensor(input_ids, device=device)
-            assert input_ids.shape == (current_batch_size, window_size)
-
-            # Generate embeddings, if necessary
-            inputs_embeds = None
-            if classifier.config.use_precomputed_base_encodings:
-                # pyrefly: ignore  # not-callable
-                inputs_embeds = base_model(input_ids=input_ids).last_hidden_state
-                assert inputs_embeds.ndim == 3
-                assert inputs_embeds.shape[:2] == (current_batch_size, window_size)
-
-            # Get predictions from classifier
-            # pyrefly: ignore  # not-callable
-            token_logits = classifier(input_ids=input_ids, inputs_embeds=inputs_embeds)
-            assert token_logits.shape == (
-                current_batch_size,
-                window_size,
-                num_token_classes,
-            )
-
-            # Aggregate token logits to entity/feature logits
-            feature_logits = classifier.aggregate_logits(token_logits)
-            assert feature_logits.shape == (
-                current_batch_size,
-                window_size,
-                num_feature_classes,
-            )
-
-            token_logits = token_logits.float().cpu().numpy()
-            feature_logits = feature_logits.float().cpu().numpy()
-
-            # Extract valid regions from the processed windows
-            token_logits_arrays, feature_logits_arrays, sequence_coord_arrays = (
-                [],
-                [],
-                [],
-            )
-            for i in range(current_batch_size):
-                _, local_window, global_window = window_batch[i]
-                token_logits_window = token_logits[
-                    i, local_window[0] : local_window[1], :
-                ]
-                feature_logits_window = feature_logits[
-                    i, local_window[0] : local_window[1], :
-                ]
-                # pyrefly: ignore  # index-error
-                sequence_coords_window = sequence_coordinates[
-                    # pyrefly: ignore  # index-error
-                    global_window[0] : global_window[1]
-                ]
-                token_logits_arrays.append(token_logits_window)
-                feature_logits_arrays.append(feature_logits_window)
-                sequence_coord_arrays.append(sequence_coords_window)
-
-            # Concatenate all extracted regions
-            token_logits = np.concatenate(token_logits_arrays, axis=0)
-            feature_logits = np.concatenate(feature_logits_arrays, axis=0)
-            sequence_coords = np.concatenate(sequence_coord_arrays, axis=0)
-
-            # Flip back to 3'->5' if on negative strand
-            if negative_strand:
-                token_logits = flip(token_logits)
-                feature_logits = flip(feature_logits)
-                sequence_coords = flip(sequence_coords)
-
-            # Create resulting dataset for batch
-            result = xr.Dataset(
-                data_vars={
-                    "token_logits": (["sequence", "token"], token_logits),
-                    "feature_logits": (["sequence", "feature"], feature_logits),
-                },
-                coords={
-                    "sequence": sequence_coords,
-                    "token": token_class_names,
-                    "feature": feature_class_names,
-                },
-                attrs={
-                    "strand": strand,
-                    "species_id": species_id,
-                    "chromosome_id": chromosome_id,
-                    "model_checkpoint": model_checkpoint,
-                    "model_path": model_path,
-                },
-            )
-
-            # Assign predictions as max logits
-            result["token_predictions"] = result.token_logits.argmax(dim="token")
-            result["feature_predictions"] = result.feature_logits.argmax(dim="feature")
-
-            # Chunk in sequence dim only and save
-            result = set_dimension_chunks(result, "sequence", result.sizes["sequence"])
-            os.makedirs(output_dir, exist_ok=True)
-            # pyrefly: ignore  # no-matching-overload
-            result.to_zarr(
-                dataset_path,
-                group=f"/{strand}",
-                zarr_format=2,
-                **(
-                    dict(append_dim="sequence")
-                    if os.path.exists(os.path.join(dataset_path, strand))
-                    else {}
-                ),
-                consolidated=True,
-            )
+            offset = 0
+            while offset < len(window_batch):
+                current = window_batch[offset : offset + effective_batch_size]
+                ids = window_ids[offset : offset + effective_batch_size]
+                try:
+                    result = _predict_window_batch(
+                        current,
+                        sequence_coordinates,
+                        base_model,
+                        classifier,
+                        window_size,
+                        device,
+                        strand,
+                        species_id,
+                        chromosome_id,
+                        model_checkpoint,
+                        model_path,
+                    )
+                except torch.cuda.OutOfMemoryError:
+                    if len(current) == 1:
+                        raise
+                    effective_batch_size = max(1, len(current) * 4 // 5)
+                    logger.warning(
+                        "CUDA OOM for %s/%s (%s); retrying uncommitted windows with batch=%d, keeping models loaded",
+                        species_id,
+                        chromosome_id,
+                        strand,
+                        effective_batch_size,
+                    )
+                    result = None
+                # Release the exception traceback before clearing GPU memory.
+                if result is None:
+                    gc.collect()
+                    torch.cuda.empty_cache()
+                    continue
+                commit_segment(output_dir, result, strand, ids)
+                offset += len(current)
+                del result
     logger.info(
-        f"Loading completed predictions from {dataset_path} ({rank=}, {world_size=})"
+        f"Finished assigned prediction windows in {output_dir} ({rank=}, batch={effective_batch_size})"
     )
-    result = open_datatree(dataset_path)
-    return result
+    return effective_batch_size
 
 
 # TODO: move to utils somewhere
@@ -698,15 +758,16 @@ def create_predictions(
     dtype: str,
     tqdm_position: int | None,
     show_dynamo_errors: bool,
+    batch_size_cache: str | None = None,
 ):
     """Run the inference pipeline to generate logits for each genomic strand.
 
     When launched via ``torchrun`` (multi-GPU), every rank initialises the
     distributed process group, binds to its own GPU (``LOCAL_RANK``), and
-    processes a disjoint slice of the sequence windows.  All ranks write
-    their own shard zarr file (``predictions.<rank>.zarr``).  After a barrier
-    ensures every shard has been flushed to disk the process group is torn
-    down cleanly.  The downstream ``detect_intervals`` step merges the shards
+    processes a disjoint slice of the sequence windows. Ranks commit independent
+    batch segments, whose window IDs survive changes to GPU count and batch
+    size. After a barrier, rank zero verifies complete coverage and writes the
+    chromosome completion manifest.  The downstream ``detect_intervals`` step merges the shards
     transparently via :func:`~src.prediction.merge_prediction_datasets`.
 
     When launched normally (single-GPU), the function behaves exactly as
@@ -717,6 +778,39 @@ def create_predictions(
     args : argparse.Namespace
         Command-line arguments controlling inputs, outputs, and runtime options.
     """
+    # ---- Build work list --------------------------------------------------
+    # Manifest mode: process many sequences with one model load.
+    # Single mode: original behaviour (one chromosome per invocation).
+    if manifest is not None:
+        import json
+
+        with open(manifest) as fh:
+            entries = json.load(fh)
+        logger.info(f"Manifest mode: {len(entries)} sequence(s) to process")
+    else:
+        entries = [
+            {
+                "chromosome_id": chromosome_id,
+                "sequence_zarr": input_zarr,
+                "predictions_dir": output_dir,
+            }
+        ]
+
+    # Empty manifests must not load models or probe CUDA memory.
+    if not entries:
+        logger.info("No scaffolds need prediction")
+        return
+    if batch_size < 1:
+        raise ValueError("batch_size must be positive")
+    if batch_size_cache:
+        try:
+            with open(batch_size_cache) as handle:
+                cached = int(handle.read().strip())
+            if cached > 0:
+                batch_size = min(batch_size, cached)
+        except (OSError, ValueError):
+            pass
+
     # ---- Distributed setup ------------------------------------------------
     # No-op when not launched by torchrun (RANK env var absent).
     init_process_group()
@@ -746,26 +840,9 @@ def create_predictions(
     if not show_dynamo_errors:
         torch._dynamo.config.suppress_errors = True
 
-    # ---- Build work list --------------------------------------------------
-    # Manifest mode: process many sequences with one model load.
-    # Single mode: original behaviour (one chromosome per invocation).
-    if manifest is not None:
-        import json
-
-        with open(manifest) as fh:
-            entries = json.load(fh)
-        logger.info(f"Manifest mode: {len(entries)} sequence(s) to process")
-    else:
-        entries = [
-            {
-                "chromosome_id": chromosome_id,
-                "sequence_zarr": input_zarr,
-                "predictions_dir": output_dir,
-            }
-        ]
-
     # ---- Inference --------------------------------------------------------
     try:
+        model_start = perf_counter()
         # Load models onto this rank's device — happens ONCE regardless of
         # how many sequences are in the manifest.
         base_model, classifier, tokenizer = load_models(
@@ -776,52 +853,98 @@ def create_predictions(
             device=device,
         )
 
+        logger.info(
+            "Model load completed in %.2fs; reusing this model for %d scaffold(s)",
+            perf_counter() - model_start,
+            len(entries),
+        )
+        identity_start = perf_counter()
+        # Hash loaded weights once per worker, in bounded CPU chunks, to detect
+        # checkpoints replaced at the same path.
+        model_digest = (
+            prediction_model_digest(base_model, classifier, tokenizer)
+            if is_main_process()
+            else None
+        )
+
+        logger.info(
+            "Model fingerprint completed in %.2fs", perf_counter() - identity_start
+        )
         for i, entry in enumerate(entries):
+            scaffold_start = perf_counter()
             chromosome_id = entry["chromosome_id"]
             input_zarr = entry["sequence_zarr"]
             final_output_dir = entry["predictions_dir"]
-            # All ranks write their shard into a shared .tmp directory; it is
-            # only promoted to final_output_dir after every rank has finished
-            # writing (see barrier() below), so a killed run never leaves a
-            # partial predictions dir at the path predict.sh's resume check
-            # looks for.
-            tmp_output_dir = final_output_dir.rstrip("/") + ".tmp"
-
-            logger.info(
-                f"[{i + 1}/{len(entries)}] Running predictions for "
-                f"{species_id}/{chromosome_id}"
-            )
-            _create_predictions(
-                ds=load_seq_data(
+            with (
+                prediction_lock(final_output_dir)
+                if is_main_process()
+                else nullcontext()
+            ):
+                ds = load_seq_data(
                     input_zarr=input_zarr,
                     chromosome_id=chromosome_id,
                     species_id=species_id,
-                ),
-                base_model=base_model,
-                classifier=classifier,
-                tokenizer=tokenizer,
-                species_id=species_id,
-                chromosome_id=chromosome_id,
-                model_checkpoint=model_checkpoint,
-                model_path=model_path,
-                output_dir=tmp_output_dir,
-                batch_size=batch_size,
-                window_size=window_size,
-                stride=stride,
-                device=device,
-                tqdm_position=tqdm_position,
-            )
+                )
+                try:
+                    if is_main_process():
+                        identity = {
+                            "input": fingerprint(file_hashes(input_zarr)),
+                            "model": model_digest,
+                            "species_id": species_id,
+                            "chromosome_id": chromosome_id,
+                            "window_size": window_size,
+                            "stride": stride,
+                            "dtype": dtype,
+                            "torch": torch.__version__,
+                        }
+                        prepare_run(final_output_dir, identity, ds.sizes["sequence"])
+                    barrier()
 
-            # All ranks must finish writing this sequence's shard before the
-            # .tmp directory is promoted to its final name.
-            barrier()
-            if is_main_process():
-                if os.path.isdir(final_output_dir):
-                    shutil.rmtree(final_output_dir)
-                os.replace(tmp_output_dir, final_output_dir)
-            # Hold every rank here until the rename is visible before any
-            # rank starts the next chromosome or exits.
-            barrier()
+                    logger.info(
+                        f"[{i + 1}/{len(entries)}] Running predictions for "
+                        f"{species_id}/{chromosome_id}"
+                    )
+                    prediction_start = perf_counter()
+                    batch_size = _create_predictions(
+                        ds=ds,
+                        base_model=base_model,
+                        classifier=classifier,
+                        tokenizer=tokenizer,
+                        species_id=species_id,
+                        chromosome_id=chromosome_id,
+                        model_checkpoint=model_checkpoint,
+                        model_path=model_path,
+                        output_dir=final_output_dir,
+                        batch_size=batch_size,
+                        window_size=window_size,
+                        stride=stride,
+                        device=device,
+                        tqdm_position=tqdm_position,
+                    )
+
+                    logger.info(
+                        "Scaffold %s prediction/write time %.2fs (batch cap=%d)",
+                        chromosome_id,
+                        perf_counter() - prediction_start,
+                        batch_size,
+                    )
+                    # Wait for all ranks before validating coverage and marking completion.
+                    barrier()
+                    if is_main_process():
+                        finish_run(final_output_dir)
+                        if batch_size_cache:
+                            with atomic_output_path(batch_size_cache) as temporary:
+                                with open(temporary, "w") as handle:
+                                    handle.write(str(batch_size) + "\n")
+                    barrier()
+                    logger.info(
+                        "Scaffold %s finished in %.2fs including validation",
+                        chromosome_id,
+                        perf_counter() - scaffold_start,
+                    )
+                finally:
+                    ds.close()
+                del ds
 
         if is_main_process():
             logger.info(
@@ -858,7 +981,7 @@ def main():
         "--output-dir",
         "-o",
         default=None,
-        help="Directory to save rank-specific output zarr datasets. "
+        help="Directory for resumable prediction segments. "
         "Not required when --manifest is used.",
     )
     parser.add_argument(
@@ -910,6 +1033,11 @@ def main():
         type=int,
         default=16,
         help="Batch size for inference. Default 16.",
+    )
+    parser.add_argument(
+        "--batch-size-cache",
+        default=None,
+        help="Optional file storing the last successful batch cap across worker runs.",
     )
     parser.add_argument(
         "--tqdm-position",
@@ -977,6 +1105,7 @@ def main():
             dtype=args.dtype,
             tqdm_position=args.tqdm_position,
             show_dynamo_errors=args.show_dynamo_errors,
+            batch_size_cache=args.batch_size_cache,
         )
     else:
         warmup_triton(
@@ -991,4 +1120,8 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except PredictionResumeError as error:
+        logger.error("Cannot resume predictions: %s", error)
+        raise SystemExit(2) from error

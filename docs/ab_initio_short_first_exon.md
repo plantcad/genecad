@@ -114,4 +114,4 @@ This path is compatible with the existing `FrameStateGraph`: forced chains alrea
 
 ## Conclusion
 
-Another hard filter is not the highest-value next step. **Plant-specific splice boundary scores, an initial-CDS duration prior, joint Kozak/ORF path comparison, and calibrated two-best uncertainty** are. These four suppress weak-evidence false short-first-exon paths while keeping real short exons that have a strong start, strong splice sites, and consistent coding evidence. Just raising `exon_length_strictness` or penalizing long introns can't reliably hit that precision/sensitivity balance.
+The highest-value next step is **plant-specific splice boundary scores, an initial-CDS duration prior, joint Kozak/ORF path comparison, and calibrated two-best uncertainty**, not another hard filter. These four suppress weak-evidence false short-first-exon paths while keeping real short exons that have a strong start, strong splice sites, and consistent coding evidence. Just raising `exon_length_strictness` or penalizing long introns can't reliably hit that precision/sensitivity balance.

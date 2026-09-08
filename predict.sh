@@ -74,9 +74,9 @@ Options:
 Batch size auto-detection:
   Starting guess = max(8, floor(free_gb × 0.90))
   nvidia-smi reports free memory *before* Python/model load, so the guess may overshoot.
-  On failure the batch size is reduced by 20% and retried (up to 20 times). This finds
-  a near-optimal size rather than jumping to half. The final working value is printed
-  so you can pin it with '-b N' on future runs and skip probing entirely.
+  On CUDA OOM the worker reduces the batch by 20% and retries the missing windows
+  without reloading the model. It stops if even one window cannot fit. Other errors
+  stop the worker immediately; completed segments remain available for resume.
   Whatever value a chromosome succeeds with is also cached per GPU under
   <output-dir>/.state/ and reused as the starting point for the next chromosome
   on that GPU, so probing/retrying only happens once per GPU as long as the
@@ -87,7 +87,7 @@ Multi-GPU dispatch (chosen automatically):
                          Ensures all GPUs are used even for small genomes.
   chromosomes ≥ GPUs  →  Per-GPU parallel: each GPU handles its own chromosomes
                          independently; up to N chromosomes run simultaneously.
-                         Avoids repeated torchrun process spawns for large genomes.
+                         Each GPU loads its model once for its scaffold manifest.
   Example: --gpus 0,1,2,3   or   --gpus all
 
 Examples:
@@ -285,10 +285,10 @@ resolve_batch_size_for_gpu() {
     fi
     # Start from a GPU-memory-based estimate. nvidia-smi memory.free is sampled
     # before Python, PyTorch, and the model load, so this is a starting point;
-    # the retry loop below still shrinks it if the real run needs less.
+    # the prediction worker shrinks it if the real run needs less.
     local FREE_GB=$(( GPU_MEM_MB / 1024 ))
     # Use a more aggressive starting point so inference fills more of the GPU
-    # before the retry loop has to back off.
+    # before the prediction worker has to back off.
     local BS=$(( FREE_GB * 9 / 10 ))   # × 0.90
     [[ $BS -lt 8 ]] && BS=8
     echo $BS
@@ -334,11 +334,8 @@ export PYTHONPATH="$SCRIPT_DIR${PYTHONPATH:+:$PYTHONPATH}"
 
 mkdir -p "$OUTPUT_DIR"
 
-# Per-GPU batch size learned from the last successful chromosome on that GPU
-# (or a shared "ddp" key in DDP mode). Chromosomes are processed sequentially
-# per GPU (see the round-robin dispatch below), so a plain file is a safe way
-# to carry the value forward without needing shell-level shared state across
-# the background subshells each chromosome runs in.
+# Persistent workers save an OOM-reduced batch cap here for the next run.
+# Each GPU has its own file; rank zero writes the shared DDP starting cap.
 BATCH_SIZE_STATE_DIR="$OUTPUT_DIR/.state"
 mkdir -p "$BATCH_SIZE_STATE_DIR"
 
@@ -458,14 +455,19 @@ echo "================================================================="
 echo "Extracting sequences for all chromosomes (single pass over FASTA)..."
 echo "================================================================="
 EXTRACT_MANIFEST="$BATCH_SIZE_STATE_DIR/extract_manifest.json"
-EXTRACT_MANIFEST_COUNT=$(CHROM_IDS="$CHROM_IDS" OUTPUT_DIR="$OUTPUT_DIR" $PYTHON - "$EXTRACT_MANIFEST" <<'PYEOF'
+# Large scaffold lists can exceed the OS environment/argument size limit.
+export -n CHROM_IDS
+CHROM_IDS_FILE="$BATCH_SIZE_STATE_DIR/chromosome_ids.txt"
+printf '%s\n' "$CHROM_IDS" > "$CHROM_IDS_FILE"
+EXTRACT_MANIFEST_COUNT=$(OUTPUT_DIR="$OUTPUT_DIR" $PYTHON - "$EXTRACT_MANIFEST" "$CHROM_IDS_FILE" <<'PYEOF'
 import json
 import os
 import sys
 
 manifest_path = sys.argv[1]
 output_dir = os.environ["OUTPUT_DIR"]
-chrom_ids = [c for c in os.environ["CHROM_IDS"].splitlines() if c.strip()]
+with open(sys.argv[2]) as fh:
+    chrom_ids = [c.rstrip("\n") for c in fh if c.strip()]
 
 entries = []
 for chrom_id in chrom_ids:
@@ -503,7 +505,6 @@ echo ""
 
 process_chromosome() {
     local CHR_ID="$1"
-    local BATCH_SIZE="$2"
     local GPU_ID="$3"   # which GPU this chromosome runs on
     local LOG_PREFIX="[${CHR_ID}@GPU${GPU_ID}]"
 
@@ -532,110 +533,15 @@ process_chromosome() {
             --input-fasta "$INPUT_FILE" \
             --chrom-map "${CHR_ID}:${CHR_ID}" \
             --model-path "$TOKENIZER_PATH" \
-            --output-zarr $SEQUENCES_ZARR
+            --output-zarr "$SEQUENCES_ZARR" || return $?
     fi
 
-    # --- Step 2: Predict ---
-    if [[ -e $PREDICTIONS_DIR ]]; then
-        echo "${LOG_PREFIX} [2/8] Skipping — predictions dir already exists"
-    else
-        local gpu_id="$GPU_ID"
-        local bs="$BATCH_SIZE"
-        # Reuse the batch size the last chromosome on this GPU actually
-        # succeeded with, instead of re-probing from the initial VRAM-based
-        # guess (and re-triggering the same OOM retries) on every chromosome.
-        # Chromosomes on a given GPU run one at a time (see the round-robin
-        # dispatch below / the sequential DDP loop), so this file is never
-        # read and written concurrently for the same key.
-        local cache_key="ddp"
-        [[ "$PREDICT_MODE" != "ddp" && "$PREDICT_MODE" != "ddp_slurm" ]] && cache_key="$gpu_id"
-        local batch_size_cache_file="$BATCH_SIZE_STATE_DIR/batch_size_${cache_key}.txt"
-        if [[ -f $batch_size_cache_file ]]; then
-            local cached_bs
-            cached_bs=$(cat "$batch_size_cache_file" 2>/dev/null)
-            if [[ "$cached_bs" =~ ^[0-9]+$ ]] && [[ "$cached_bs" -ge 1 ]]; then
-                echo "${LOG_PREFIX} [2/8] Using batch size ${cached_bs} learned from a previous chromosome on this GPU (was ${bs})."
-                bs="$cached_bs"
-            fi
-        fi
-        local attempt=0
-        local max_attempts=20  # 20% reduction per step: ~20 steps to go from 256→1
-        local success=0
-        while [[ $attempt -lt $max_attempts ]]; do
-            local exit_code=0
-            if [[ "$PREDICT_MODE" == "ddp" ]]; then
-                echo "${LOG_PREFIX} [2/8] Prediction via DDP (batch=${bs}/GPU, attempt $((attempt+1))/${max_attempts})..."
-                CUDA_VISIBLE_DEVICES="$GPU_LIST_STR" \
-                $PY_LAUNCHER \
-                    "$SCRIPT_DIR/scripts/predict.py" \
-                    --chromosome-id "$CHR_ID" \
-                    --input-zarr $SEQUENCES_ZARR \
-                    --output-dir $PREDICTIONS_DIR \
-                    --model-path "$BASE_MODEL" \
-                    --model-checkpoint "$HEAD_MODEL" \
-                    --species-id "$SPECIES_ID" \
-                    --batch-size "$bs" \
-                    --dtype "$DTYPE" \
-                    --window-size 8192 \
-                    --stride 4096 || exit_code=$?
-            elif [[ "$PREDICT_MODE" == "ddp_slurm" ]]; then
-                echo "${LOG_PREFIX} [2/8] Prediction via SLURM distributed (batch=${bs}/GPU, attempt $((attempt+1))/${max_attempts})..."
-                $PY_LAUNCHER "$SCRIPT_DIR/scripts/predict.py" \
-                    --chromosome-id "$CHR_ID" \
-                    --input-zarr $SEQUENCES_ZARR \
-                    --output-dir $PREDICTIONS_DIR \
-                    --model-path "$BASE_MODEL" \
-                    --model-checkpoint "$HEAD_MODEL" \
-                    --species-id "$SPECIES_ID" \
-                    --batch-size "$bs" \
-                    --dtype "$DTYPE" \
-                    --window-size 8192 \
-                    --stride 4096 || exit_code=$?
-            else
-                echo "${LOG_PREFIX} [2/8] Prediction on GPU ${gpu_id} (batch=${bs}, attempt $((attempt+1))/${max_attempts})..."
-                CUDA_VISIBLE_DEVICES="$gpu_id" \
-                $PY_LAUNCHER "$SCRIPT_DIR/scripts/predict.py" \
-                    --chromosome-id "$CHR_ID" \
-                    --input-zarr $SEQUENCES_ZARR \
-                    --output-dir $PREDICTIONS_DIR \
-                    --model-path "$BASE_MODEL" \
-                    --model-checkpoint "$HEAD_MODEL" \
-                    --species-id "$SPECIES_ID" \
-                    --batch-size "$bs" \
-                    --dtype "$DTYPE" \
-                    --tqdm-position "$gpu_id" \
-                    --window-size 8192 \
-                    --stride 4096 || exit_code=$?
-            fi
-            if [[ $exit_code -eq 0 ]]; then
-                success=1
-                echo "$bs" > "$batch_size_cache_file"
-                if [[ $attempt -gt 0 ]]; then
-                    echo "${LOG_PREFIX} [2/8] Succeeded with batch size ${bs} after ${attempt} retry(s)."
-                    echo "${LOG_PREFIX}   TIP: Add '-b ${bs}' to future runs to skip probing."
-                fi
-                break
-            fi
-            local next_bs=$(( bs * 4 / 5 ))   # reduce by 20%
-            [[ $next_bs -ge $bs ]] && next_bs=$(( bs - 1 ))  # guard against bs<5 rounding to same value
-            [[ $next_bs -lt 1 ]] && next_bs=1
-            echo "${LOG_PREFIX} [2/8] Failed (exit ${exit_code}). Reducing batch size by 20%%: ${bs} → ${next_bs}..."
-            bs=$next_bs
-            # predict.py now writes to PREDICTIONS_DIR.tmp and only renames it
-            # onto PREDICTIONS_DIR once the whole call succeeds (see
-            # scripts/predict.py's atomic rename-after-barrier), so a failed
-            # attempt's partial output lands in .tmp, not PREDICTIONS_DIR
-            # itself. Clear both, or the next attempt's writer sees the
-            # previous attempt's partial strand data already sitting in
-            # .tmp and appends onto it instead of starting clean.
-            rm -rf "$PREDICTIONS_DIR" "${PREDICTIONS_DIR}.tmp"
-            attempt=$(( attempt + 1 ))
-        done
-        if [[ $success -ne 1 ]]; then
-            echo "${LOG_PREFIX} ERROR: Prediction failed after ${max_attempts} attempts (last batch size: ${bs})."
-            echo "${LOG_PREFIX}   This is likely not an OOM issue. Check stderr above."
-            return 1
-        fi
+    # Prediction workers finish before these CPU stages run.
+    # Check the completion marker, not just the output directory.
+    local gpu_id="$GPU_ID"
+    if [[ ! -f "$PREDICTIONS_DIR/_SUCCESS.json" ]]; then
+        echo "${LOG_PREFIX} ERROR: Prediction has not completed; refusing downstream processing."
+        return 1
     fi
 
     # --- Step 3: Detect Intervals ---
@@ -644,10 +550,10 @@ process_chromosome() {
     else
         echo "${LOG_PREFIX} [3/8] Detecting intervals (Viterbi decoding)..."
         $PYTHON "$SCRIPT_DIR/scripts/detect_intervals.py" \
-            --input-dir $PREDICTIONS_DIR \
-            --output-zarr $INTERVALS_ZARR \
+            --input-dir "$PREDICTIONS_DIR" \
+            --output-zarr "$INTERVALS_ZARR" \
             --domain "$MODE" \
-            "${FRAME_AWARE_ARGS[@]}"
+            "${FRAME_AWARE_ARGS[@]}" || return $?
     fi
 
     # --- Step 4: Export Raw GFF ---
@@ -660,11 +566,11 @@ process_chromosome() {
             export_tqdm_args=(--tqdm-position "$gpu_id")
         fi
         $PYTHON "$SCRIPT_DIR/scripts/export_gff.py" \
-            --input-zarr $INTERVALS_ZARR \
-            --output-gff $RAW_GENECAD_GFF \
+            --input-zarr "$INTERVALS_ZARR" \
+            --output-gff "$RAW_GENECAD_GFF" \
             --min-transcript-length "$MIN_TRANSCRIPT_LENGTH" \
             --cpu-workers "$CPU_WORKERS" \
-            "${export_tqdm_args[@]}"
+            "${export_tqdm_args[@]}" || return $?
     fi
 
     # --- Step 5: Post-processing Filters ---
@@ -674,11 +580,98 @@ process_chromosome() {
         echo "${LOG_PREFIX}   Skipping feature-length filter — output already exists"
     else
         $PYTHON "$SCRIPT_DIR/scripts/filter_raw_gff.py" \
-            --input-gff $RAW_GENECAD_GFF \
-            --output-gff $FILTERED_GENECAD_GFF
+            --input-gff "$RAW_GENECAD_GFF" \
+            --output-gff "$FILTERED_GENECAD_GFF" || return $?
     fi
 
     echo "${LOG_PREFIX} Done!"
+}
+
+# Run one persistent model process per GPU (one distributed process group in DDP).
+run_prediction_manifest() {
+    local key="$1" bs="$2" manifest="$3"
+    local args=(
+        "$SCRIPT_DIR/scripts/predict.py"
+        --manifest "$manifest"
+        --model-path "$BASE_MODEL"
+        --model-checkpoint "$HEAD_MODEL"
+        --species-id "$SPECIES_ID"
+        --batch-size "$bs"
+        --batch-size-cache "$BATCH_SIZE_STATE_DIR/batch_size_${key}.txt"
+        --dtype "$DTYPE" --window-size 8192 --stride 4096
+    )
+    echo "[worker $key] Loading model once for scaffold manifest $manifest"
+    if [[ "$PREDICT_MODE" == "single" ]]; then
+        CUDA_VISIBLE_DEVICES="$key" $PY_LAUNCHER "${args[@]}" --tqdm-position "$key"
+    elif [[ "$PREDICT_MODE" == "ddp" ]]; then
+        CUDA_VISIBLE_DEVICES="$GPU_LIST_STR" $PY_LAUNCHER "${args[@]}"
+    else
+        $PY_LAUNCHER "${args[@]}"
+    fi
+}
+
+run_prediction_workers() {
+    local worker_keys="$GPU_LIST_STR"
+    [[ "$PREDICT_MODE" != "single" ]] && worker_keys="ddp"
+    local active_workers
+    local chromosome_file="$BATCH_SIZE_STATE_DIR/chromosome_ids.txt"
+    export -n CHROM_IDS
+    printf '%s\n' "$CHROM_IDS" > "$chromosome_file" || return $?
+    active_workers=$(OUTPUT_DIR="$OUTPUT_DIR" \
+        WORKER_KEYS="$worker_keys" STATE_DIR="$BATCH_SIZE_STATE_DIR" \
+        $PYTHON - "$chromosome_file" <<'PYEOF'
+import json
+import os
+import sys
+from pathlib import Path
+
+keys = os.environ["WORKER_KEYS"].split(",")
+work = {key: [] for key in keys}
+output = Path(os.environ["OUTPUT_DIR"])
+index = 0
+for chrom in Path(sys.argv[1]).read_text().splitlines():
+    if not chrom.strip():
+        continue
+    directory = output / chrom
+    if (directory / f"predictions_filtered_{chrom}.gff").is_file():
+        continue
+    work[keys[index % len(keys)]].append({
+        "chromosome_id": chrom,
+        "sequence_zarr": str(directory / f"sequences_{chrom}.zarr"),
+        "predictions_dir": str(directory / f"predictions_{chrom}"),
+    })
+    index += 1
+for key, entries in work.items():
+    path = Path(os.environ["STATE_DIR"]) / f"predict_manifest_{key}.json"
+    path.write_text(json.dumps(entries))
+    if entries:
+        print(key)
+PYEOF
+    ) || return $?
+    if [[ -z "$active_workers" ]]; then
+        echo "All scaffold outputs are complete; no model workers needed."
+        return 0
+    fi
+    local key bs
+    local failed=0
+    local pids=()
+    while IFS= read -r key; do
+        if [[ "$key" == "ddp" ]]; then
+            bs="$DDP_BATCH"
+            run_prediction_manifest "$key" "$bs" "$BATCH_SIZE_STATE_DIR/predict_manifest_${key}.json" || failed=1
+        else
+            bs="${GPU_BATCH_SIZES[$key]}"
+            run_prediction_manifest "$key" "$bs" "$BATCH_SIZE_STATE_DIR/predict_manifest_${key}.json" &
+            pids+=($!)
+        fi
+    done <<< "$active_workers"
+    local pid
+    for pid in "${pids[@]}"; do
+        if ! wait "$pid"; then
+            failed=1
+        fi
+    done
+    return "$failed"
 }
 
 if [[ "$FRAME_AWARE" == "1" ]]; then
@@ -753,10 +746,15 @@ fi
 export PREDICT_MODE PY_LAUNCHER
 echo "================================================================="
 
+if ! run_prediction_workers; then
+    echo "ERROR: A prediction worker failed. Completed segments are retained; rerun to resume."
+    exit 1
+fi
+
 FAILED=0
 
 if [[ "$PREDICT_MODE" == "ddp" || "$PREDICT_MODE" == "ddp_slurm" ]]; then
-    # Sequential DDP — all GPUs on each chromosome one at a time
+    # Predictions are finished; run the CPU stages for each chromosome.
     for CHR_ID in "${CHR_ARRAY[@]}"; do
         process_chromosome "$CHR_ID" "$DDP_BATCH" "" || FAILED=$(( FAILED + 1 ))
     done
@@ -770,8 +768,9 @@ else
 
         # Wait for the oldest slot before launching, keeping exactly NUM_GPUS live jobs
         if [[ ${#PIDS[@]} -ge $NUM_GPUS ]]; then
-            wait "${PIDS[0]}"
-            [[ $? -ne 0 ]] && FAILED=$(( FAILED + 1 ))
+            if ! wait "${PIDS[0]}"; then
+                FAILED=$(( FAILED + 1 ))
+            fi
             PIDS=("${PIDS[@]:1}")
         fi
 
@@ -780,8 +779,9 @@ else
         chr_idx=$(( chr_idx + 1 ))
     done
     for pid in "${PIDS[@]}"; do
-        wait "$pid"
-        [[ $? -ne 0 ]] && FAILED=$(( FAILED + 1 ))
+        if ! wait "$pid"; then
+            FAILED=$(( FAILED + 1 ))
+        fi
     done
 fi
 
