@@ -37,6 +37,7 @@ from src.modeling import GeneClassifier, GeneClassifierConfig
 from src.dist import (
     barrier,
     destroy_process_group,
+    guarded_on_main,
     init_process_group,
     is_main_process,
     local_rank,
@@ -861,11 +862,12 @@ def create_predictions(
         identity_start = perf_counter()
         # Hash loaded weights once per worker, in bounded CPU chunks, to detect
         # checkpoints replaced at the same path.
-        model_digest = (
-            prediction_model_digest(base_model, classifier, tokenizer)
-            if is_main_process()
-            else None
-        )
+        model_digest = None
+        with guarded_on_main():
+            if is_main_process():
+                model_digest = prediction_model_digest(
+                    base_model, classifier, tokenizer
+                )
 
         logger.info(
             "Model fingerprint completed in %.2fs", perf_counter() - identity_start
@@ -886,19 +888,21 @@ def create_predictions(
                     species_id=species_id,
                 )
                 try:
-                    if is_main_process():
-                        identity = {
-                            "input": fingerprint(file_hashes(input_zarr)),
-                            "model": model_digest,
-                            "species_id": species_id,
-                            "chromosome_id": chromosome_id,
-                            "window_size": window_size,
-                            "stride": stride,
-                            "dtype": dtype,
-                            "torch": torch.__version__,
-                        }
-                        prepare_run(final_output_dir, identity, ds.sizes["sequence"])
-                    barrier()
+                    with guarded_on_main():
+                        if is_main_process():
+                            identity = {
+                                "input": fingerprint(file_hashes(input_zarr)),
+                                "model": model_digest,
+                                "species_id": species_id,
+                                "chromosome_id": chromosome_id,
+                                "window_size": window_size,
+                                "stride": stride,
+                                "dtype": dtype,
+                                "torch": torch.__version__,
+                            }
+                            prepare_run(
+                                final_output_dir, identity, ds.sizes["sequence"]
+                            )
 
                     logger.info(
                         f"[{i + 1}/{len(entries)}] Running predictions for "
@@ -930,13 +934,13 @@ def create_predictions(
                     )
                     # Wait for all ranks before validating coverage and marking completion.
                     barrier()
-                    if is_main_process():
-                        finish_run(final_output_dir)
-                        if batch_size_cache:
-                            with atomic_output_path(batch_size_cache) as temporary:
-                                with open(temporary, "w") as handle:
-                                    handle.write(str(batch_size) + "\n")
-                    barrier()
+                    with guarded_on_main():
+                        if is_main_process():
+                            finish_run(final_output_dir)
+                            if batch_size_cache:
+                                with atomic_output_path(batch_size_cache) as temporary:
+                                    with open(temporary, "w") as handle:
+                                        handle.write(str(batch_size) + "\n")
                     logger.info(
                         "Scaffold %s finished in %.2fs including validation",
                         chromosome_id,
