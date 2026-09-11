@@ -29,28 +29,35 @@ The repair is deliberately constrained so that it cannot invent gene structure:
     (minimum total boundary movement), and movement is capped by --max-shift.
     Truncating a long CDS down to a short ORF is therefore rejected: it would
     require a large 3' shift.
-6.  Even when the predicted CDS is already a valid ORF, if its first *coding*
-    exon (i.e. the CDS portion of the first exon it overlaps, not counting any
-    5'UTR on that exon) is shorter than --weak-start-threshold, alternative
-    start codons within the same already-predicted exonic sequence are
-    considered and the one with the strongest Kozak-context support is
-    preferred, provided it beats the original by --kozak-margin. --kozak-margin
-    is a floor, not a fixed value: by default it is raised per genome by
-    calibrate_kozak_margin, which checks the same switch logic against this
-    genome's own unambiguous start codons and raises the margin only as far
-    as needed to keep the measured rate of switching away from a known-correct
-    start at or below 2% (see calibrate_kozak_margin's docstring for the
-    cross-species numbers behind that -- one held-out species had a
-    quiet-but-real 8-9% false-positive rate at the fixed default that this
-    catches). Disable with --no-calibrate-kozak-margin. Candidates
-    are restricted to the original start's reading frame *and* to those
-    whose own forced stop is the original stop codon unchanged, so a switch
-    can only move the TIS -- it can never change the stop codon or the
-    encoded protein downstream of the new start. This still only relabels predicted
-    exonic sequence (rule 2 still applies) -- it never invents new gene
-    structure. Transcripts whose best candidate is still weak
-    (--weak-kozak-threshold) are flagged (orf_issue=weak_kozak_support)
-    rather than forced. Disable with --no-fix-weak-starts.
+6.  Even when the predicted CDS is already a valid ORF, --fix-weak-starts can
+    additionally re-rank its start codon: if its first *coding* exon (i.e. the
+    CDS portion of the first exon it overlaps, not counting any 5'UTR on that
+    exon) is shorter than --weak-start-threshold, alternative start codons
+    within the same already-predicted exonic sequence are considered and the
+    one with the strongest Kozak-context support is preferred, provided it
+    beats the original by --kozak-margin. --kozak-margin is a floor, not a
+    fixed value: by default it is raised per genome by calibrate_kozak_margin,
+    which checks the same switch logic against this genome's own unambiguous
+    start codons and raises the margin only as far as needed to keep the
+    measured rate of switching away from a known-correct start at or below 2%
+    (see calibrate_kozak_margin's docstring for the cross-species numbers
+    behind that -- one held-out species had a quiet-but-real 8-9%
+    false-positive rate at the fixed default that this catches). Disable
+    calibration with --no-calibrate-kozak-margin. Candidates are restricted to
+    the original start's reading frame *and* to those whose own forced stop is
+    the original stop codon unchanged, so a switch can only move the TIS -- it
+    can never change the stop codon or the encoded protein downstream of the
+    new start. This still only relabels predicted exonic sequence (rule 2
+    still applies) -- it never invents new gene structure. Transcripts whose
+    best candidate is still weak (--weak-kozak-threshold) are flagged
+    (orf_issue=weak_kozak_support) rather than forced.
+
+    --fix-weak-starts is off by default: cross-species offline validation
+    (docs/short_first_exon_validation_results.md) found it produces net
+    corrections in some species but is purely harmful in others (zero
+    corrections, new errors introduced), so it is not a generally safe repair
+    for this architecture class. Pass --fix-weak-starts to opt in for further
+    experimentation; the raw prediction is the safer default.
 
 Transcripts that cannot be repaired under these rules are *not* forced into an
 ORF.  They are passed through unchanged and flagged (partial=true, orf_issue=…,
@@ -882,7 +889,7 @@ def fix_orf(
     min_protein_length: int,
     require_canonical: bool,
     report_path: str | None,
-    fix_weak_starts: bool = True,
+    fix_weak_starts: bool = False,
     weak_start_threshold: int = 9,
     kozak_margin: float = 3.0,
     weak_kozak_threshold: float = 5.0,
@@ -1003,9 +1010,10 @@ def fix_orf(
     output.sort(key=lambda r: (r.order, r.start, r.end, r.type))
 
     logger.info(f"Writing {len(output)} records to {output_gff}")
-    with atomic_output_path(output_gff) as tmp_output_gff, open(
-        tmp_output_gff, "w"
-    ) as fh:
+    with (
+        atomic_output_path(output_gff) as tmp_output_gff,
+        open(tmp_output_gff, "w") as fh,
+    ):
         for line in header:
             fh.write(line + "\n")
         for record in output:
@@ -1090,18 +1098,21 @@ def main() -> None:
         "Off by default: an ORF built on untrustworthy splice calls is not trustworthy.",
     )
     parser.add_argument(
-        "--no-fix-weak-starts",
-        dest="fix_weak_starts",
-        action="store_false",
-        help="Disable Kozak-context re-ranking of already-valid but "
-        "suspiciously short first exons. On by default.",
+        "--fix-weak-starts",
+        action="store_true",
+        help="Enable Kozak-context re-ranking of already-valid but "
+        "suspiciously short first exons. Off by default: cross-species "
+        "validation (docs/short_first_exon_validation_results.md) found it "
+        "is not a generally safe repair for this architecture class -- it "
+        "helps in some species and is purely harmful in others. Opt in only "
+        "for further experimentation.",
     )
     parser.add_argument(
         "--weak-start-threshold",
         type=int,
         default=9,
         help="First coding exon length (nt) below which alternative start "
-        "codons are considered, when --no-fix-weak-starts is not set.",
+        "codons are considered, when --fix-weak-starts is set.",
     )
     parser.add_argument(
         "--kozak-margin",

@@ -759,15 +759,46 @@ def test_weak_start_with_no_good_candidate_is_flagged_not_repaired(
     assert attributes["orf_issue"] == "weak_kozak_support"
 
 
-def test_fix_weak_starts_can_be_opted_out(tiny_kozak_pwm, tmp_path):
-    """The same sequence that gets repaired by default must be left
-    completely alone with --no-fix-weak-starts (fix_weak_starts=False)."""
+def test_fix_weak_starts_disabled_leaves_transcript_alone(tiny_kozak_pwm, tmp_path):
+    """The same sequence that gets repaired with --fix-weak-starts enabled
+    must be left completely alone when it's disabled (fix_weak_starts=False,
+    the default)."""
     stats, records = run_weak_start(tmp_path, WEAK_STRONG_SEQ, fix_weak_starts=False)
 
     assert stats["repaired"] == 0
     assert stats["complete"] == 1
     assert exonic(records) == sorted(WEAK_START_BLOCKS)
     assert "orf_issue" not in mrna_attributes(records)
+
+
+def test_fix_weak_starts_defaults_to_disabled(tmp_path):
+    """fix_orf()'s own default -- not the test helpers' explicit True above --
+    must leave weak-start transcripts untouched. Cross-species validation
+    (docs/short_first_exon_validation_results.md) found the repair helps in
+    some species and is purely harmful in others, so it must stay opt-in via
+    --fix-weak-starts rather than run automatically."""
+    gff = tmp_path / "in.gff"
+    fasta = tmp_path / "genome.fa"
+    out = tmp_path / "out.gff"
+    gff.write_text(build_gff(WEAK_START_BLOCKS, "+"))
+    fasta.write_text(
+        ">chr1\n"
+        + build_weak_start_chromosome(WEAK_STRONG_SEQ, WEAK_START_INTRON)
+        + "\n"
+    )
+
+    stats = fix_orf.fix_orf(
+        input_gff=str(gff),
+        input_fasta=str(fasta),
+        output_gff=str(out),
+        max_shift=300,
+        min_protein_length=1,
+        require_canonical=True,
+        report_path=None,
+    )
+
+    assert stats["repaired"] == 0
+    assert stats["complete"] == 1
 
 
 def test_weak_start_search_does_not_trigger_for_a_long_first_exon(
