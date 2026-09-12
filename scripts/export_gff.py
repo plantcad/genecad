@@ -403,9 +403,10 @@ def generate_gff(
     gff_lines = ["##gff-version 3"] + [rec.to_line() for rec in gff_records]
     logger.info(f"Writing {len(gff_lines)} lines to {output_path}")
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
-    with atomic_output_path(output_path) as tmp_output_path, open(
-        tmp_output_path, "w"
-    ) as f:
+    with (
+        atomic_output_path(output_path) as tmp_output_path,
+        open(tmp_output_path, "w") as f,
+    ):
         f.write("\n".join(gff_lines) + "\n")
 
 

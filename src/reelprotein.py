@@ -893,9 +893,10 @@ def generate_final_gff(
     items.sort(key=_item_sort_key)
 
     # Write Output
-    with atomic_output_path(output_gff_path) as tmp_output_gff_path, open(
-        tmp_output_gff_path, "w"
-    ) as out:
+    with (
+        atomic_output_path(output_gff_path) as tmp_output_gff_path,
+        open(tmp_output_gff_path, "w") as out,
+    ):
         out.writelines(header)
         for itm in items:
             if itm["type"] == "single":

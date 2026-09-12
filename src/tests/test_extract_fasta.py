@@ -84,9 +84,9 @@ def test_manifest_matches_per_chromosome_extraction(
 
     for chrom_id in CHROM_SEQS:
         per_chrom_ds = open_datatree(per_chrom_paths[chrom_id])["sp1"][chrom_id]
-        manifest_ds = open_datatree(str(tmp_path / f"manifest_{chrom_id}.zarr"))[
-            "sp1"
-        ][chrom_id]
+        manifest_ds = open_datatree(str(tmp_path / f"manifest_{chrom_id}.zarr"))["sp1"][
+            chrom_id
+        ]
         for var in ["sequence_tokens", "sequence_masks"]:
             np.testing.assert_array_equal(
                 per_chrom_ds[var].values,
@@ -99,9 +99,7 @@ def test_manifest_only_writes_requested_chromosomes(
     fasta_path: str, tmp_path: pathlib.Path
 ) -> None:
     """A manifest naming a subset of records must not touch the others."""
-    entries = [
-        {"chromosome_id": "chr2", "output_zarr": str(tmp_path / "chr2.zarr")}
-    ]
+    entries = [{"chromosome_id": "chr2", "output_zarr": str(tmp_path / "chr2.zarr")}]
     extract_fasta.extract_fasta_manifest(
         species_id="sp1",
         fasta_file=fasta_path,

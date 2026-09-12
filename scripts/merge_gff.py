@@ -43,9 +43,10 @@ def merge_gff_files(input_files: list[str], output_file: str) -> None:
     total_genes = 0
     total_lines = 0
 
-    with atomic_output_path(output_file) as tmp_output_file, open(
-        tmp_output_file, "w"
-    ) as out_fh:
+    with (
+        atomic_output_path(output_file) as tmp_output_file,
+        open(tmp_output_file, "w") as out_fh,
+    ):
         for input_path in input_files:
             path = Path(input_path)
             if not path.exists():

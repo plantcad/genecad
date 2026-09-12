@@ -152,7 +152,7 @@ def test_repairs_only_damaged_segment(tmp_path, monkeypatch, damage):
             chunk.unlink()
         else:
             chunk.write_bytes(b"broken")
-    with pytest.raises((ValueError, OSError)):
+    with pytest.raises((ValueError, OSError)):  # pyrefly: ignore[no-matching-overload]
         merge_prediction_datasets(str(tmp_path))
     prepare(tmp_path)
     assert (
@@ -207,7 +207,13 @@ def test_more_ranks_than_windows_and_short_sequence(tmp_path, monkeypatch):
 
 
 def test_coverage_rejects_gaps_overlaps_and_missing_strand():
-    positive = dict(strand="positive", start=0, stop=10, window_start=0, window_stop=2)
+    positive = {
+        "strand": "positive",
+        "start": 0,
+        "stop": 10,
+        "window_start": 0,
+        "window_stop": 2,
+    }
     negative = {**positive, "strand": "negative"}
     checkpoint.validate_coverage([positive, negative], 10)
     for records in (

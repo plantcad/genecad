@@ -40,7 +40,7 @@ def atomic_output_path(final_path: "str | os.PathLike[str]") -> Iterator[str]:
     Leaves `final_path` untouched until the write fully succeeds. Any
     leftover `.tmp` path from a previous crashed attempt is cleared first.
     """
-    final_path = os.fspath(final_path)
+    final_path = final_path if isinstance(final_path, str) else os.fspath(final_path)
     tmp_path = final_path.rstrip("/") + ".tmp"
     old_path = final_path.rstrip("/") + ".old"
     _remove_path(tmp_path)
