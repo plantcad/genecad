@@ -320,12 +320,12 @@ Lsativa	Lsat_1_v8_lg_9_gene_1882.t1	Lsat_1_v8_lg_9	+	True	changed_donor	74044815
 Lsativa	Lsat_1_v8_lg_9_gene_2516.t1	Lsat_1_v8_lg_9	-	True	exact_chain_control	139738268	139738268	True	-0.0013852863066246002	-0.011916733027528714	-0.013294354865364788	genecad_result/predictions/Lsativa_full_finetuned/Lsat_1_v8_lg_9/predictions_Lsat_1_v8_lg_9/predictions.0.zarr/negative	265	159721	True	-0.0013852863066246002	-0.011916733027528714	-0.013294354865364788	genecad_result/predictions/Lsativa_full_finetuned/Lsat_1_v8_lg_9/predictions_Lsat_1_v8_lg_9/predictions.0.zarr/negative	265	159721	0.0	0.0	0.0
 Lsativa	Lsat_1_v8_lg_9_gene_2784.t1	Lsat_1_v8_lg_9	-	True	changed_donor	155642787	155650520	True	-12.781254545108286	-0.07422696914909199	-12.855487068192243	genecad_result/predictions/Lsativa_full_finetuned/Lsat_1_v8_lg_9/predictions_Lsat_1_v8_lg_9/predictions.0.zarr/negative	200	5872	True	-0.003288413977334592	-0.01732525207209612	-0.020575429550476088	genecad_result/predictions/Lsativa_full_finetuned/Lsat_1_v8_lg_9/predictions_Lsat_1_v8_lg_9/predictions.0.zarr/negative	200	13605	12.777966131130952	0.05690171707699587	12.834911638641767
 Lsativa	Lsat_1_v8_lg_9_gene_2929.t1	Lsat_1_v8_lg_9	-	True	exact_chain_control	166423002	166423002	True	-0.001307331315758553	-0.010678649696767906	-0.01197522110145055	genecad_result/predictions/Lsativa_full_finetuned/Lsat_1_v8_lg_9/predictions_Lsat_1_v8_lg_9/predictions.0.zarr/negative	155	3367	True	-0.001307331315758553	-0.010678649696767906	-0.01197522110145055	genecad_result/predictions/Lsativa_full_finetuned/Lsat_1_v8_lg_9/predictions_Lsat_1_v8_lg_9/predictions.0.zarr/negative	155	3367	0.0	0.0	0.0
-Athaliana	OZ408686.1_gene_278.t1	OZ408686.1	-	False	exact_chain_control	4923721	4923721	False							False									
-Athaliana	OZ408686.1_gene_701.t1	OZ408686.1	+	False	exact_chain_control	13344422	13344422	False							False									
-Athaliana	OZ408686.1_gene_1579.t1	OZ408686.1	-	False	exact_chain_control	17039416	17039416	False							False									
-Athaliana	OZ408686.1_gene_1852.t1	OZ408686.1	+	False	exact_chain_control	18130732	18130732	False							False									
-Athaliana	OZ408686.1_gene_2211.t1	OZ408686.1	-	False	exact_chain_control	19504461	19504461	False							False									
-Athaliana	OZ408686.1_gene_2412.t1	OZ408686.1	-	False	exact_chain_control	20240197	20240197	False							False									
-Athaliana	OZ408686.1_gene_2795.t1	OZ408686.1	+	False	exact_chain_control	21563166	21563166	False							False									
-Athaliana	OZ408686.1_gene_2910.t1	OZ408686.1	-	False	exact_chain_control	21984438	21984438	False							False									
-Athaliana	OZ408686.1_gene_3456.t1	OZ408686.1	+	False	exact_chain_control	24012773	24012773	False							False									
+Athaliana	OZ408686.1_gene_278.t1	OZ408686.1	-	False	exact_chain_control	4923721	4923721	False							False
+Athaliana	OZ408686.1_gene_701.t1	OZ408686.1	+	False	exact_chain_control	13344422	13344422	False							False
+Athaliana	OZ408686.1_gene_1579.t1	OZ408686.1	-	False	exact_chain_control	17039416	17039416	False							False
+Athaliana	OZ408686.1_gene_1852.t1	OZ408686.1	+	False	exact_chain_control	18130732	18130732	False							False
+Athaliana	OZ408686.1_gene_2211.t1	OZ408686.1	-	False	exact_chain_control	19504461	19504461	False							False
+Athaliana	OZ408686.1_gene_2412.t1	OZ408686.1	-	False	exact_chain_control	20240197	20240197	False							False
+Athaliana	OZ408686.1_gene_2795.t1	OZ408686.1	+	False	exact_chain_control	21563166	21563166	False							False
+Athaliana	OZ408686.1_gene_2910.t1	OZ408686.1	-	False	exact_chain_control	21984438	21984438	False							False
+Athaliana	OZ408686.1_gene_3456.t1	OZ408686.1	+	False	exact_chain_control	24012773	24012773	False							False
