@@ -28,10 +28,14 @@ being truncated to short ORFs. Default 300.
 repair. Default 10.
 * `--allow-noncanonical-introns` - Flag. Attempt repair even when the transcript has non-canonical
 introns. Off by default: an ORF built on untrustworthy splice calls is not trustworthy.
-* `--no-fix-weak-starts` - Flag. Disables Kozak-context re-ranking of already-valid but
-suspiciously short first exons. On by default.
+* `--fix-weak-starts` - Flag. Enables Kozak-context re-ranking of already-valid but suspiciously
+short first exons. Off by default: cross-species offline validation
+([short-first-CDS validation](experiments/short_first_exon_validation_results.md)) found it
+produces net corrections in some species but is purely harmful in others (zero corrections, new
+errors introduced), so it is not a generally safe repair for this architecture class. Opt in only
+for further experimentation.
 * `--weak-start-threshold` - First coding exon length (nt) below which alternative start codons are
-considered, when weak-start fixing is not disabled. Default 9.
+considered, when `--fix-weak-starts` is set. Default 9.
 * `--kozak-margin` - Minimum Kozak log2-odds advantage an alternative start codon must have over
 the original to trigger a switch. Used as the floor value that per-genome calibration raises from,
 unless `--no-calibrate-kozak-margin` is set, in which case it is used as-is. Default 3.0.

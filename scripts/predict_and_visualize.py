@@ -16,9 +16,9 @@ python scripts/predict_and_visualize.py \
     --chromosome Chr1 \
     --output-dir ./results
 
-All pipeline steps are skipped when their output already exists, so you can
-re-run the script cheaply to regenerate plots after tweaking visualization
-options without re-running inference.
+Prediction segments are verified and resumed on rerun; completed windows are
+not inferred again. Extraction and interval detection retain their stage-level
+output checks, and plots can be regenerated after changing visualization options.
 """
 
 import argparse
@@ -335,17 +335,16 @@ def step_extract(
     _run(
         [
             _python(),
-            os.path.join(script_dir, "extract.py"),
-            "extract_fasta_file",
+            os.path.join(script_dir, "extract_fasta.py"),
             "--species-id",
             species_id,
-            "--fasta-file",
+            "--input-fasta",
             fasta,
             "--chrom-map",
             f"{chromosome}:{chromosome}",
-            "--tokenizer-path",
+            "--model-path",
             model_path,
-            "--output",
+            "--output-zarr",
             output_zarr,
         ]
     )
@@ -365,17 +364,14 @@ def step_predict(
     stride: int,
     script_dir: str,
 ) -> None:
-    marker = os.path.join(predictions_dir, "predictions.0.zarr")
-    if os.path.exists(marker):
-        logger.info("[2/3] predictions.zarr already exists — skipping inference")
-        return
-    logger.info("[2/3] Running inference → predictions.zarr ...")
+    if device != "cuda":
+        raise ValueError("Prediction uses CUDA; select GPUs with CUDA_VISIBLE_DEVICES")
+    logger.info("[2/3] Verifying/resuming prediction segments ...")
     _run(
         [
             _python(),
             os.path.join(script_dir, "predict.py"),
-            "create_predictions",
-            "--input",
+            "--input-zarr",
             sequences_zarr,
             "--output-dir",
             predictions_dir,
@@ -389,16 +385,12 @@ def step_predict(
             chromosome,
             "--batch-size",
             str(batch_size),
-            "--device",
-            device,
             "--dtype",
             dtype,
             "--window-size",
             str(window_size),
             "--stride",
             str(stride),
-            "--suppress-dynamo-errors",
-            "yes",
         ]
     )
 
@@ -411,6 +403,8 @@ def step_detect_intervals(
     script_dir: str,
     input_fasta: str,
 ) -> None:
+    if decoding_methods not in ("direct", "viterbi"):
+        raise ValueError("Choose one decoding method: direct or viterbi")
     if os.path.exists(intervals_zarr):
         logger.info("[3/3] intervals.zarr already exists — skipping interval detection")
         return
@@ -418,16 +412,12 @@ def step_detect_intervals(
     _run(
         [
             _python(),
-            os.path.join(script_dir, "predict.py"),
-            "detect_intervals",
+            os.path.join(script_dir, "detect_intervals.py"),
             "--input-dir",
             predictions_dir,
-            "--output",
+            "--output-zarr",
             intervals_zarr,
-            "--decoding-methods",
-            decoding_methods,
-            "--remove-incomplete-features",
-            "yes",
+            *(["--decode-direct"] if decoding_methods == "direct" else []),
             "--domain",
             domain,
             "--input-fasta",
@@ -507,7 +497,10 @@ def main() -> None:
         "--batch-size", type=int, default=32, help="Inference batch size (default: 32)"
     )
     parser.add_argument(
-        "--device", default="cuda", help="PyTorch device string (default: cuda)"
+        "--device",
+        default="cuda",
+        choices=["cuda"],
+        help="CUDA inference; select GPUs with CUDA_VISIBLE_DEVICES",
     )
     parser.add_argument(
         "--dtype",
@@ -526,7 +519,8 @@ def main() -> None:
     parser.add_argument(
         "--decoding-methods",
         default="viterbi",
-        help="Comma-separated list of decoding methods: direct,viterbi (default: viterbi)",
+        choices=["direct", "viterbi"],
+        help="Decoding method (default: viterbi)",
     )
 
     # --- Visualization options ---

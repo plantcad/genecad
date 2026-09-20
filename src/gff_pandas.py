@@ -16,6 +16,8 @@ import gzip
 from pathlib import Path
 from typing import cast as cast_type
 
+from src.atomic_io import atomic_output_path
+
 PathLike = str | Path
 
 GFF3_SPEC = [
@@ -240,6 +242,6 @@ def write_gff3(
     validate_gff3(df)
     # pyrefly: ignore  # no-matching-overload
     data = df.to_csv(sep="\t", index=False, header=None)
-    with open(path, "w") as fh:
+    with atomic_output_path(path) as tmp_path, open(tmp_path, "w") as fh:
         fh.write(header)
         fh.write(data)

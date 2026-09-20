@@ -1,4 +1,6 @@
+from contextlib import contextmanager
 import os
+from typing import Iterator
 
 import torch.distributed as dist
 
@@ -63,3 +65,61 @@ def destroy_process_group() -> None:
     """Tear down the distributed process group (no-op in single-process mode)."""
     if dist.is_available() and dist.is_initialized():
         dist.destroy_process_group()
+
+
+def broadcast_from_main(value: object) -> object:
+    """Broadcast a picklable value from rank zero to every rank.
+
+    No-op outside a distributed context: returns `value` unchanged.
+    """
+    if not (dist.is_available() and dist.is_initialized()):
+        return value
+    box = [value]
+    dist.broadcast_object_list(box, src=0)
+    return box[0]
+
+
+@contextmanager
+def guarded_on_main() -> Iterator[None]:
+    """Wrap a block that gates its work with ``if is_main_process(): ...``;
+    every rank learns whether rank zero's part of it raised.
+
+    Wrap any block shaped like ``if is_main_process(): risky()`` that is
+    normally followed by ``barrier()`` -- the ``is_main_process()`` check
+    still belongs inside the block, same as before. Without this, an
+    exception raised only on rank zero skips that barrier, leaving every
+    other rank blocked on it indefinitely -- or, once rank zero tears down
+    its own process group in a `finally`, facing a confusing low-level
+    connection error instead of the real failure.
+
+    Every rank exits this block together: rank zero re-raises its own
+    exception with its original type and traceback, and every other rank
+    raises a `RuntimeError` describing what rank zero hit. The broadcast
+    this performs also acts as the barrier, so no separate `barrier()`
+    call is needed after it.
+
+    A non-main rank's own exception (which shouldn't occur, since its body
+    should be a no-op guarded by ``is_main_process()``) still lets every
+    rank reach the broadcast -- skipping straight to `raise` here would
+    leave rank zero and every other rank blocked on that same collective
+    call, waiting for a participant that already left. It's re-raised only
+    after that, taking priority over rank zero's status.
+    """
+    error = None
+    own_exc = None
+    local_exc = None
+    try:
+        yield
+    except Exception as exc:
+        if is_main_process():
+            error = f"{type(exc).__name__}: {exc}"
+            own_exc = exc
+        else:
+            local_exc = exc
+    error = broadcast_from_main(error)
+    if local_exc is not None:
+        raise local_exc
+    if own_exc is not None:
+        raise own_exc
+    if error is not None:
+        raise RuntimeError(f"Rank zero failed: {error}")

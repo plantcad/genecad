@@ -1,0 +1,16 @@
+{
+  "inspected_commit": "506848e1be1333263d2925bd516fffa2ddc361e1",
+  "date": "2026-09-15",
+  "input_sha256": {
+    "genecad_result/experiments/short_first_exon_validation/cross_species_decoder_redecode/per_locus.tsv": "577d9c26d033d9e1e93461cd2412614655018bb73de36bc4586018dc479c7adc",
+    "data/Athaliana_TAIR12_chr4.fa": "6e854df38ef6189b99497436e4f2af736a2fb881c4a7e583e44328679dfe9799",
+    "src/frame_crf.py": "8154edd1fb51538e25179d8635e717807580e87b12cffcd87470c8f2fbe4390f",
+    "src/modeling.py": "f0bed97843aa184b0cdd03ada9b75fe1b7d03875c617202e0f19b419a583fa3f"
+  },
+  "scope": "Existing-cohort audit; sparse cache read; 11 Athaliana loci replay; no training or production mutation",
+  "caveat": "Cache chunks and model weight hashes not verified; exact original-chain replay checked for 11 loci only.",
+  "boundary_pairs": 213,
+  "boundary_complete_controls": 108,
+  "replay_loci": 11,
+  "source_cache": "genecad_result/predictions/Athaliana_TAIR12_chr4_finetuned/OZ408686.1/predictions_OZ408686.1"
+}
