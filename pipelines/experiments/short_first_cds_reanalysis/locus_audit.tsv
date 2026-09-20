@@ -1,0 +1,375 @@
+species	transcript_id	reference_id	strand	reference_pass	raw_correct	decoded_empty	decoded_correct	chain_class	raw_CDS_segments	reference_CDS_segments	shared_exact_suffix_segments	trim_removed_segments	oracle_emission	oracle_transition	oracle_total	oracle_total_positive	oracle_total_zero	recorded_transition
+Cquinoa	C_Quinoa_Scaffold_1000_gene_338.t1	AUR62002922-RA.v1.0	-	False	0	1	0	multiple_prefix_segments_differ_shared_exact_suffix	6	6	2		-11685.308593749998	7504.243740004956	-4181.064853745042	0	0	wrong_stays_wrong
+Cquinoa	C_Quinoa_Scaffold_1000_gene_343.t1	AUR62002925-RA.v1.0	-	True	1	1	0	exact_chain	7	7	7	0	-42020.489990234375	9547.863796477715	-32472.626193756656	0	0	correct_to_wrong
+Cquinoa	C_Quinoa_Scaffold_1034_gene_26.t1	AUR62038363-RA.v1.0	-	True	0	1	0	first_CDS_segment_replacement_only	11	11	10		-25264.273437500007	14359.993555961462	-10904.279881538543	0	0	wrong_stays_wrong
+Cquinoa	C_Quinoa_Scaffold_1034_gene_41.t1	AUR62038378-RA.v1.0	+	True	1	0	1	exact_chain	3	3	3	0	11735.296386718754	4085.4685284157817	15820.764915134536	1	0	correct_stays_correct
+Cquinoa	C_Quinoa_Scaffold_1037_gene_42.t1	AUR62039499-RA.v1.0	+	True	0	0	0	multiple_prefix_segments_differ_shared_exact_suffix	5	6	4		13713.391113281257	6139.07991068962	19852.47102397088	1	0	wrong_stays_wrong
+Cquinoa	C_Quinoa_Scaffold_1067_gene_39.t1	AUR62041170-RA.v1.0	-	False	0	1	0	downstream_TIS_trim_existing_CDS_path	5	4	3	1	-12603.90087890625	6800.609973772859	-5803.290905133394	0	0	wrong_stays_wrong
+Cquinoa	C_Quinoa_Scaffold_1105_gene_32.t1	AUR62032475-RA.v1.0	+	False	0	0	0	no_shared_exact_terminal_CDS_segment	9	8	0		55901.739959716804	12258.845471722792	68160.5854314396	1	0	wrong_stays_wrong
+Cquinoa	C_Quinoa_Scaffold_1181_gene_7.t1	AUR62040949-RA.v1.0	-	True	0	1	0	first_CDS_segment_replacement_only	3	3	2		-4472.886779785156	3413.0725290375512	-1059.814250747605	0	0	wrong_stays_wrong
+Cquinoa	C_Quinoa_Scaffold_1214_gene_304.t1	AUR62005586-RA.v1.0	+	True	0	0	0	downstream_TIS_trim_existing_CDS_path	2	1	0	1	-1844.9541015624927	1382.5325218794646	-462.4215796830258	0	0	wrong_stays_wrong
+Cquinoa	C_Quinoa_Scaffold_1289_gene_1.t1	AUR62038112-RA.v1.0	-	True	0	1	0	no_shared_exact_terminal_CDS_segment	4	5	0		-17172.724609375	4766.098684921152	-12406.625924453845	0	0	wrong_stays_wrong
+Cquinoa	C_Quinoa_Scaffold_1516_gene_56.t1	AUR62024793-RA.v1.0	-	False	0	1	0	first_CDS_segment_replacement_only	4	4	3		-16523.623779296875	4085.9292083708533	-12437.694570926025	0	0	wrong_stays_wrong
+Cquinoa	C_Quinoa_Scaffold_1611_gene_339.t1	AUR62013516-RA.v1.0	-	False	0	1	0	multiple_prefix_segments_differ_shared_exact_suffix	10	10	5		-11791.550781250004	13002.271061114998	1210.7202798649942	1	0	wrong_stays_wrong
+Cquinoa	C_Quinoa_Scaffold_1710_gene_117.t1	AUR62008653-RA.v1.0	+	True	0	0	0	multiple_prefix_segments_differ_shared_exact_suffix	6	4	1		17480.103515625	6865.4034193957605	24345.506935020763	1	0	wrong_stays_wrong
+Cquinoa	C_Quinoa_Scaffold_1724_gene_1.t1	AUR62043931-RA.v1.0	+	True	0	0	0	downstream_TIS_trim_existing_CDS_path	4	3	2	1	2827.76318359375	4119.222018968264	6946.985202562014	1	0	wrong_stays_wrong
+Cquinoa	C_Quinoa_Scaffold_1759_gene_33.t1	AUR62035811-RA.v1.0	-	False	0	1	0	multiple_prefix_segments_differ_shared_exact_suffix	2	5	1		-79147.33020019531	1279.8763534780633	-77867.45384671725	0	0	wrong_stays_wrong
+Cquinoa	C_Quinoa_Scaffold_1765_gene_36.t1	AUR62033417-RA.v1.0	+	True	0	0	0	downstream_TIS_trim_existing_CDS_path	5	4	4	1	11712.996093749996	5486.149376106602	17199.1454698566	1	0	wrong_stays_wrong
+Cquinoa	C_Quinoa_Scaffold_1783_gene_190.t1	AUR62021211-RA.v1.0	+	False	0	0	0	first_CDS_segment_replacement_only	4	4	3		12458.6767578125	4781.24375563076	17239.92051344326	1	0	wrong_stays_wrong
+Cquinoa	C_Quinoa_Scaffold_1817_gene_72.t1	AUR62018663-RA.v1.0	-	True	1	1	0	exact_chain	5	5	5	0	-24347.921874999993	6145.256268364089	-18202.665606635903	0	0	correct_to_wrong
+Cquinoa	C_Quinoa_Scaffold_1895_gene_53.t1	AUR62031795-RA.v1.0	-	False	0	1	0	downstream_TIS_trim_existing_CDS_path	8	7	6	1	-28420.648437499996	10905.648946285042	-17514.999491214956	0	0	wrong_stays_wrong
+Cquinoa	C_Quinoa_Scaffold_1971_gene_392.t1	AUR62007337-RA.v1.0	+	True	1	0	1	exact_chain	5	5	5	0	26252.958984375004	6819.500112034735	33072.45909640974	1	0	correct_stays_correct
+Cquinoa	C_Quinoa_Scaffold_1971_gene_414.t1	AUR62007348-RA.v1.0	+	True	1	0	1	exact_chain	11	11	11	0	31827.407226562496	15020.514990391062	46847.922216953564	1	0	correct_stays_correct
+Cquinoa	C_Quinoa_Scaffold_1995_gene_360.t1	AUR62012388-RA.v1.0	+	False	0	0	0	multiple_prefix_segments_differ_shared_exact_suffix	5	6	3		24376.6410522461	6805.734644757922	31182.375697004023	1	0	wrong_stays_wrong
+Cquinoa	C_Quinoa_Scaffold_2008_gene_1.t1	AUR62011690-RA.v1.0	-	True	0	1	0	no_shared_exact_terminal_CDS_segment	13	19	0		-144767.09963989258	16956.30281859532	-127810.79682129729	0	0	wrong_stays_wrong
+Cquinoa	C_Quinoa_Scaffold_2080_gene_91.t1	AUR62036475-RA.v1.0	-	True	0	1	0	multiple_prefix_segments_differ_shared_exact_suffix	5	22	3		-118558.0466003418	6537.171036206667	-112020.87556413513	0	0	wrong_stays_wrong
+Cquinoa	C_Quinoa_Scaffold_2088_gene_357.t1	AUR62000282-RA.v1.0	-	True	1	1	0	exact_chain	3	3	3	0	-11649.773437499998	4086.297146040836	-7563.476291459163	0	0	correct_to_wrong
+Cquinoa	C_Quinoa_Scaffold_2088_gene_674.t1	AUR62000553-RA.v1.0	+	True	0	0	0	no_shared_exact_terminal_CDS_segment	7	7	0		18446.989257812507	8885.266624147187	27332.255881959696	1	0	wrong_stays_wrong
+Cquinoa	C_Quinoa_Scaffold_2088_gene_988.t1	AUR62000827-RA.v1.0	+	True	1	0	1	exact_chain	12	12	12	0	37601.17379760742	16393.034672125985	53994.20846973341	1	0	correct_stays_correct
+Cquinoa	C_Quinoa_Scaffold_2088_gene_1283.t1	AUR62001065-RA.v1.0	+	True	0	0	0	multiple_prefix_segments_differ_shared_exact_suffix	37	35	9		81708.49511718753	49974.37153787606	131682.86665506358	1	0	wrong_stays_wrong
+Cquinoa	C_Quinoa_Scaffold_2088_gene_1284.t1	AUR62001066-RA.v1.0	+	True	1	0	1	exact_chain	5	5	5	0	40281.279296875	5457.846942667811	45739.12623954281	1	0	correct_stays_correct
+Cquinoa	C_Quinoa_Scaffold_2127_gene_227.t1	AUR62019634-RA.v1.0	+	True	0	0	0	first_CDS_segment_replacement_only	6	6	5		5806.484130859375	7512.858171540419	13319.342302399793	1	0	wrong_stays_wrong
+Cquinoa	C_Quinoa_Scaffold_2371_gene_17.t1	AUR62041288-RA.v1.0	+	True	0	0	0	downstream_TIS_trim_existing_CDS_path	6	5	4	1	6500.609374999998	6858.948821915821	13359.55819691582	1	0	wrong_stays_wrong
+Cquinoa	C_Quinoa_Scaffold_2412_gene_91.t1	AUR62029013-RA.v1.0	-	True	0	1	0	multiple_prefix_segments_differ_shared_exact_suffix	39	39	7		-48561.20169067382	52707.20849327261	4146.006802598786	1	0	wrong_stays_wrong
+Cquinoa	C_Quinoa_Scaffold_2487_gene_132.t1	AUR62028017-RA.v1.0	-	False	0	1	0	first_CDS_segment_replacement_only	4	4	3		-7826.812499999993	4105.750205414391	-3721.062294585602	0	0	wrong_stays_wrong
+Cquinoa	C_Quinoa_Scaffold_2493_gene_126.t1	AUR62009613-RA.v1.0	-	True	0	1	0	first_CDS_segment_replacement_only	3	3	2		-10676.048828125	3413.4905487908645	-7262.558279334134	0	0	wrong_stays_wrong
+Cquinoa	C_Quinoa_Scaffold_2528_gene_24.t1	AUR62036201-RA.v1.0	-	False	0	1	0	no_shared_exact_terminal_CDS_segment	2	5	0		-59902.470947265625	1291.6667017004102	-58610.80424556521	0	0	wrong_stays_wrong
+Cquinoa	C_Quinoa_Scaffold_2596_gene_1.t1	AUR62043500-RA.v1.0	-	True	0	0	0	multiple_prefix_segments_differ_shared_exact_suffix	10	7	6		7981.530273437515	13038.475030019226	21020.005303456746	1	0	wrong_stays_wrong
+Cquinoa	C_Quinoa_Scaffold_2646_gene_616.t1	AUR62008018-RA.v1.0	-	True	1	1	0	exact_chain	4	4	4	0	-21467.326171875	5451.855063223351	-16015.471108651647	0	0	correct_to_wrong
+Cquinoa	C_Quinoa_Scaffold_2654_gene_44.t1	AUR62033859-RA.v1.0	+	True	1	0	1	exact_chain	4	4	4	0	16441.64453125	5443.405336141011	21885.04986739101	1	0	correct_stays_correct
+Cquinoa	C_Quinoa_Scaffold_2716_gene_906.t1	AUR62001826-RA.v1.0	-	True	0	1	0	downstream_TIS_trim_existing_CDS_path	3	2	1	1	-4461.109375	4102.865830344551	-358.2435446554491	0	0	wrong_stays_wrong
+Cquinoa	C_Quinoa_Scaffold_2742_gene_37.t1	AUR62034418-RA.v1.0	-	True	0	1	0	no_shared_exact_terminal_CDS_segment	4	6	0		-80806.20422363281	4029.868440807839	-76776.33578282499	0	0	wrong_stays_wrong
+Cquinoa	C_Quinoa_Scaffold_2773_gene_20.t1	AUR62025404-RA.v1.0	-	True	0	1	0	multiple_prefix_segments_differ_shared_exact_suffix	39	42	38		-113354.53283691405	52598.93176893677	-60755.60106797729	0	0	wrong_stays_wrong
+Cquinoa	C_Quinoa_Scaffold_2862_gene_58.t1	AUR62021343-RA.v1.0	-	True	0	1	0	no_shared_exact_terminal_CDS_segment	7	16	0		-48126.93228149414	8048.58312688212	-40078.34915461202	0	0	wrong_stays_wrong
+Cquinoa	C_Quinoa_Scaffold_2868_gene_90.t1	AUR62035283-RA.v1.0	-	False	0	1	0	multiple_prefix_segments_differ_shared_exact_suffix	6	6	2		-16346.859374999996	7501.009684945206	-8845.84969005479	0	0	wrong_stays_wrong
+Cquinoa	C_Quinoa_Scaffold_2868_gene_95.t1	AUR62035293-RA.v1.0	-	True	1	1	0	exact_chain	7	7	7	0	-10398.905273437502	9535.684814962695	-863.2204584748088	0	0	correct_to_wrong
+Cquinoa	C_Quinoa_Scaffold_2909_gene_75.t1	AUR62035359-RA.v1.0	+	False	0	0	0	first_CDS_segment_replacement_only	6	6	5		22603.126434326172	7488.411419712904	30091.537854039074	1	0	wrong_stays_wrong
+Cquinoa	C_Quinoa_Scaffold_2939_gene_66.t1	AUR62029294-RA.v1.0	-	True	1	1	0	exact_chain	5	5	5	0	-43094.42529296875	6809.004428546304	-36285.42086442245	0	0	correct_to_wrong
+Cquinoa	C_Quinoa_Scaffold_3298_gene_151.t1	AUR62026315-RA.v1.0	+	True	0	0	0	first_CDS_segment_replacement_only	4	4	3		11895.3251953125	4103.4844430720395	15998.809638384539	1	0	wrong_stays_wrong
+Cquinoa	C_Quinoa_Scaffold_3333_gene_298.t1	AUR62011528-RA.v1.0	-	False	0	0	0	no_shared_exact_terminal_CDS_segment	5	2	0		3986.2099609375	5513.98421191668	9500.194172854182	1	0	wrong_stays_wrong
+Cquinoa	C_Quinoa_Scaffold_3379_gene_14.t1	AUR62042367-RA.v1.0	+	False	0	0	0	no_shared_exact_terminal_CDS_segment	2	5	0		3966.167449951172	1951.2777063655512	5917.445156316722	1	0	wrong_stays_wrong
+Cquinoa	C_Quinoa_Scaffold_3389_gene_148.t1	AUR62024006-RA.v1.0	-	False	0	1	0	downstream_TIS_trim_existing_CDS_path	8	7	6	1	-30652.560546875	10905.32630116715	-19747.23424570785	0	0	wrong_stays_wrong
+Cquinoa	C_Quinoa_Scaffold_3514_gene_121.t1	AUR62016347-RA.v1.0	-	False	0	1	0	no_shared_exact_terminal_CDS_segment	5	2	0		-8606.058837890625	5508.561055878943	-3097.497782011681	0	0	wrong_stays_wrong
+Cquinoa	C_Quinoa_Scaffold_3624_gene_11.t1	AUR62040579-RA.v1.0	-	False	0	0	0	first_CDS_segment_replacement_only	9	9	8		-9619.102539062507	11626.794701432085	2007.6921623695744	1	0	wrong_stays_wrong
+Cquinoa	C_Quinoa_Scaffold_3787_gene_278.t1	AUR62017121-RA.v1.0	+	False	0	0	0	no_shared_exact_terminal_CDS_segment	3	4	0		-99.82015991210938	2720.0503772476277	2620.2302173355174	1	0	wrong_stays_wrong
+Cquinoa	C_Quinoa_Scaffold_3799_gene_27.t1	AUR62010895-RA.v1.0	-	False	0	0	0	multiple_prefix_segments_differ_shared_exact_suffix	5	4	3		4269.968719482422	6120.214880859309	10390.183600341732	1	0	wrong_stays_wrong
+Cquinoa	C_Quinoa_Scaffold_3799_gene_200.t1	AUR62011041-RA.v1.0	+	True	0	0	0	downstream_TIS_trim_existing_CDS_path	5	4	4	1	12596.74853515625	5486.097260328783	18082.845795485035	1	0	wrong_stays_wrong
+Cquinoa	C_Quinoa_Scaffold_3820_gene_166.t1	AUR62004887-RA.v1.0	-	True	1	1	0	exact_chain	5	5	5	0	-25754.332092285156	5465.2864699516995	-20289.045622333455	0	0	correct_to_wrong
+Cquinoa	C_Quinoa_Scaffold_3820_gene_167.t1	AUR62004888-RA.v1.0	-	True	0	0	0	multiple_prefix_segments_differ_shared_exact_suffix	38	37	11		-12730.068878173843	51325.368089054304	38595.29921088046	1	0	wrong_stays_wrong
+Cquinoa	C_Quinoa_Scaffold_3820_gene_215.t1	AUR62004931-RA.v1.0	+	True	0	0	0	first_CDS_segment_replacement_only	2	2	1		6798.56298828125	1362.9052304476534	8161.468218728904	1	0	wrong_stays_wrong
+Cquinoa	C_Quinoa_Scaffold_3820_gene_481.t1	AUR62005147-RA.v1.0	-	True	0	0	0	no_shared_exact_terminal_CDS_segment	12	12	0		-30320.62017822265	15048.811250110773	-15271.808928111877	0	0	wrong_stays_wrong
+Cquinoa	C_Quinoa_Scaffold_4044_gene_13.t1	AUR62041668-RA.v1.0	+	True	0	0	0	multiple_prefix_segments_differ_shared_exact_suffix	4	3	2		4093.438476562498	4796.059211510877	8889.497688073374	1	0	wrong_stays_wrong
+Cquinoa	C_Quinoa_Scaffold_4082_gene_50.t1	AUR62025008-RA.v1.0	-	True	0	1	0	no_shared_exact_terminal_CDS_segment	2	1	0		-442.09375	1381.38667797711	939.2929279771097	1	0	wrong_stays_wrong
+Cquinoa	C_Quinoa_Scaffold_4087_gene_102.t1	AUR62032427-RA.v1.0	+	True	0	0	0	no_shared_exact_terminal_CDS_segment	4	2	0		3412.8076171875	4131.924133781721	7544.731750969223	1	0	wrong_stays_wrong
+Cquinoa	C_Quinoa_Scaffold_4119_gene_64.t1	AUR62024144-RA.v1.0	-	True	0	1	0	no_shared_exact_terminal_CDS_segment	2	2	0		-24588.894531250004	1353.9271582332183	-23234.96737301679	0	0	wrong_stays_wrong
+Cquinoa	C_Quinoa_Scaffold_4209_gene_52.t1	AUR62033662-RA.v1.0	-	True	0	1	0	multiple_prefix_segments_differ_shared_exact_suffix	2	4	1		-28650.078125000004	1327.6220927036345	-27322.456032296366	0	0	wrong_stays_wrong
+Cquinoa	C_Quinoa_Scaffold_4244_gene_128.t1	AUR62026510-RA.v1.0	+	True	0	0	0	multiple_prefix_segments_differ_shared_exact_suffix	4	5	3		11282.90673828125	4085.6868730347637	15368.593611316013	1	0	wrong_stays_wrong
+Cquinoa	C_Quinoa_Scaffold_4266_gene_84.t1	AUR62036615-RA.v1.0	-	True	0	1	0	no_shared_exact_terminal_CDS_segment	5	7	0		-18831.953125000004	5446.88628536255	-13385.066839637455	0	0	wrong_stays_wrong
+Cquinoa	C_Quinoa_Scaffold_4329_gene_10.t1	AUR62025166-RA.v1.0	+	False	0	0	0	multiple_prefix_segments_differ_shared_exact_suffix	39	38	7		81184.9248046875	52717.06714779054	133901.99195247804	1	0	wrong_stays_wrong
+Cquinoa	C_Quinoa_Scaffold_4480_gene_453.t1	AUR62002280-RA.v1.0	+	True	0	0	0	downstream_TIS_trim_existing_CDS_path	7	6	5	1	8569.161621093754	8228.083877097028	16797.24549819078	1	0	wrong_stays_wrong
+Cquinoa	C_Quinoa_Scaffold_4480_gene_820.t1	AUR62002607-RA.v1.0	-	True	0	0	0	downstream_TIS_trim_existing_CDS_path	13	11	10	2	-36183.47616577149	17731.67697843583	-18451.799187335666	0	0	wrong_stays_wrong
+Othomaeum	Oropetium_genomic_20141112_002_gene_183.t1	Oropetium_20150105_01561A.v1.0	-	True	1	1	0	exact_chain	5	5	5	0	-11563.12109375	6824.113446018172	-4739.007647731828	0	0	correct_to_wrong
+Othomaeum	Oropetium_genomic_20141112_002_gene_808.t1	Oropetium_20150105_02210A.v1.0	-	True	0	0	0	multiple_prefix_segments_differ_shared_exact_suffix	4	5	3		-15810.856933593746	4764.993603964242	-11045.863329629505	0	0	wrong_stays_wrong
+Othomaeum	Oropetium_genomic_20141112_002_gene_1054.t1	Oropetium_20150105_02457A.v1.0	+	True	0	0	0	no_shared_exact_terminal_CDS_segment	6	5	0		6736.6865234375	6858.857195445784	13595.543718883284	1	0	wrong_stays_wrong
+Othomaeum	Oropetium_genomic_20141112_006_gene_508.t1	Oropetium_20150105_09034A.v1.0	-	True	0	0	0	multiple_prefix_segments_differ_shared_exact_suffix	5	4	2		-4000.49609375	6166.550796260146	2166.054702510145	1	0	wrong_stays_wrong
+Othomaeum	Oropetium_genomic_20141112_007_gene_468.t1	Oropetium_20150105_06687A.v1.0	+	True	1	0	1	exact_chain	3	3	3	0	5684.927734375	4086.4164449844225	9771.344179359427	1	0	correct_stays_correct
+Othomaeum	Oropetium_genomic_20141112_008_gene_477.t1	Oropetium_20150105_05981A.v1.0	+	False	0	0	0	no_shared_exact_terminal_CDS_segment	2	4	0		693.5184936523438	1968.5885006720773	2662.106994324422	1	0	wrong_stays_wrong
+Othomaeum	Oropetium_genomic_20141112_010_gene_339.t1	Oropetium_20150105_03682A.v1.0	+	False	0	0	0	no_shared_exact_terminal_CDS_segment	49	37	0		75263.72558593751	66511.24657103725	141774.97215697478	1	0	wrong_stays_wrong
+Othomaeum	Oropetium_genomic_20141112_010_gene_614.t1	Oropetium_20150105_04007A.v1.0	+	True	1	0	1	exact_chain	7	7	7	0	13376.145019531246	9561.871518774475	22938.01653830572	1	0	correct_stays_correct
+Othomaeum	Oropetium_genomic_20141112_011_gene_42.t1	Oropetium_20150105_07999A.v1.0	+	False	0	0	0	multiple_prefix_segments_differ_shared_exact_suffix	5	4	3		11561.65185546875	6162.570479071527	17724.222334540274	1	0	wrong_stays_wrong
+Othomaeum	Oropetium_genomic_20141112_011_gene_316.t1	Oropetium_20150105_08296A.v1.0	-	False	0	1	0	no_shared_exact_terminal_CDS_segment	6	2	0		852.23828125	8231.876821281796	9084.115102531794	1	0	wrong_stays_wrong
+Othomaeum	Oropetium_genomic_20141112_013_gene_39.t1	Oropetium_20150105_10619A.v1.0	-	True	0	1	0	multiple_prefix_segments_differ_shared_exact_suffix	9	9	4		-10653.40625	10955.07330641702	301.66705641702174	1	0	wrong_stays_wrong
+Othomaeum	Oropetium_genomic_20141112_013_gene_292.t1	Oropetium_20150105_10892A.v1.0	+	True	0	0	0	multiple_prefix_segments_differ_shared_exact_suffix	6	4	3		-2906.257080078125	7555.18728441162	4648.930204333494	1	0	wrong_stays_wrong
+Othomaeum	Oropetium_genomic_20141112_014_gene_53.t1	Oropetium_20150105_06884A.v1.0	-	True	1	1	0	exact_chain	4	4	4	0	-8971.21875	4106.408451292804	-4864.8102987071925	0	0	correct_to_wrong
+Othomaeum	Oropetium_genomic_20141112_014_gene_438.t1	Oropetium_20150105_07295A.v1.0	+	True	1	0	1	exact_chain	5	5	5	0	9782.9892578125	6149.154619333138	15932.143877145638	1	0	correct_stays_correct
+Othomaeum	Oropetium_genomic_20141112_015_gene_27.t1	Oropetium_20150105_13205A.v1.0	+	False	1	0	1	exact_chain	18	18	18	0	59329.94091796875	24612.115703191233	83942.05662115998	1	0	correct_stays_correct
+Othomaeum	Oropetium_genomic_20141112_015_gene_312.t1	Oropetium_20150105_13500A.v1.0	+	True	0	0	0	multiple_prefix_segments_differ_shared_exact_suffix	4	3	2		1780.22802734375	4797.556423000983	6577.784450344731	1	0	wrong_stays_wrong
+Othomaeum	Oropetium_genomic_20141112_017_gene_8.t1	Oropetium_20150105_14079A.v1.0	-	True	0	0	0	multiple_prefix_segments_differ_shared_exact_suffix	4	3	2		1265.8995361328125	5433.292806725068	6699.192342857886	1	0	wrong_stays_wrong
+Othomaeum	Oropetium_genomic_20141112_023_gene_185.t1	Oropetium_20150105_16055A.v1.0	+	True	1	0	1	exact_chain	6	6	6	0	11822.427246093743	8194.706738894902	20017.133984988646	1	0	correct_stays_correct
+Othomaeum	Oropetium_genomic_20141112_023_gene_238.t1	Oropetium_20150105_16109A.v1.0	+	True	1	0	1	exact_chain	3	3	3	0	7595.165039062496	4084.8512366506898	11680.016275713187	1	0	correct_stays_correct
+Othomaeum	Oropetium_genomic_20141112_036_gene_151.t1	Oropetium_20150105_16658A.v1.0	-	False	0	1	0	no_shared_exact_terminal_CDS_segment	3	4	0		-19390.849609375	2719.983533465509	-16670.866075909493	0	0	wrong_stays_wrong
+Othomaeum	Oropetium_genomic_20141112_044_gene_243.t1	Oropetium_20150105_14725A.v1.0	+	True	0	0	0	multiple_prefix_segments_differ_shared_exact_suffix	4	3	2		6076.782226562502	5450.953771761812	11527.735998324315	1	0	wrong_stays_wrong
+Othomaeum	Oropetium_genomic_20141112_044_gene_277.t1	Oropetium_20150105_14756A.v1.0	+	True	0	0	0	multiple_prefix_segments_differ_shared_exact_suffix	4	3	2		4153.704101562504	4795.977287980313	8949.681389542817	1	0	wrong_stays_wrong
+Othomaeum	Oropetium_genomic_20141112_047_gene_214.t1	Oropetium_20150105_19073A.v1.0	-	True	0	1	0	multiple_prefix_segments_differ_shared_exact_suffix	5	4	3		-4629.585937499998	6166.9291002948685	1537.3431627948694	1	0	wrong_stays_wrong
+Othomaeum	Oropetium_genomic_20141112_051_gene_138.t1	Oropetium_20150105_20161A.v1.0	+	True	0	0	0	no_shared_exact_terminal_CDS_segment	11	15	0		13730.599090576168	14297.451469861004	28028.050560437172	1	0	wrong_stays_wrong
+Othomaeum	Oropetium_genomic_20141112_059_gene_17.t1	Oropetium_20150105_23407A.v1.0	+	True	0	0	0	multiple_prefix_segments_differ_shared_exact_suffix	7	4	3		8284.02099609375	8250.982019367742	16535.003015461494	1	0	wrong_stays_wrong
+Othomaeum	Oropetium_genomic_20141112_061_gene_80.t1	Oropetium_20150105_16909A.v1.0	-	True	1	1	0	exact_chain	8	8	8	0	-28195.38671875	10928.731037825924	-17266.655680924072	0	0	correct_to_wrong
+Othomaeum	Oropetium_genomic_20141112_063_gene_68.t1	Oropetium_20150105_18367A.v1.0	-	True	0	1	0	no_shared_exact_terminal_CDS_segment	5	2	0		420.44921875	5514.745270849888	5935.1944895998895	1	0	wrong_stays_wrong
+Othomaeum	Oropetium_genomic_20141112_066_gene_171.t1	Oropetium_20150105_19564A.v1.0	+	True	0	0	0	no_shared_exact_terminal_CDS_segment	39	53	0		43235.95602416992	52535.798415578414	95771.75443974833	1	0	wrong_stays_wrong
+Othomaeum	Oropetium_genomic_20141112_078_gene_19.t1	Oropetium_20150105_25552A.v1.0	-	False	0	1	0	no_shared_exact_terminal_CDS_segment	4	3	0		-2018.37890625	4794.443405810798	2776.064499560798	1	0	wrong_stays_wrong
+Othomaeum	Oropetium_genomic_20141112_087_gene_114.t1	Oropetium_20150105_23383A.v1.0	+	True	0	0	0	downstream_TIS_trim_existing_CDS_path	7	5	4	2	722.58935546875	8921.51158349173	9644.100938960482	1	0	wrong_stays_wrong
+Othomaeum	Oropetium_genomic_20141112_088_gene_70.t1	Oropetium_20150105_24164A.v1.0	+	False	0	0	0	no_shared_exact_terminal_CDS_segment	3	2	0		-746.726959228512	2746.2024983960137	1999.4755391675008	1	0	wrong_stays_wrong
+Othomaeum	Oropetium_genomic_20141112_090_gene_67.t1	Oropetium_20150105_21333A.v1.0	+	False	0	0	0	multiple_prefix_segments_differ_shared_exact_suffix	8	7	3		13366.458007812504	10264.5939410128	23631.051948825305	1	0	wrong_stays_wrong
+Othomaeum	Oropetium_genomic_20141112_091_gene_99.t1	Oropetium_20150105_22789A.v1.0	-	False	0	0	0	multiple_prefix_segments_differ_shared_exact_suffix	7	6	1		-2755.0517578125	8902.86342902377	6147.8116712112715	1	0	wrong_stays_wrong
+Othomaeum	Oropetium_genomic_20141112_100_gene_70.t1	Oropetium_20150105_23716A.v1.0	-	True	1	1	0	exact_chain	3	3	3	0	-10355.18359375	4087.3636733561166	-6267.819920393883	0	0	correct_to_wrong
+Othomaeum	Oropetium_genomic_20141112_100_gene_87.t1	Oropetium_20150105_23735A.v1.0	-	True	1	1	0	exact_chain	4	4	4	0	-11314.74609375	5456.59454310666	-5858.151550643341	0	0	correct_to_wrong
+Othomaeum	Oropetium_genomic_20141112_105_gene_63.t1	Oropetium_20150105_25389A.v1.0	-	True	1	0	0	exact_chain	3	3	3	0	-12138.177734374998	4085.068607289311	-8053.109127085689	0	0	correct_to_wrong
+Othomaeum	Oropetium_genomic_20141112_122_gene_35.t1	Oropetium_20150105_25780A.v1.0	-	False	0	0	0	multiple_prefix_segments_differ_shared_exact_suffix	53	38	4		-30831.337524414062	72057.42390432394	41226.08637990987	1	0	wrong_stays_wrong
+Othomaeum	Oropetium_genomic_20141112_386_gene_2.t1	Oropetium_20150105_27790A.v1.0	-	False	0	0	0	no_shared_exact_terminal_CDS_segment	3	4	0		7699.90966796875	3393.304213655167	11093.213881623917	1	0	wrong_stays_wrong
+Othomaeum	Oropetium_genomic_20141112_474_gene_5.t1	Oropetium_20150105_27310A.v1.0	-	False	0	0	0	no_shared_exact_terminal_CDS_segment	7	7	0		2954.157714843749	8213.435215121097	11167.592929964845	1	0	wrong_stays_wrong
+Othomaeum	Oropetium_genomic_20141112_476_gene_5.t1	Oropetium_20150105_27770A.v1.0	-	True	0	0	0	no_shared_exact_terminal_CDS_segment	2	2	0		-4202.4248046875	1370.7020832249664	-2831.7227214625345	0	0	wrong_stays_wrong
+Othomaeum	Oropetium_genomic_20141112_517_gene_2.t1	Oropetium_20150105_27944A.v1.0	-	True	0	0	0	multiple_prefix_segments_differ_shared_exact_suffix	7	7	2		12943.23291015625	9561.881835308648	22505.114745464896	1	0	wrong_stays_wrong
+Rcommunis	27985_gene_9.t1	27985.m000848.TIGRR0.1	+	False	0	0	0	no_shared_exact_terminal_CDS_segment	6	7	0		4014.570068359375	6834.880490203282	10849.450558562656	1	0	wrong_stays_wrong
+Rcommunis	28694_gene_12.t1	28694.m000671.TIGRR0.1	-	True	1	1	0	exact_chain	23	23	23	0	-43227.751953125015	30119.192763068433	-13108.559190056578	0	0	correct_to_wrong
+Rcommunis	28748_gene_10.t1	28748.m000216.TIGRR0.1	+	True	0	0	0	no_shared_exact_terminal_CDS_segment	9	9	0		9692.764526367188	11628.058483040966	21320.823009408155	1	0	wrong_stays_wrong
+Rcommunis	29154_gene_3.t1	29154.m000209.TIGRR0.1	-	True	1	1	0	exact_chain	3	3	3	0	-10605.47494506836	4087.6782523825973	-6517.796692685762	0	0	correct_to_wrong
+Rcommunis	29585_gene_23.t1	29585.m000599.TIGRR0.1	-	True	1	1	0	exact_chain	3	3	3	0	-8436.798828125	4088.0905778150664	-4348.7082503099355	0	0	correct_to_wrong
+Rcommunis	29624_gene_2.t1	29624.m000320.TIGRR0.1	+	True	0	0	0	no_shared_exact_terminal_CDS_segment	4	5	0		2536.24267578125	4094.7367549924343	6630.979430773685	1	0	wrong_stays_wrong
+Rcommunis	29625_gene_4.t1	29625.m000678.TIGRR0.1	-	True	0	1	0	first_CDS_segment_replacement_only	7	7	6		-37572.75390625	8862.769848383285	-28709.984057866714	0	0	wrong_stays_wrong
+Rcommunis	29629_gene_46.t1	29629.m001408.TIGRR0.1	+	False	0	0	0	no_shared_exact_terminal_CDS_segment	3	3	0		1298.22216796875	2739.1116091809045	4037.333777149651	1	0	wrong_stays_wrong
+Rcommunis	29631_gene_47.t1	29631.m001043.TIGRR0.1	+	False	0	0	0	no_shared_exact_terminal_CDS_segment	6	7	0		4172.041015625	6834.872556022061	11006.91357164706	1	0	wrong_stays_wrong
+Rcommunis	29634_gene_6.t1	29634.m002060.TIGRR0.1	-	True	0	1	0	multiple_prefix_segments_differ_shared_exact_suffix	3	2	1		-8320.63671875	2746.4915410680014	-5574.145177681998	0	0	wrong_stays_wrong
+Rcommunis	29647_gene_1.t1	29647.m001994.TIGRR0.1	+	True	0	0	0	no_shared_exact_terminal_CDS_segment	3	1	0		-5339.4384765625	2766.4573057048005	-2572.981170857698	0	0	wrong_stays_wrong
+Rcommunis	29682_gene_24.t1	29682.m000595.TIGRR0.1	-	True	0	0	0	first_CDS_segment_replacement_only	5	5	4		-7711.3212890625	6150.452588995618	-1560.8687000668788	0	0	wrong_stays_wrong
+Rcommunis	29682_gene_25.t1	29682.m000596.TIGRR0.1	+	False	0	0	0	no_shared_exact_terminal_CDS_segment	5	4	0		4464.57275390625	5488.394040480433	9952.966794386688	1	0	wrong_stays_wrong
+Rcommunis	29732_gene_3.t1	29732.m000316.TIGRR0.1	+	True	1	0	1	exact_chain	3	3	3	0	13659.470214843743	4084.860960948399	17744.33117579214	1	0	correct_stays_correct
+Rcommunis	29738_gene_43.t1	29738.m001046.TIGRR0.1	+	False	0	0	0	multiple_prefix_segments_differ_shared_exact_suffix	6	6	1		9977.80615234375	6845.5954007631735	16823.401553106924	1	0	wrong_stays_wrong
+Rcommunis	29790_gene_22.t1	29790.m000835.TIGRR0.1	-	True	1	1	0	exact_chain	7	7	7	0	-14855.080078124993	9564.607992152694	-5290.472085972295	0	0	correct_to_wrong
+Rcommunis	29811_gene_13.t1	29811.m000540.TIGRR0.1	+	False	0	0	0	no_shared_exact_terminal_CDS_segment	8	11	0		27677.26962280274	9541.38653973596	37218.656162538704	1	0	wrong_stays_wrong
+Rcommunis	29827_gene_107.t1	29827.m002655.TIGRR0.1	+	True	0	0	0	multiple_prefix_segments_differ_shared_exact_suffix	3	2	1		3847.35546875	2749.56892115325	6596.9243899032535	1	0	wrong_stays_wrong
+Rcommunis	29848_gene_67.t1	29848.m004525.TIGRR0.1	-	True	0	0	0	multiple_prefix_segments_differ_shared_exact_suffix	4	3	2		-902.91796875	4120.421674083844	3217.5037053338447	1	0	wrong_stays_wrong
+Rcommunis	29912_gene_27.t1	29912.m005301.TIGRR0.1	-	True	0	0	0	first_CDS_segment_replacement_only	39	39	38		-13273.253723144517	52040.092214315635	38766.838491171104	1	0	wrong_stays_wrong
+Rcommunis	29917_gene_74.t1	29917.m002016.TIGRR0.1	+	False	0	0	0	multiple_prefix_segments_differ_shared_exact_suffix	6	6	1		11192.332275390625	6844.44163234476	18036.77390773539	1	0	wrong_stays_wrong
+Rcommunis	29929_gene_43.t1	29929.m004542.TIGRR0.1	-	True	0	1	0	multiple_prefix_segments_differ_shared_exact_suffix	3	2	1		-2884.1855468750073	2750.3983832529902	-133.78716362201703	0	0	wrong_stays_wrong
+Rcommunis	30001_gene_4.t1	30001.m000081.TIGRR0.1	+	True	0	0	0	first_CDS_segment_replacement_only	3	3	2		3139.46533203125	2738.0156196703974	5877.480951701647	1	0	wrong_stays_wrong
+Rcommunis	30068_gene_116.t1	30068.m002644.TIGRR0.1	+	True	0	0	0	multiple_prefix_segments_differ_shared_exact_suffix	11	10	7		14792.335083007812	13697.077365929646	28489.41244893746	1	0	wrong_stays_wrong
+Rcommunis	30113_gene_11.t1	30113.m001441.TIGRR0.1	+	False	0	0	0	no_shared_exact_terminal_CDS_segment	8	7	0		343.1761474609375	9599.476347453821	9942.652494914759	1	0	wrong_stays_wrong
+Rcommunis	30131_gene_204.t1	30131.m007081.TIGRR0.1	-	True	1	0	0	exact_chain	4	4	4	0	9444.885742187507	4105.353106791937	13550.238848979441	1	0	correct_to_wrong
+Rcommunis	30137_gene_2.t1	30137.m000430.TIGRR0.1	-	True	0	1	0	downstream_TIS_trim_existing_CDS_path	10	9	8	1	-31502.457031250004	12320.944776558461	-19181.512254691548	0	0	wrong_stays_wrong
+Rcommunis	30137_gene_3.t1	30137.m000432.TIGRR0.1	+	True	0	0	0	no_shared_exact_terminal_CDS_segment	10	6	0		8932.658203125	12371.510902892494	21304.169106017496	1	0	wrong_stays_wrong
+Rcommunis	30142_gene_19.t1	30142.m000644.TIGRR0.1	+	True	1	0	1	exact_chain	2	2	2	0	5821.0234375	1364.0114227742215	7185.03486027422	1	0	correct_stays_correct
+Rcommunis	30190_gene_133.t1	30190.m010972.TIGRR0.1	+	True	0	0	0	first_CDS_segment_replacement_only	6	6	5		-9204.461944580078	6788.662297116134	-2415.799647463942	0	0	wrong_stays_wrong
+Rcommunis	30204_gene_78.t1	30204.m001820.TIGRR0.1	-	False	0	0	0	multiple_prefix_segments_differ_shared_exact_suffix	21	21	2		2252.2490234375	27378.001617537942	29630.250640975442	1	0	wrong_stays_wrong
+Rcommunis	30204_gene_88.t1	30204.m001832.TIGRR0.1	-	True	0	0	0	no_shared_exact_terminal_CDS_segment	35	33	0		-26287.1552734375	46585.852926127125	20298.697652689618	1	0	wrong_stays_wrong
+Rcommunis	30208_gene_7.t1	30208.m001105.TIGRR0.1	-	True	0	1	0	downstream_TIS_trim_existing_CDS_path	4	3	3	1	-717.109375	4120.913940595878	3403.8045655958776	1	0	wrong_stays_wrong
+Rcommunis	30217_gene_14.t1	30217.m000267.TIGRR0.1	-	True	0	0	0	downstream_TIS_trim_existing_CDS_path	4	3	2	1	-2205.8671875	4120.648831685963	1914.7816441859595	1	0	wrong_stays_wrong
+Oeuropaea	chr1_gene_273.t1	PAC:37728668	-	True	0	0	0	no_shared_exact_terminal_CDS_segment	6	3	0		1751.706298828125	6884.592813022311	8636.299111850441	1	0	wrong_stays_wrong
+Oeuropaea	chr1_gene_623.t1	PAC:37728700	-	True	0	1	0	multiple_prefix_segments_differ_shared_exact_suffix	3	11	1		-48478.375	2616.3247788523277	-45862.05022114767	0	0	wrong_stays_wrong
+Oeuropaea	chr1_gene_751.t1	PAC:37728867	-	False	0	1	0	no_shared_exact_terminal_CDS_segment	6	6	0		-8320.851562499998	6844.906424883326	-1475.9451376166744	0	0	wrong_stays_wrong
+Oeuropaea	chr1_gene_1291.t1	PAC:37727761	-	True	0	1	0	downstream_TIS_trim_existing_CDS_path	3	2	1	1	-228.953125	2751.409826716251	2522.4567017162517	1	0	wrong_stays_wrong
+Oeuropaea	chr1_gene_1673.t1	PAC:37728130	+	False	0	0	0	no_shared_exact_terminal_CDS_segment	38	42	0		42271.82348632814	50606.41420797345	92878.23769430158	1	0	wrong_stays_wrong
+Oeuropaea	chr10_gene_816.t1	PAC:37730053	-	True	0	1	0	downstream_TIS_trim_existing_CDS_path	4	3	2	1	-1440.2382812500014	4120.183753755822	2679.945472505821	1	0	wrong_stays_wrong
+Oeuropaea	chr10_gene_854.t1	PAC:37731673	+	True	0	0	0	downstream_TIS_trim_existing_CDS_path	5	4	3	1	32490.706054687507	5476.955331666661	37967.66138635417	1	0	wrong_stays_wrong
+Oeuropaea	chr10_gene_1000.t1	PAC:37731621	+	True	0	0	0	no_shared_exact_terminal_CDS_segment	14	37	0		44844.87155151366	17480.217221754254	62325.088773267904	1	0	wrong_stays_wrong
+Oeuropaea	chr10_gene_1001.t1	PAC:37731621	+	True	0	0	0	no_shared_exact_terminal_CDS_segment	23	37	0		36058.33639526364	29919.56006606019	65977.89646132383	1	0	wrong_stays_wrong
+Oeuropaea	chr10_gene_1260.t1	PAC:37729965	-	True	0	1	0	downstream_TIS_trim_existing_CDS_path	2	1	0	1	221.21875	1381.6454169228027	1602.8641669228027	1	0	wrong_stays_wrong
+Oeuropaea	chr10_gene_1742.t1	PAC:37729977	-	True	1	1	0	exact_chain	4	4	4	0	-6673.031249999999	4105.682087639429	-2567.3491623605696	0	0	correct_to_wrong
+Oeuropaea	chr10_gene_1862.t1	PAC:37731119	-	True	1	1	0	exact_chain	4	4	4	0	-10768.460937499996	4101.757118122316	-6666.703819377682	0	0	correct_to_wrong
+Oeuropaea	chr11_gene_1035.t1	PAC:37719897	-	False	0	1	0	no_shared_exact_terminal_CDS_segment	3	1	0		4011.9375	2764.5106031610153	6776.448103161013	1	0	wrong_stays_wrong
+Oeuropaea	chr11_gene_1579.t1	PAC:37720718	+	True	1	0	1	exact_chain	4	4	4	0	8301.75439453125	4105.711402764453	12407.465797295703	1	0	correct_stays_correct
+Oeuropaea	chr12_gene_960.t1	PAC:37710802	+	True	0	0	0	downstream_TIS_trim_existing_CDS_path	6	5	4	1	1760.72509765625	6861.528557750524	8622.253655406774	1	0	wrong_stays_wrong
+Oeuropaea	chr12_gene_965.t1	PAC:37710257	+	False	0	0	0	no_shared_exact_terminal_CDS_segment	2	3	0		-697.5517578125018	1358.175141454211	660.6233836417096	1	0	wrong_stays_wrong
+Oeuropaea	chr12_gene_997.t1	PAC:37710710	+	True	1	0	1	exact_chain	4	4	4	0	7326.68603515625	4105.590885028243	11432.276920184493	1	0	correct_stays_correct
+Oeuropaea	chr12_gene_1401.t1	PAC:37709073	-	True	0	1	0	downstream_TIS_trim_existing_CDS_path	3	2	1	1	-3838.58984375	2748.387111602657	-1090.2027321473433	0	0	wrong_stays_wrong
+Oeuropaea	chr13_gene_60.t1	PAC:37715009	+	False	0	0	0	multiple_prefix_segments_differ_shared_exact_suffix	2	4	1		18181.58151245118	1307.9069984882365	19489.488510939416	1	0	wrong_stays_wrong
+Oeuropaea	chr13_gene_279.t1	PAC:37716294	-	True	1	1	0	exact_chain	5	5	5	0	-13105.072265625	5470.501304969871	-7634.57096065513	0	0	correct_to_wrong
+Oeuropaea	chr13_gene_280.t1	PAC:37715915	-	True	0	0	0	no_shared_exact_terminal_CDS_segment	38	34	0		-72119.7978515625	50693.85988679204	-21425.93796477047	0	0	wrong_stays_wrong
+Oeuropaea	chr13_gene_743.t1	PAC:37715875	+	True	1	0	1	exact_chain	4	4	4	0	12341.858886718748	4103.248932262431	16445.107818981178	1	0	correct_stays_correct
+Oeuropaea	chr13_gene_1149.t1	PAC:37715175	+	True	0	0	0	multiple_prefix_segments_differ_shared_exact_suffix	6	7	5		13574.191314697267	6826.9646899474865	20401.156004644756	1	0	wrong_stays_wrong
+Oeuropaea	chr14_gene_509.t1	PAC:37697577	-	False	0	1	0	multiple_prefix_segments_differ_shared_exact_suffix	11	14	2		-22638.87109375	13650.287341398229	-8988.58375235177	0	0	wrong_stays_wrong
+Oeuropaea	chr14_gene_836.t1	PAC:37696976	-	True	0	1	0	downstream_TIS_trim_existing_CDS_path	5	4	3	1	-7387.92578125	5486.690645668348	-1901.2351355816536	0	0	wrong_stays_wrong
+Oeuropaea	chr14_gene_842.t1	PAC:37696906	-	True	0	1	0	downstream_TIS_trim_existing_CDS_path	2	1	0	1	62.0703125	1381.5838124119234	1443.6541249119227	1	0	wrong_stays_wrong
+Oeuropaea	chr15_gene_753.t1	PAC:37706367	-	True	0	1	0	multiple_prefix_segments_differ_shared_exact_suffix	26	28	8		-87235.71289062499	34150.34355059794	-53085.36934002703	0	0	wrong_stays_wrong
+Oeuropaea	chr15_gene_803.t1	PAC:37704680	-	True	0	1	0	no_shared_exact_terminal_CDS_segment	18	21	0		-40720.48635864257	23228.06436776858	-17492.421990873987	0	0	wrong_stays_wrong
+Oeuropaea	chr15_gene_1245.t1	PAC:37705690	-	False	0	1	0	multiple_prefix_segments_differ_shared_exact_suffix	10	8	4		-6870.96142578125	12347.538583162801	5476.577157381549	1	0	wrong_stays_wrong
+Oeuropaea	chr16_gene_705.t1	PAC:37739682	+	True	0	0	0	downstream_TIS_trim_existing_CDS_path	7	6	5	1	4338.811035156248	8229.953955693338	12568.764990849588	1	0	wrong_stays_wrong
+Oeuropaea	chr17_gene_523.t1	PAC:37744452	-	True	0	0	0	multiple_prefix_segments_differ_shared_exact_suffix	7	9	5		-18923.054718017578	8187.224319214662	-10735.830398802922	0	0	wrong_stays_wrong
+Oeuropaea	chr17_gene_666.t1	PAC:37744632	+	True	0	0	0	downstream_TIS_trim_existing_CDS_path	2	1	0	1	-1805.49267578125	1382.6310890968712	-422.8615866843784	0	0	wrong_stays_wrong
+Oeuropaea	chr18_gene_2.t1	PAC:37734172	-	True	1	1	0	exact_chain	3	3	3	0	-12779.548828125	2733.6448350808387	-10045.903993044158	0	0	correct_to_wrong
+Oeuropaea	chr18_gene_98.t1	PAC:37733515	-	True	0	1	0	first_CDS_segment_replacement_only	7	7	6		-4405.109375	8215.767958504697	3810.658583504697	1	0	wrong_stays_wrong
+Oeuropaea	chr18_gene_100.t1	PAC:37734074	-	False	0	0	0	multiple_prefix_segments_differ_shared_exact_suffix	6	5	4		2450.6141357421875	6839.800948095575	9290.415083837765	1	0	wrong_stays_wrong
+Oeuropaea	chr18_gene_323.t1	PAC:37734783	+	True	0	0	0	no_shared_exact_terminal_CDS_segment	11	6	0		5566.2978515625	13754.232478101256	19320.530329663758	1	0	wrong_stays_wrong
+Oeuropaea	chr18_gene_398.t1	PAC:37734816	+	True	1	0	1	exact_chain	10	10	10	0	45862.255371093765	12305.926058825824	58168.18142991958	1	0	correct_stays_correct
+Oeuropaea	chr18_gene_1270.t1	PAC:37734338	-	True	0	1	0	no_shared_exact_terminal_CDS_segment	7	4	0		-2662.5586547851562	8251.826774214198	5589.268119429042	1	0	wrong_stays_wrong
+Oeuropaea	chr19_gene_165.t1	PAC:37732330	-	True	0	1	0	no_shared_exact_terminal_CDS_segment	4	6	0		-53937.98440551757	4056.758908170412	-49881.22549734716	0	0	wrong_stays_wrong
+Oeuropaea	chr2_gene_611.t1	PAC:37724210	+	False	0	0	0	no_shared_exact_terminal_CDS_segment	3	4	0		5148.354980468748	2702.580686860118	7850.935667328866	1	0	wrong_stays_wrong
+Oeuropaea	chr2_gene_991.t1	PAC:37723961	-	True	0	0	0	multiple_prefix_segments_differ_shared_exact_suffix	39	37	7		-20306.8896789551	52062.832873727326	31755.943194772226	1	0	wrong_stays_wrong
+Oeuropaea	chr2_gene_1012.t1	PAC:37724019	-	True	0	1	0	no_shared_exact_terminal_CDS_segment	6	5	0		-7561.05078125	6855.129074971913	-705.9217062780881	0	0	wrong_stays_wrong
+Oeuropaea	chr2_gene_1186.t1	PAC:37722841	-	False	1	1	0	exact_chain	2	2	2	0	-5275.209014892578	1365.9885650952895	-3909.22044979729	0	0	correct_to_wrong
+Oeuropaea	chr20_gene_10.t1	PAC:37738160	-	False	0	0	0	multiple_prefix_segments_differ_shared_exact_suffix	13	18	6		-36739.14456176756	16349.345090205108	-20389.799471562455	0	0	wrong_stays_wrong
+Oeuropaea	chr20_gene_411.t1	PAC:37737742	-	True	0	1	0	downstream_TIS_trim_existing_CDS_path	4	3	2	1	-800.6133117675781	4121.086291134624	3320.472979367046	1	0	wrong_stays_wrong
+Oeuropaea	chr21_gene_14.t1	PAC:37726355	+	True	0	0	0	multiple_prefix_segments_differ_shared_exact_suffix	3	7	2		59739.22546386718	2613.4130432601523	62352.63850712734	1	0	wrong_stays_wrong
+Oeuropaea	chr21_gene_744.t1	PAC:37726391	-	True	0	1	0	first_CDS_segment_replacement_only	6	6	5		-22860.099609374996	6833.567418812525	-16026.532190562471	0	0	wrong_stays_wrong
+Oeuropaea	chr22_gene_215.t1	PAC:37714213	+	True	0	0	0	multiple_prefix_segments_differ_shared_exact_suffix	9	5	4		12613.4287109375	11001.298264883753	23614.726975821253	1	0	wrong_stays_wrong
+Oeuropaea	chr22_gene_310.t1	PAC:37714058	+	True	0	0	0	no_shared_exact_terminal_CDS_segment	5	5	0		9101.9111328125	5472.65037276269	14574.56150557519	1	0	wrong_stays_wrong
+Oeuropaea	chr23_gene_482.t1	PAC:37707763	-	True	1	1	0	exact_chain	4	4	4	0	-6393.476562500002	4105.633229097721	-2287.84333340228	0	0	correct_to_wrong
+Oeuropaea	chr23_gene_488.t1	PAC:37707585	-	False	0	1	0	no_shared_exact_terminal_CDS_segment	5	5	0		-9284.677734374996	5475.369588093829	-3809.3081462811697	0	0	wrong_stays_wrong
+Oeuropaea	chr3_gene_21.t1	PAC:37718589	-	True	1	1	0	exact_chain	9	9	9	0	-13074.625000000004	10949.933951363742	-2124.6910486362613	0	0	correct_to_wrong
+Oeuropaea	chr3_gene_336.t1	PAC:37718945	-	True	0	0	0	downstream_TIS_trim_existing_CDS_path	2	1	0	1	-856.28125	1382.3230665424762	526.0418165424744	1	0	wrong_stays_wrong
+Oeuropaea	chr3_gene_337.t1	PAC:37718227	+	True	0	0	0	multiple_prefix_segments_differ_shared_exact_suffix	2	3	1		12475.40234375	1342.5013152339454	13817.903658983947	1	0	wrong_stays_wrong
+Oeuropaea	chr3_gene_778.t1	PAC:37718830	-	False	0	1	0	multiple_prefix_segments_differ_shared_exact_suffix	3	9	1		-48783.519531249985	2637.1436568754266	-46146.375874374564	0	0	wrong_stays_wrong
+Oeuropaea	chr3_gene_833.t1	PAC:37718779	-	False	0	1	0	multiple_prefix_segments_differ_shared_exact_suffix	8	9	3		-8178.34375	9573.045231068196	1394.7014810681958	1	0	wrong_stays_wrong
+Oeuropaea	chr4_gene_226.t1	PAC:37718029	+	True	0	0	0	multiple_prefix_segments_differ_shared_exact_suffix	39	35	8		44258.916015625	52087.07668320446	96345.99269882948	1	0	wrong_stays_wrong
+Oeuropaea	chr4_gene_536.t1	PAC:37717525	+	True	0	0	0	downstream_TIS_trim_existing_CDS_path	2	1	0	1	-59.228515625	1381.6207751184513	1322.392259493453	1	0	wrong_stays_wrong
+Oeuropaea	chr4_gene_614.t1	PAC:37716957	+	True	0	0	0	multiple_prefix_segments_differ_shared_exact_suffix	39	26	7		44544.7021484375	52191.41625673965	96736.11840517714	1	0	wrong_stays_wrong
+Oeuropaea	chr5_gene_23.t1	PAC:37742807	+	True	0	0	0	downstream_TIS_trim_existing_CDS_path	9	7	6	2	6957.66357421875	10975.455157307326	17933.118731526076	1	0	wrong_stays_wrong
+Oeuropaea	chr5_gene_118.t1	PAC:37742295	-	False	0	1	0	multiple_prefix_segments_differ_shared_exact_suffix	3	7	2		-20431.363281249993	2683.3596541076176	-17748.003627142374	0	0	wrong_stays_wrong
+Oeuropaea	chr6_gene_589.t1	PAC:37736084	-	True	1	1	0	exact_chain	3	3	3	0	-21315.97265625	2723.8503260866837	-18592.122330163318	0	0	correct_to_wrong
+Oeuropaea	chr6_gene_975.t1	PAC:37735899	+	True	0	0	0	no_shared_exact_terminal_CDS_segment	16	4	0		626.68505859375	20684.95395584031	21311.63901443406	1	0	wrong_stays_wrong
+Oeuropaea	chr6_gene_1037.t1	PAC:37736386	-	True	1	1	0	exact_chain	3	3	3	0	-12568.08251953125	2730.5960620783353	-9837.486457452915	0	0	correct_to_wrong
+Oeuropaea	chr6_gene_1377.t1	PAC:37736718	-	False	0	1	0	no_shared_exact_terminal_CDS_segment	11	11	0		-7220.1796875	13692.016163504853	6471.836476004857	1	0	wrong_stays_wrong
+Oeuropaea	chr7_gene_375.t1	PAC:37700844	-	False	0	1	0	no_shared_exact_terminal_CDS_segment	18	19	0		-59083.51724243163	23232.45659954133	-35851.06064289031	0	0	wrong_stays_wrong
+Oeuropaea	chr8_gene_489.t1	PAC:37699225	-	True	0	1	0	downstream_TIS_trim_existing_CDS_path	5	4	3	1	-31252.457031249993	5469.195605434207	-25783.26142581579	0	0	wrong_stays_wrong
+Oeuropaea	chr8_gene_504.t1	PAC:37699302	-	True	1	1	0	exact_chain	3	3	3	0	-7209.8125	2732.781667510685	-4477.030832489315	0	0	correct_to_wrong
+Oeuropaea	chr8_gene_565.t1	PAC:37698749	-	True	1	1	0	exact_chain	2	2	2	0	-13191.160156249998	1360.9365918828078	-11830.223564367192	0	0	correct_to_wrong
+Oeuropaea	chr8_gene_792.t1	PAC:37698643	+	True	1	0	1	exact_chain	6	6	6	0	17980.162109375	6840.600502040759	24820.76261141576	1	0	correct_stays_correct
+Oeuropaea	chr9_gene_221.t1	PAC:37712677	+	True	0	0	0	downstream_TIS_trim_existing_CDS_path	2	1	0	1	-1011.80419921875	1382.1382530098379	370.33405379108126	1	0	wrong_stays_wrong
+Oeuropaea	scaffold1075_gene_26.t1	PAC:37702068	+	True	1	0	1	exact_chain	18	18	18	0	16299.303710937496	23279.628062111857	39578.93177304935	1	0	correct_stays_correct
+Oeuropaea	scaffold1084_gene_17.t1	PAC:37743549	-	False	0	1	0	first_CDS_segment_replacement_only	2	2	1		-506.0	1369.5454669315452	863.5454669315454	1	0	wrong_stays_wrong
+Oeuropaea	scaffold1093_gene_16.t1	PAC:37699892	-	True	0	0	0	downstream_TIS_trim_existing_CDS_path	2	1	0	1	-218.9697265625	1382.3230665424758	1163.3533399799753	1	0	wrong_stays_wrong
+Oeuropaea	scaffold11773_gene_1.t1	PAC:37737227	-	False	1	0	1	exact_chain	3	3	3	0	8497.18408203125	2733.918442914396	11231.102524945645	1	0	correct_stays_correct
+Oeuropaea	scaffold1243_gene_2.t1	PAC:37714835	-	True	1	1	0	exact_chain	4	4	4	0	-22879.05859375	4092.1678150033304	-18786.89077874667	0	0	correct_to_wrong
+Oeuropaea	scaffold1251_gene_5.t1	PAC:37745278	+	True	0	0	0	multiple_prefix_segments_differ_shared_exact_suffix	4	3	2		20592.506347656246	4112.576832229143	24705.08317988539	1	0	wrong_stays_wrong
+Oeuropaea	scaffold1259_gene_23.t1	PAC:37698188	-	True	0	1	0	downstream_TIS_trim_existing_CDS_path	8	7	6	1	-1981.181640625	9599.954869730247	7618.773229105247	1	0	wrong_stays_wrong
+Oeuropaea	scaffold1280_gene_13.t1	PAC:37745075	+	True	1	0	1	exact_chain	4	4	4	0	12704.1103515625	4099.68551595395	16803.79586751645	1	0	correct_stays_correct
+Oeuropaea	scaffold1301_gene_11.t1	PAC:37745185	+	True	1	0	1	exact_chain	5	5	5	0	19921.54638671875	5466.8271426335195	25388.37352935227	1	0	correct_stays_correct
+Oeuropaea	scaffold134_gene_14.t1	PAC:37703301	+	True	0	0	0	multiple_prefix_segments_differ_shared_exact_suffix	5	5	3		1131.1513671875	5479.698893245645	6610.850260433145	1	0	wrong_stays_wrong
+Oeuropaea	scaffold1422_gene_16.t1	PAC:37708689	+	True	0	0	0	no_shared_exact_terminal_CDS_segment	2	3	0		-1276.7416992187482	1358.5378265639724	81.79612734522516	1	0	wrong_stays_wrong
+Oeuropaea	scaffold1521_gene_6.t1	PAC:37699827	+	False	0	0	0	no_shared_exact_terminal_CDS_segment	8	9	0		39207.63964843751	9534.582509419333	48742.222157856835	1	0	wrong_stays_wrong
+Oeuropaea	scaffold1595_gene_10.t1	PAC:37745623	+	True	0	0	0	multiple_prefix_segments_differ_shared_exact_suffix	4	3	2		3371.20166015625	4120.286850994042	7491.488511150291	1	0	wrong_stays_wrong
+Oeuropaea	scaffold1618_gene_6.t1	PAC:37741193	-	True	0	0	0	no_shared_exact_terminal_CDS_segment	13	13	0		-15101.592834472656	16429.0003736446	1327.4075391719452	1	0	wrong_stays_wrong
+Oeuropaea	scaffold1806_gene_6.t1	PAC:37704020	-	True	1	1	0	exact_chain	2	2	2	0	-7020.642578125	1363.6400978572497	-5657.002480267751	0	0	correct_to_wrong
+Oeuropaea	scaffold1866_gene_4.t1	PAC:37700017	+	False	0	0	0	multiple_prefix_segments_differ_shared_exact_suffix	5	6	4		8735.533081054688	5453.765739621839	14189.298820676528	1	0	wrong_stays_wrong
+Oeuropaea	scaffold2146_gene_5.t1	PAC:37746575	+	True	1	0	1	exact_chain	4	4	4	0	9344.213378906254	4104.362907013348	13448.576285919602	1	0	correct_stays_correct
+Oeuropaea	scaffold2257_gene_2.t1	PAC:37704210	+	False	0	0	0	multiple_prefix_segments_differ_shared_exact_suffix	10	13	1		45032.65234375	12273.853534169033	57306.50587791903	1	0	wrong_stays_wrong
+Oeuropaea	scaffold2302_gene_4.t1	PAC:37716794	-	True	0	1	0	multiple_prefix_segments_differ_shared_exact_suffix	4	3	2		-4299.101562500004	4118.6269357770025	-180.47462672300207	0	0	wrong_stays_wrong
+Oeuropaea	scaffold2618_gene_6.t1	PAC:37703824	-	True	0	1	0	no_shared_exact_terminal_CDS_segment	6	3	0		-1693.609375000001	6882.823142794962	5189.213767794962	1	0	wrong_stays_wrong
+Oeuropaea	scaffold2673_gene_9.t1	PAC:37699548	-	True	1	1	0	exact_chain	4	4	4	0	-4426.625	4104.4215372633935	-322.20346273660834	0	0	correct_to_wrong
+Oeuropaea	scaffold2718_gene_2.t1	PAC:37745490	+	False	1	0	1	exact_chain	3	3	3	0	14789.405273437498	2727.5505463119453	17516.955819749444	1	0	correct_stays_correct
+Oeuropaea	scaffold2757_gene_5.t1	PAC:37732078	-	True	0	1	0	no_shared_exact_terminal_CDS_segment	5	3	0		-257.890625	5502.999368577471	5245.108743577472	1	0	wrong_stays_wrong
+Oeuropaea	scaffold2783_gene_2.t1	PAC:37704032	-	True	0	1	0	no_shared_exact_terminal_CDS_segment	16	23	0		-54328.3984375	20439.918928273444	-33888.479509226556	0	0	wrong_stays_wrong
+Oeuropaea	scaffold290_gene_1.t1	PAC:37742918	+	True	1	0	1	exact_chain	3	3	3	0	9237.3154296875	2734.631777623317	11971.947207310817	1	0	correct_stays_correct
+Oeuropaea	scaffold293_gene_27.t1	PAC:37702702	-	True	0	0	0	downstream_TIS_trim_existing_CDS_path	5	4	3	1	2088.0947265625	5488.422929330317	7576.517655892817	1	0	wrong_stays_wrong
+Oeuropaea	scaffold3048_gene_4.t1	PAC:37740883	+	True	1	0	1	exact_chain	5	5	5	0	26421.886230468743	5464.4037589648615	31886.2899894336	1	0	correct_stays_correct
+Oeuropaea	scaffold3298_gene_5.t1	PAC:37741700	-	False	0	1	0	no_shared_exact_terminal_CDS_segment	4	3	0		-516.14453125	4121.384543188827	3605.2400119388267	1	0	wrong_stays_wrong
+Oeuropaea	scaffold349_gene_11.t1	PAC:37702618	+	True	0	0	0	downstream_TIS_trim_existing_CDS_path	3	2	1	1	642.7011718749982	2751.5235482130956	3394.224720088094	1	0	wrong_stays_wrong
+Oeuropaea	scaffold3592_gene_4.t1	PAC:37702416	-	False	0	0	0	no_shared_exact_terminal_CDS_segment	4	7	0		-1954.1148681640643	4040.3254204795503	2086.210552315486	1	0	wrong_stays_wrong
+Oeuropaea	scaffold3842_gene_5.t1	PAC:37708431	+	False	0	0	0	first_CDS_segment_replacement_only	6	6	5		21422.9345703125	6838.308681809498	28261.243252121996	1	0	wrong_stays_wrong
+Oeuropaea	scaffold3965_gene_3.t1	PAC:37706490	-	False	0	1	0	no_shared_exact_terminal_CDS_segment	9	13	0		-56277.423828125	10876.21224730141	-45401.21158082358	0	0	wrong_stays_wrong
+Oeuropaea	scaffold4768_gene_2.t1	PAC:37725157	+	False	0	0	0	multiple_prefix_segments_differ_shared_exact_suffix	3	4	2		1493.9609375	2724.571139206425	4218.532076706425	1	0	wrong_stays_wrong
+Oeuropaea	scaffold520_gene_11.t1	PAC:37746357	+	True	0	0	0	multiple_prefix_segments_differ_shared_exact_suffix	4	3	2		7149.135742187496	4118.521288136803	11267.6570303243	1	0	wrong_stays_wrong
+Oeuropaea	scaffold713_gene_5.t1	PAC:37731870	+	True	0	0	0	no_shared_exact_terminal_CDS_segment	3	1	0		-51.5909423828125	2762.699430541165	2711.108488158353	1	0	wrong_stays_wrong
+Oeuropaea	scaffold732_gene_35.t1	PAC:37732230	-	True	1	1	0	exact_chain	3	3	3	0	-18890.48828125	2723.7135221699045	-16166.774759080101	0	0	correct_to_wrong
+Oeuropaea	scaffold83_gene_50.t1	PAC:37722308	-	True	1	1	0	exact_chain	2	2	2	0	-7478.906250000002	1365.1644843585018	-6113.7417656415	0	0	correct_to_wrong
+Lervoides	Ler.1DRT.Chr1_gene_1801.t1	Ler.1DRT.1g031240.1.v1	+	True	0	0	0	no_shared_exact_terminal_CDS_segment	2	1	0		28.60205078125	1381.3373943684073	1409.9394451496578	1	0	wrong_stays_wrong
+Lervoides	Ler.1DRT.Chr1_gene_2798.t1	Ler.1DRT.1g051110.1.v1	+	True	1	0	1	exact_chain	7	7	7	0	24435.452636718743	9560.614791024049	33996.06742774279	1	0	correct_stays_correct
+Lervoides	Ler.1DRT.Chr1_gene_2799.t1	Ler.1DRT.1g051150.1.v1	+	True	1	0	1	exact_chain	2	2	2	0	7447.299804687496	2715.115027756851	10162.414832444345	1	0	correct_stays_correct
+Lervoides	Ler.1DRT.Chr1_gene_2804.t1	Ler.1DRT.1g051220.1.v1	+	False	0	0	0	multiple_prefix_segments_differ_shared_exact_suffix	6	4	1		3857.0947265625	8206.991051199682	12064.085777762184	1	0	wrong_stays_wrong
+Lervoides	Ler.1DRT.Chr1_gene_3061.t1	Ler.1DRT.1g055400.1.v1	-	False	0	1	0	multiple_prefix_segments_differ_shared_exact_suffix	4	6	2		-70797.00781249999	4668.989985388843	-66128.01782711114	0	0	wrong_stays_wrong
+Lervoides	Ler.1DRT.Chr1_gene_3474.t1	Ler.1DRT.1g062450.1.v1	+	False	0	0	0	no_shared_exact_terminal_CDS_segment	27	16	0		41722.4774169922	35712.80387587863	77435.28129287082	1	0	wrong_stays_wrong
+Lervoides	Ler.1DRT.Chr1_gene_4054.t1	Ler.1DRT.1g072900.1.v1	+	True	1	0	1	exact_chain	39	39	39	0	114700.638671875	53362.01143051574	168062.65010239073	1	0	correct_stays_correct
+Lervoides	Ler.1DRT.Chr1_gene_4236.t1	Ler.1DRT.1g076210.1.v1	-	True	1	1	0	exact_chain	3	3	3	0	-16935.109374999996	4084.732139945261	-12850.377235054737	0	0	correct_to_wrong
+Lervoides	Ler.1DRT.Chr2_gene_1304.t1	Ler.1DRT.2g018600.1.v1	+	True	0	0	0	no_shared_exact_terminal_CDS_segment	21	25	0		93706.12268066406	27981.22035490306	121687.34303556713	1	0	wrong_stays_wrong
+Lervoides	Ler.1DRT.Chr2_gene_1630.t1	Ler.1DRT.2g023700.1.v1	-	True	1	1	0	exact_chain	7	7	7	0	-26650.664062499993	9553.40401509255	-17097.260047407446	0	0	correct_to_wrong
+Lervoides	Ler.1DRT.Chr2_gene_2176.t1	Ler.1DRT.2g034320.1.v1	-	True	1	1	0	exact_chain	7	7	7	0	-22123.2333984375	9561.108018248175	-12562.125380189325	0	0	correct_to_wrong
+Lervoides	Ler.1DRT.Chr2_gene_2462.t1	Ler.1DRT.2g039940.1.v1	-	True	1	1	0	exact_chain	4	4	4	0	-26872.2509765625	5430.55679406329	-21441.69418249921	0	0	correct_to_wrong
+Lervoides	Ler.1DRT.Chr2_gene_2570.t1	Ler.1DRT.2g042200.1.v1	+	True	1	0	1	exact_chain	6	6	6	0	12044.720703124998	8195.270873462758	20239.991576587756	1	0	correct_stays_correct
+Lervoides	Ler.1DRT.Chr2_gene_2643.t1	Ler.1DRT.2g044030.1.v1	+	True	1	0	1	exact_chain	4	4	4	0	28383.4912109375	5448.384379758575	33831.87559069607	1	0	correct_stays_correct
+Lervoides	Ler.1DRT.Chr2_gene_2864.t1	Ler.1DRT.2g048180.1.v1	-	True	0	1	0	first_CDS_segment_replacement_only	6	6	5		-80597.17971801758	8148.82818936216	-72448.35152865542	0	0	wrong_stays_wrong
+Lervoides	Ler.1DRT.Chr2_gene_2987.t1	Ler.1DRT.2g050040.1.v1	+	True	0	0	0	first_segment_TIS_boundary_only	7	7	6		16300.290039062515	9558.942924364754	25859.23296342727	1	0	wrong_stays_wrong
+Lervoides	Ler.1DRT.Chr2_gene_3570.t1	Ler.1DRT.2g060930.1.v1	+	False	0	0	0	downstream_TIS_trim_existing_CDS_path	2	1	0	1	16879.64013671875	1991.4044650075446	18871.044601726295	1	0	wrong_stays_wrong
+Lervoides	Ler.1DRT.Chr2_gene_4284.t1	Ler.1DRT.2g074390.1.v1	+	True	0	0	0	no_shared_exact_terminal_CDS_segment	4	5	0		24183.481445312496	5419.0139821926	29602.4954275051	1	0	wrong_stays_wrong
+Lervoides	Ler.1DRT.Chr2_gene_5792.t1	Ler.1DRT.2g099760.1.v1	+	True	0	0	0	first_CDS_segment_replacement_only	3	3	2		15603.0302734375	4082.933649856713	19685.963923294214	1	0	wrong_stays_wrong
+Lervoides	Ler.1DRT.Chr3_gene_833.t1	Ler.1DRT.3g012440.1.v1	+	True	0	0	0	no_shared_exact_terminal_CDS_segment	3	6	0		-3295.672363281251	2693.968221066484	-601.7041422147668	0	0	wrong_stays_wrong
+Lervoides	Ler.1DRT.Chr3_gene_1515.t1	Ler.1DRT.3g026200.1.v1	+	True	1	0	1	exact_chain	3	3	3	0	12691.360351562502	4080.7638066688564	16772.12415823136	1	0	correct_stays_correct
+Lervoides	Ler.1DRT.Chr4_gene_189.t1	Ler.1DRT.4g002880.1.v1	-	False	0	1	0	multiple_prefix_segments_differ_shared_exact_suffix	5	5	3		-10835.914062500004	6149.664296322426	-4686.249766177577	0	0	wrong_stays_wrong
+Lervoides	Ler.1DRT.Chr4_gene_1872.t1	Ler.1DRT.4g035350.1.v1	+	True	1	0	1	exact_chain	5	5	5	0	9216.4794921875	6808.09390470286	16024.573396890359	1	0	correct_stays_correct
+Lervoides	Ler.1DRT.Chr5_gene_1224.t1	Ler.1DRT.5g016530.1.v1	+	True	1	0	1	exact_chain	11	11	11	0	25984.9267578125	15038.231846073808	41023.15860388631	1	0	correct_stays_correct
+Lervoides	Ler.1DRT.Chr5_gene_1238.t1	Ler.1DRT.5g016740.1.v1	-	True	1	1	0	exact_chain	5	5	5	0	-20652.359375	6820.394782389902	-13831.964592610097	0	0	correct_to_wrong
+Lervoides	Ler.1DRT.Chr5_gene_2120.t1	Ler.1DRT.5g034240.1.v1	+	False	1	0	1	exact_chain	6	6	6	0	37007.802734375	8184.104986926618	45191.90772130161	1	0	correct_stays_correct
+Lervoides	Ler.1DRT.Chr5_gene_3976.t1	Ler.1DRT.5g064630.1.v1	-	True	1	1	0	exact_chain	7	7	7	0	-15514.980560302734	9543.477761767663	-5971.502798535072	0	0	correct_to_wrong
+Lervoides	Ler.1DRT.Chr6_gene_547.t1	Ler.1DRT.6g010460.1.v1	-	True	1	1	0	exact_chain	5	5	5	0	-17972.445312500004	6806.547821312244	-11165.89749118776	0	0	correct_to_wrong
+Lervoides	Ler.1DRT.Chr6_gene_1519.t1	Ler.1DRT.6g029640.1.v1	-	False	0	1	0	downstream_TIS_trim_existing_CDS_path	3	2	1	1	-123336.580078125	3943.136318596662	-119393.44375952835	0	0	wrong_stays_wrong
+Lervoides	Ler.1DRT.Chr6_gene_1638.t1	Ler.1DRT.6g032350.1.v1	+	True	1	0	1	exact_chain	5	5	5	0	14868.1103515625	6824.066484933267	21692.176836495768	1	0	correct_stays_correct
+Lervoides	Ler.1DRT.Chr6_gene_2519.t1	Ler.1DRT.6g048280.1.v1	-	True	1	1	0	exact_chain	2	2	2	0	-22005.582031249996	2710.199074641595	-19295.382956608406	0	0	correct_to_wrong
+Lervoides	Ler.1DRT.Chr6_gene_3132.t1	Ler.1DRT.6g058060.1.v1	+	True	0	0	0	multiple_prefix_segments_differ_shared_exact_suffix	39	38	25		40108.12158203124	53401.944372528276	93510.06595455951	1	0	wrong_stays_wrong
+Lervoides	Ler.1DRT.Chr7_gene_1816.t1	Ler.1DRT.7g029020.1.v1	-	True	1	1	0	exact_chain	5	5	5	0	-24905.740264892578	6816.78950422782	-18088.95076066476	0	0	correct_to_wrong
+Lervoides	Ler.1DRT.Chr7_gene_2180.t1	Ler.1DRT.7g038210.1.v1	-	True	1	1	0	exact_chain	5	5	5	0	-13269.66958618164	6823.907449314963	-6445.762136866679	0	0	correct_to_wrong
+Lervoides	Ler.1DRT.Chr7_gene_3077.t1	Ler.1DRT.7g057610.1.v1	-	False	0	1	0	multiple_prefix_segments_differ_shared_exact_suffix	7	7	5		-5941.3984375	8894.575430365736	2953.176992865736	1	0	wrong_stays_wrong
+Lervoides	Ler.1DRT.Chr7_gene_3855.t1	Ler.1DRT.7g071390.1.v1	+	False	0	0	0	first_segment_TIS_boundary_only	3	3	2		6762.41748046875	4067.8151460415875	10830.232626510337	1	0	wrong_stays_wrong
+Lervoides	Ler.1DRT.Chr7_gene_4176.t1	Ler.1DRT.7g075770.1.v1	-	True	1	1	0	exact_chain	39	39	39	0	-38096.195465087876	53380.40505168662	15284.209586598743	1	0	correct_to_wrong
+Lsativa	Lsat_1_v8_lg_0_gene_546.t1	Lsat_1_v5_gn_0_32180.1.v5	-	True	0	1	0	no_shared_exact_terminal_CDS_segment	5	4	0		-20076.65234375	5470.498355371716	-14606.153988378284	0	0	wrong_stays_wrong
+Lsativa	Lsat_1_v8_lg_1_gene_145.t1	Lsat_1_v5_gn_1_5380.1.v5	+	True	0	0	0	multiple_prefix_segments_differ_shared_exact_suffix	6	5	4		8133.619140625	7535.522540311834	15669.141680936835	1	0	wrong_stays_wrong
+Lsativa	Lsat_1_v8_lg_1_gene_1113.t1	Lsat_1_v5_gn_1_36080.1.v5	-	True	0	1	0	multiple_prefix_segments_differ_shared_exact_suffix	22	22	19		-15331.246093749996	30115.22813890704	14783.982045157045	1	0	wrong_stays_wrong
+Lsativa	Lsat_1_v8_lg_1_gene_2156.t1	Lsat_1_v5_gn_1_71380.1.v5	+	True	0	0	0	no_shared_exact_terminal_CDS_segment	4	5	0		-7488.63916015625	5435.53384803527	-2053.1053121209798	0	0	wrong_stays_wrong
+Lsativa	Lsat_1_v8_lg_1_gene_2246.t1	Lsat_1_v5_gn_1_73080.1.v5	+	False	1	0	1	exact_chain	5	5	5	0	12185.332031250002	5472.950746527436	17658.28277777744	1	0	correct_stays_correct
+Lsativa	Lsat_1_v8_lg_1_gene_2260.t1	Lsat_1_v5_gn_1_72060.1.v5	+	False	0	0	0	no_shared_exact_terminal_CDS_segment	8	10	0		-22.51806640625	9555.300207916465	9532.782141510213	1	0	wrong_stays_wrong
+Lsativa	Lsat_1_v8_lg_1_gene_2307.t1	Lsat_1_v5_gn_1_75200.1.v5	-	False	0	1	0	no_shared_exact_terminal_CDS_segment	4	3	0		-825.9375	4121.1835831510425	3295.2460831510416	1	0	wrong_stays_wrong
+Lsativa	Lsat_1_v8_lg_1_gene_2482.t1	Lsat_1_v5_gn_1_80360.1.v5	+	False	1	0	1	exact_chain	4	4	4	0	2920.190429687501	4107.427966196419	7027.618395883919	1	0	correct_stays_correct
+Lsativa	Lsat_1_v8_lg_1_gene_2492.t1	Lsat_1_v5_gn_1_81361.1.v5	+	True	0	0	0	downstream_TIS_trim_existing_CDS_path	4	3	2	1	217.125	4121.6490873563225	4338.7740873563225	1	0	wrong_stays_wrong
+Lsativa	Lsat_1_v8_lg_1_gene_2499.t1	Lsat_1_v5_gn_1_81201.1.v5	+	True	0	0	0	multiple_prefix_segments_differ_shared_exact_suffix	4	3	2		2493.3916015625	4120.22085734592	6613.61245890842	1	0	wrong_stays_wrong
+Lsativa	Lsat_1_v8_lg_1_gene_2500.t1	Lsat_1_v5_gn_1_81180.1.v5	-	True	0	1	0	multiple_prefix_segments_differ_shared_exact_suffix	4	3	1		354.671875	4121.856559450043	4476.528434450042	1	0	wrong_stays_wrong
+Lsativa	Lsat_1_v8_lg_1_gene_2501.t1	Lsat_1_v5_gn_1_81120.1.v5	-	False	0	1	0	multiple_prefix_segments_differ_shared_exact_suffix	4	3	2		-1121.578125	4121.045646124987	2999.467521124986	1	0	wrong_stays_wrong
+Lsativa	Lsat_1_v8_lg_1_gene_2802.t1	Lsat_1_v5_gn_1_91580.1.v5	+	True	1	0	1	exact_chain	7	7	7	0	21069.8271484375	9562.770979206884	30632.598127644385	1	0	correct_stays_correct
+Lsativa	Lsat_1_v8_lg_2_gene_800.t1	Lsat_1_v5_gn_2_33621.1.v5	+	False	0	0	0	first_CDS_segment_replacement_only	8	8	7		27201.104492187504	10255.52027923822	37456.624771425726	1	0	wrong_stays_wrong
+Lsativa	Lsat_1_v8_lg_2_gene_2355.t1	Lsat_1_v5_gn_2_91301.1.v5	+	True	1	0	1	exact_chain	6	6	6	0	9675.533203125	8198.155466171394	17873.688669296396	1	0	correct_stays_correct
+Lsativa	Lsat_1_v8_lg_2_gene_2671.t1	Lsat_1_v5_gn_2_104100.1.v5	-	True	1	1	0	exact_chain	4	4	4	0	-5285.757812500002	4107.173901779543	-1178.5839107204583	0	0	correct_to_wrong
+Lsativa	Lsat_1_v8_lg_2_gene_2673.t1	Lsat_1_v5_gn_2_104060.1.v5	-	True	1	1	0	exact_chain	4	4	4	0	-5477.374999999998	5459.902896927549	-17.4721030724495	0	0	correct_to_wrong
+Lsativa	Lsat_1_v8_lg_2_gene_2805.t1	Lsat_1_v5_gn_2_107641.1.v5	-	True	0	1	0	first_CDS_segment_replacement_only	5	5	4		-10539.827148437498	6151.12603165758	-4388.701116779917	0	0	wrong_stays_wrong
+Lsativa	Lsat_1_v8_lg_2_gene_2995.t1	Lsat_1_v5_gn_2_112341.1.v5	+	True	1	0	1	exact_chain	16	16	16	0	16484.93017578125	21219.400836031036	37704.33101181229	1	0	correct_stays_correct
+Lsativa	Lsat_1_v8_lg_3_gene_502.t1	Lsat_1_v5_gn_3_19221.1.v5	-	True	0	1	0	downstream_TIS_trim_existing_CDS_path	10	9	8	1	-4902.132812499996	13017.201476201646	8115.068663701648	1	0	wrong_stays_wrong
+Lsativa	Lsat_1_v8_lg_3_gene_508.t1	Lsat_1_v5_gn_3_19600.1.v5	-	True	0	1	0	multiple_prefix_segments_differ_shared_exact_suffix	5	4	3		-2913.6640625	6168.218880682111	3254.5548181821123	1	0	wrong_stays_wrong
+Lsativa	Lsat_1_v8_lg_3_gene_865.t1	Lsat_1_v5_gn_3_30780.1.v5	-	True	1	1	0	exact_chain	3	3	3	0	-4859.742187500001	2737.113791542022	-2122.6283959579787	0	0	correct_to_wrong
+Lsativa	Lsat_1_v8_lg_3_gene_1741.t1	Lsat_1_v5_gn_3_57981.1.v5	-	True	1	1	0	exact_chain	6	6	6	0	-13908.117187499996	8194.610339770632	-5713.506847729364	0	0	correct_to_wrong
+Lsativa	Lsat_1_v8_lg_3_gene_1744.t1	Lsat_1_v5_gn_3_58161.1.v5	-	True	0	1	0	first_CDS_segment_replacement_only	6	6	5		-8681.976562499995	7522.766683236578	-1159.209879263417	0	0	wrong_stays_wrong
+Lsativa	Lsat_1_v8_lg_4_gene_43.t1	Lsat_1_v5_gn_4_541.1.v5	-	True	0	1	0	first_CDS_segment_replacement_only	3	3	2		-9959.99609375	3412.692077827301	-6547.304015922698	0	0	wrong_stays_wrong
+Lsativa	Lsat_1_v8_lg_4_gene_677.t1	Lsat_1_v5_gn_4_25621.1.v5	-	True	0	1	0	downstream_TIS_trim_existing_CDS_path	7	6	5	1	-6695.070312499996	8905.950906246291	2210.880593746295	1	0	wrong_stays_wrong
+Lsativa	Lsat_1_v8_lg_4_gene_1075.t1	Lsat_1_v5_gn_4_38201.1.v5	-	True	0	1	0	first_CDS_segment_replacement_only	5	5	4		-5034.453125000002	6155.462162061423	1121.0090370614216	1	0	wrong_stays_wrong
+Lsativa	Lsat_1_v8_lg_4_gene_1090.t1	Lsat_1_v5_gn_4_38580.1.v5	+	True	1	0	1	exact_chain	2	2	2	0	3075.8393554687514	1367.8517041523758	4443.691059621127	1	0	correct_stays_correct
+Lsativa	Lsat_1_v8_lg_4_gene_1122.t1	Lsat_1_v5_gn_4_39420.1.v5	+	True	0	0	0	no_shared_exact_terminal_CDS_segment	8	8	0		4727.42578125	10259.29373394784	14986.71951519784	1	0	wrong_stays_wrong
+Lsativa	Lsat_1_v8_lg_4_gene_1485.t1	Lsat_1_v5_gn_4_53460.1.v5	-	True	1	1	0	exact_chain	9	9	9	0	-8135.203124999999	11633.284186099088	3498.0810610990884	1	0	correct_to_wrong
+Lsativa	Lsat_1_v8_lg_4_gene_2583.t1	Lsat_1_v5_gn_4_95121.1.v5	-	True	0	1	0	multiple_prefix_segments_differ_shared_exact_suffix	23	21	20		-10862.994140625002	30834.806257793807	19971.812117168804	1	0	wrong_stays_wrong
+Lsativa	Lsat_1_v8_lg_5_gene_242.t1	Lsat_1_v5_gn_5_9480.1.v5	+	True	0	0	0	multiple_prefix_segments_differ_shared_exact_suffix	11	11	9		10837.248046874993	15043.73771407002	25880.985760945012	1	0	wrong_stays_wrong
+Lsativa	Lsat_1_v8_lg_5_gene_303.t1	Lsat_1_v5_gn_5_12541.1.v5	+	True	0	0	0	first_CDS_segment_replacement_only	3	3	2		3291.5205078125036	3416.0867778164725	6707.607285628976	1	0	wrong_stays_wrong
+Lsativa	Lsat_1_v8_lg_5_gene_1367.t1	Lsat_1_v5_gn_5_61200.1.v5	-	True	1	1	0	exact_chain	7	7	7	0	-10973.339843749998	9567.538862103267	-1405.800981646733	0	0	correct_to_wrong
+Lsativa	Lsat_1_v8_lg_5_gene_3140.t1	Lsat_1_v5_gn_5_133981.1.v5	+	True	0	0	0	multiple_prefix_segments_differ_shared_exact_suffix	11	10	9		5076.341796875	14385.189022421957	19461.530819296957	1	0	wrong_stays_wrong
+Lsativa	Lsat_1_v8_lg_5_gene_3405.t1	Lsat_1_v5_gn_5_146261.1.v5	-	True	1	1	0	exact_chain	10	10	10	0	-13029.34765625	13675.304231430047	645.9565751800474	1	0	correct_to_wrong
+Lsativa	Lsat_1_v8_lg_5_gene_4032.t1	Lsat_1_v5_gn_5_168820.1.v5	+	True	1	0	1	exact_chain	3	3	3	0	9282.301269531248	4086.9252855922755	13369.226555123523	1	0	correct_stays_correct
+Lsativa	Lsat_1_v8_lg_5_gene_4449.t1	Lsat_1_v5_gn_5_181620.1.v5	-	True	0	1	0	no_shared_exact_terminal_CDS_segment	37	34	0		-89340.69241333003	49298.9247971844	-40041.76761614564	0	0	wrong_stays_wrong
+Lsativa	Lsat_1_v8_lg_6_gene_59.t1	Lsat_1_v5_gn_6_3440.1.v5	-	True	1	1	0	exact_chain	5	5	5	0	-8335.3984375	6828.528243525691	-1506.8701939743078	0	0	correct_to_wrong
+Lsativa	Lsat_1_v8_lg_6_gene_109.t1	Lsat_1_v5_gn_6_5180.1.v5	+	True	0	0	0	first_CDS_segment_replacement_only	5	5	4		1257.674804687501	6150.888639647179	7408.56344433468	1	0	wrong_stays_wrong
+Lsativa	Lsat_1_v8_lg_6_gene_447.t1	Lsat_1_v5_gn_6_15600.1.v5	+	True	1	0	1	exact_chain	7	7	7	0	6045.300292968754	8216.650669491533	14261.950962460287	1	0	correct_stays_correct
+Lsativa	Lsat_1_v8_lg_6_gene_615.t1	Lsat_1_v5_gn_6_22561.1.v5	+	True	0	0	0	multiple_prefix_segments_differ_shared_exact_suffix	10	8	5		2637.1342468261723	12351.313996753235	14988.448243579409	1	0	wrong_stays_wrong
+Lsativa	Lsat_1_v8_lg_6_gene_1710.t1	Lsat_1_v5_gn_6_60701.1.v5	+	True	0	0	0	no_shared_exact_terminal_CDS_segment	4	4	0		10034.216796874998	4779.449070171491	14813.66586704649	1	0	wrong_stays_wrong
+Lsativa	Lsat_1_v8_lg_6_gene_2136.t1	Lsat_1_v5_gn_6_81220.1.v5	-	True	0	1	0	multiple_prefix_segments_differ_shared_exact_suffix	11	10	9		-7559.63671875	14385.814541227932	6826.177822477928	1	0	wrong_stays_wrong
+Lsativa	Lsat_1_v8_lg_6_gene_2288.t1	Lsat_1_v5_gn_6_86420.1.v5	+	True	0	0	0	multiple_prefix_segments_differ_shared_exact_suffix	30	29	27		20607.39013671875	40408.858516822336	61016.248653541086	1	0	wrong_stays_wrong
+Lsativa	Lsat_1_v8_lg_6_gene_2523.t1	Lsat_1_v5_gn_6_94921.1.v5	-	True	1	1	0	exact_chain	5	5	5	0	-7740.449218750001	6829.016285323155	-911.4329334268459	0	0	correct_to_wrong
+Lsativa	Lsat_1_v8_lg_7_gene_623.t1	Lsat_1_v5_gn_7_20501.1.v5	-	True	0	1	0	downstream_TIS_trim_existing_CDS_path	5	4	3	1	2148.488281249998	6170.5876351769375	8319.075916426937	1	0	wrong_stays_wrong
+Lsativa	Lsat_1_v8_lg_7_gene_624.t1	Lsat_1_v5_gn_7_20521.1.v5	-	True	0	1	0	downstream_TIS_trim_existing_CDS_path	5	4	3	1	4649.496093750002	6172.550364882613	10822.046458632616	1	0	wrong_stays_wrong
+Lsativa	Lsat_1_v8_lg_7_gene_625.t1	Lsat_1_v5_gn_7_20581.1.v5	-	True	0	1	0	downstream_TIS_trim_existing_CDS_path	5	4	3	1	6209.867187499999	5494.78177676445	11704.648964264448	1	0	wrong_stays_wrong
+Lsativa	Lsat_1_v8_lg_7_gene_1133.t1	Lsat_1_v5_gn_7_34740.1.v5	-	True	1	1	0	exact_chain	35	35	35	0	-17810.76171875	46570.37958555229	28759.61786680229	1	0	correct_to_wrong
+Lsativa	Lsat_1_v8_lg_7_gene_1387.t1	Lsat_1_v5_gn_7_44340.1.v5	+	False	0	0	0	no_shared_exact_terminal_CDS_segment	4	5	0		11566.58544921875	4090.735596260006	15657.321045478757	1	0	wrong_stays_wrong
+Lsativa	Lsat_1_v8_lg_7_gene_1480.t1	Lsat_1_v5_gn_7_48321.1.v5	-	True	1	1	0	exact_chain	3	3	3	0	-5016.859375000002	4090.1068277147697	-926.752547285233	0	0	correct_to_wrong
+Lsativa	Lsat_1_v8_lg_7_gene_1485.t1	Lsat_1_v5_gn_7_49261.1.v5	+	True	0	0	0	downstream_TIS_trim_existing_CDS_path	5	4	3	1	4189.115722656252	6166.734694053193	10355.850416709445	1	0	wrong_stays_wrong
+Lsativa	Lsat_1_v8_lg_7_gene_1535.t1	Lsat_1_v5_gn_7_49520.1.v5	+	True	0	0	0	downstream_TIS_trim_existing_CDS_path	4	3	2	1	2272.763671875	4798.254512431975	7071.018184306975	1	0	wrong_stays_wrong
+Lsativa	Lsat_1_v8_lg_7_gene_3086.t1	Lsat_1_v5_gn_7_110801.1.v5	+	True	0	0	0	multiple_prefix_segments_differ_shared_exact_suffix	11	11	8		23941.3564453125	15041.540877890671	38982.89732320317	1	0	wrong_stays_wrong
+Lsativa	Lsat_1_v8_lg_8_gene_497.t1	Lsat_1_v5_gn_8_16461.1.v5	+	True	1	0	1	exact_chain	3	3	3	0	16230.62060546875	4084.9210887919144	20315.541694260664	1	0	correct_stays_correct
+Lsativa	Lsat_1_v8_lg_8_gene_835.t1	Lsat_1_v5_gn_8_27500.1.v5	+	False	0	0	0	no_shared_exact_terminal_CDS_segment	3	4	0		4386.361328125002	3378.537329857679	7764.8986579826815	1	0	wrong_stays_wrong
+Lsativa	Lsat_1_v8_lg_8_gene_1576.t1	Lsat_1_v5_gn_8_53401.1.v5	+	True	0	0	0	no_shared_exact_terminal_CDS_segment	5	5	0		12487.3427734375	5474.20223323741	17961.54500667491	1	0	wrong_stays_wrong
+Lsativa	Lsat_1_v8_lg_8_gene_1754.t1	Lsat_1_v5_gn_8_59320.1.v5	+	True	0	0	0	multiple_prefix_segments_differ_shared_exact_suffix	3	2	1		652.4716796875	2751.09005041839	3403.56173010589	1	0	wrong_stays_wrong
+Lsativa	Lsat_1_v8_lg_8_gene_2195.t1	Lsat_1_v5_gn_8_77820.1.v5	-	True	0	1	0	downstream_TIS_trim_existing_CDS_path	3	2	1	1	-2552.015625000001	3428.4838925737586	876.4682675737577	1	0	wrong_stays_wrong
+Lsativa	Lsat_1_v8_lg_8_gene_2837.t1	Lsat_1_v5_gn_8_98561.1.v5	-	True	1	0	0	exact_chain	9	9	9	0	-4607.146484374999	11630.981878273933	7023.835393898934	1	0	correct_to_wrong
+Lsativa	Lsat_1_v8_lg_9_gene_161.t1	Lsat_1_v5_gn_9_880.1.v5	-	True	1	1	0	exact_chain	6	6	6	0	-8754.2265625	8198.017839690227	-556.2087228097735	0	0	correct_to_wrong
+Lsativa	Lsat_1_v8_lg_9_gene_371.t1	Lsat_1_v5_gn_9_12681.1.v5	+	True	0	0	0	multiple_prefix_segments_differ_shared_exact_suffix	23	22	3		19694.23031616211	30822.09085002603	50516.321166188136	1	0	wrong_stays_wrong
+Lsativa	Lsat_1_v8_lg_9_gene_407.t1	Lsat_1_v5_gn_9_15261.1.v5	+	True	0	0	0	no_shared_exact_terminal_CDS_segment	4	3	0		9131.97265625	4792.626792407098	13924.599448657098	1	0	wrong_stays_wrong
+Lsativa	Lsat_1_v8_lg_9_gene_947.t1	Lsat_1_v5_gn_9_30241.1.v5	-	True	0	1	0	no_shared_exact_terminal_CDS_segment	2	1	0		-3813.25	2058.179130401658	-1755.0708695983417	0	0	wrong_stays_wrong
+Lsativa	Lsat_1_v8_lg_9_gene_1271.t1	Lsat_1_v5_gn_9_42641.1.v5	-	True	1	1	0	exact_chain	5	5	5	0	-9186.876953124996	6827.9127937030335	-2358.9641594219647	0	0	correct_to_wrong
+Lsativa	Lsat_1_v8_lg_9_gene_1273.t1	Lsat_1_v5_gn_9_42661.1.v5	-	True	1	1	0	exact_chain	5	5	5	0	-6996.273437500003	6829.465441193176	-166.8079963068276	0	0	correct_to_wrong
+Lsativa	Lsat_1_v8_lg_9_gene_1308.t1	Lsat_1_v5_gn_9_44101.1.v5	+	False	0	0	0	first_CDS_segment_replacement_only	4	4	3		3358.8173828125005	4106.805409031688	7465.622791844189	1	0	wrong_stays_wrong
+Lsativa	Lsat_1_v8_lg_9_gene_1405.t1	Lsat_1_v5_gn_9_45780.1.v5	-	True	0	1	0	multiple_prefix_segments_differ_shared_exact_suffix	12	9	1		-12224.595733642576	15775.802978539712	3551.2072448971358	1	0	wrong_stays_wrong
+Lsativa	Lsat_1_v8_lg_9_gene_1881.t1	Lsat_1_v5_gn_9_61920.1.v5	+	True	0	0	0	downstream_TIS_trim_existing_CDS_path	4	3	2	1	1777.765625	4120.428471531356	5898.194096531356	1	0	wrong_stays_wrong
+Lsativa	Lsat_1_v8_lg_9_gene_1882.t1	Lsat_1_v5_gn_9_61940.1.v5	+	True	0	0	0	downstream_TIS_trim_existing_CDS_path	4	3	2	1	2206.187499999999	4120.428471531355	6326.615971531354	1	0	wrong_stays_wrong
+Lsativa	Lsat_1_v8_lg_9_gene_2516.t1	Lsat_1_v5_gn_9_88740.1.v5	-	True	1	1	0	exact_chain	3	3	3	0	-9634.171875000002	4087.776006084959	-5546.395868915042	0	0	correct_to_wrong
+Lsativa	Lsat_1_v8_lg_9_gene_2784.t1	Lsat_1_v5_gn_9_97741.1.v5	-	True	0	1	0	multiple_prefix_segments_differ_shared_exact_suffix	5	10	4		-38280.14761352538	6066.89859476777	-32213.249018757608	0	0	wrong_stays_wrong
+Lsativa	Lsat_1_v8_lg_9_gene_2929.t1	Lsat_1_v5_gn_9_102460.1.v5	-	True	1	1	0	exact_chain	3	3	3	0	-6557.53125	4089.8535408695802	-2467.67770913042	0	0	correct_to_wrong
+Athaliana	OZ408686.1_gene_278.t1	rna-TAIR12_TAIR12_AT4G02450	-	False	1	1	0	exact_chain	6	6	6	0	-9408.375	8199.191790284869	-1209.1832097151346	0	0	correct_to_wrong
+Athaliana	OZ408686.1_gene_701.t1	rna-TAIR12_TAIR12_AT4G09800	+	False	1	0	1	exact_chain	4	4	4	0	6425.68994140625	5459.823798879551	11885.5137402858	1	0	correct_stays_correct
+Athaliana	OZ408686.1_gene_1180.t1	rna-TAIR12_TAIR12_AT4G14320-2	-	False	0	1	0	no_shared_exact_terminal_CDS_segment	4	3	0		-5620.875	5471.621457154693	-149.2535428453075	0	0	wrong_stays_wrong
+Athaliana	OZ408686.1_gene_1579.t1	rna-TAIR12_TAIR12_AT4G17720	-	False	1	1	0	exact_chain	5	5	5	0	-6807.5000000000055	6829.5973034867675	22.09730348676385	1	0	correct_to_wrong
+Athaliana	OZ408686.1_gene_1852.t1	rna-TAIR12_TAIR12_AT4G20300	+	False	1	0	1	exact_chain	5	5	5	0	15664.42333984375	6824.088726074914	22488.512065918665	1	0	correct_stays_correct
+Athaliana	OZ408686.1_gene_2211.t1	rna-TAIR12_TAIR12_AT4G23640	-	False	1	0	0	exact_chain	9	9	9	0	-3655.541015625	12307.830940153248	8652.28992452825	1	0	correct_to_wrong
+Athaliana	OZ408686.1_gene_2412.t1	rna-TAIR12_TAIR12_AT4G25590	-	False	1	1	0	exact_chain	3	3	3	0	-5330.634765625	4090.1402751925366	-1240.494490432462	0	0	correct_to_wrong
+Athaliana	OZ408686.1_gene_2749.t1	rna-TAIR12_TAIR12_AT4G28710	+	False	0	0	0	multiple_prefix_segments_differ_shared_exact_suffix	39	39	20		34621.71484374999	53396.85935498952	88018.57419873952	1	0	wrong_stays_wrong
+Athaliana	OZ408686.1_gene_2795.t1	rna-TAIR12_TAIR12_AT4G29170-2	+	False	1	0	1	exact_chain	10	10	10	0	9812.7685546875	13677.727404657317	23490.495959344815	1	0	correct_stays_correct
+Athaliana	OZ408686.1_gene_2910.t1	rna-TAIR12_TAIR12_AT4G30220	-	False	1	1	0	exact_chain	5	5	5	0	-3657.853515625	6829.918394753236	3172.0648791282356	1	0	correct_to_wrong
+Athaliana	OZ408686.1_gene_3456.t1	rna-TAIR12_TAIR12_AT4G35410	+	False	1	0	1	exact_chain	6	6	6	0	6798.83984375	8200.139154723063	14998.978998473063	1	0	correct_stays_correct

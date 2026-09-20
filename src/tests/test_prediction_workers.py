@@ -1,5 +1,6 @@
 """Persistent model lifetime, real Zarr inference, and shell dispatch integration."""
 
+import gzip
 import json
 import os
 from pathlib import Path
@@ -256,6 +257,49 @@ def shell_functions():
     return text[
         text.index("process_chromosome() {") : text.index('\nif [[ "$FRAME_AWARE"')
     ]
+
+
+def chromosome_discovery():
+    text = (Path(__file__).resolve().parents[2] / "predict.sh").read_text()
+    section = text.index("# Step 1: Discover chromosomes from FASTA headers")
+    start = text.index('if [[ "$TOP_N_CONTIGS" == "all" ]]; then', section)
+    end = text.index("\nCHROM_COUNT=", start)
+    return text[start:end]
+
+
+@pytest.mark.parametrize("compressed", [False, True])
+def test_top_n_contigs_selects_longest_in_fasta_order(tmp_path, compressed):
+    contents = """>middle description
+AAAA
+AAAA
+>short
+AAA
+>long
+CCCCCC
+CCCCCC
+>tiny
+TT
+"""
+    fasta = tmp_path / ("input.fa.gz" if compressed else "input.fa")
+    if compressed:
+        with gzip.open(fasta, "wt") as handle:
+            handle.write(contents)
+    else:
+        fasta.write_text(contents)
+
+    result = subprocess.run(
+        ["bash", "-c", chromosome_discovery() + '\nprintf "%s\\n" "$CHROM_IDS"'],
+        env={
+            **os.environ,
+            "INPUT_FILE": str(fasta),
+            "TOP_N_CONTIGS": "2",
+        },
+        text=True,
+        capture_output=True,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stdout.splitlines() == ["middle", "long"]
 
 
 @pytest.mark.parametrize("mode", ["single", "ddp", "ddp_slurm"])

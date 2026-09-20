@@ -30,7 +30,7 @@ repair. Default 10.
 introns. Off by default: an ORF built on untrustworthy splice calls is not trustworthy.
 * `--fix-weak-starts` - Flag. Enables Kozak-context re-ranking of already-valid but suspiciously
 short first exons. Off by default: cross-species offline validation
-([short_first_exon_validation_results.md](short_first_exon_validation_results.md)) found it
+([short-first-CDS validation](experiments/short_first_exon_validation_results.md)) found it
 produces net corrections in some species but is purely harmful in others (zero corrections, new
 errors introduced), so it is not a generally safe repair for this architecture class. Opt in only
 for further experimentation.

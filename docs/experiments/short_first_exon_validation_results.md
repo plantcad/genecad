@@ -44,7 +44,6 @@ action. This is insufficient evidence for production integration.
 ## Decision
 
 Retain the raw GeneCAD prediction as the production baseline. Do not merge the
-tested repair prototypes. A future repair should default to preserving the raw
-prediction, require independent agreement among start, splice, ORF, and
-long-intron evidence, and be validated on additional held-out species before
-production use.
+tested repair prototypes. Revisit this error class when a new base model is
+available and use these cases to guide retraining. Keep the current decoder and
+post-processing defaults while that work is evaluated on held-out species.

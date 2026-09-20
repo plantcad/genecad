@@ -53,7 +53,7 @@ The repair is deliberately constrained so that it cannot invent gene structure:
     (orf_issue=weak_kozak_support) rather than forced.
 
     --fix-weak-starts is off by default: cross-species offline validation
-    (docs/short_first_exon_validation_results.md) found it produces net
+    (docs/experiments/short_first_exon_validation_results.md) found it produces net
     corrections in some species but is purely harmful in others (zero
     corrections, new errors introduced), so it is not a generally safe repair
     for this architecture class. Pass --fix-weak-starts to opt in for further
@@ -1102,7 +1102,7 @@ def main() -> None:
         action="store_true",
         help="Enable Kozak-context re-ranking of already-valid but "
         "suspiciously short first exons. Off by default: cross-species "
-        "validation (docs/short_first_exon_validation_results.md) found it "
+        "validation (docs/experiments/short_first_exon_validation_results.md) found it "
         "is not a generally safe repair for this architecture class -- it "
         "helps in some species and is purely harmful in others. Opt in only "
         "for further experimentation.",

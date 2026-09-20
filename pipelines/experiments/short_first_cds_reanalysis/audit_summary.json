@@ -1,0 +1,371 @@
+{
+  "source": "/workdir/zl843/GeneCAD/genecad/genecad_result/experiments/short_first_exon_validation/cross_species_decoder_redecode/per_locus.tsv",
+  "source_sha256": "577d9c26d033d9e1e93461cd2412614655018bb73de36bc4586018dc479c7adc",
+  "all_rows": 1122,
+  "variant_counts": {
+    "run0": 374,
+    "run9_s16_utr": 374,
+    "run9_s16_cds": 374
+  },
+  "run0": {
+    "n": 374,
+    "raw_correct": 117,
+    "raw_errors": 257,
+    "decoded_empty": 162,
+    "empty_among_correct": 63,
+    "empty_among_errors": 99,
+    "correct_to_wrong": 67,
+    "wrong_to_correct": 0,
+    "classes": {
+      "multiple_prefix_segments_differ_shared_exact_suffix": 90,
+      "exact_chain": 117,
+      "first_CDS_segment_replacement_only": 30,
+      "downstream_TIS_trim_existing_CDS_path": 48,
+      "no_shared_exact_terminal_CDS_segment": 87,
+      "first_segment_TIS_boundary_only": 2
+    }
+  },
+  "by_strand": {
+    "+": {
+      "n": 174,
+      "raw_correct": 49,
+      "raw_errors": 125,
+      "decoded_empty": 0,
+      "empty_among_correct": 0,
+      "empty_among_errors": 0,
+      "correct_to_wrong": 0,
+      "wrong_to_correct": 0,
+      "classes": {
+        "exact_chain": 49,
+        "multiple_prefix_segments_differ_shared_exact_suffix": 44,
+        "no_shared_exact_terminal_CDS_segment": 45,
+        "downstream_TIS_trim_existing_CDS_path": 21,
+        "first_CDS_segment_replacement_only": 13,
+        "first_segment_TIS_boundary_only": 2
+      }
+    },
+    "-": {
+      "n": 200,
+      "raw_correct": 68,
+      "raw_errors": 132,
+      "decoded_empty": 162,
+      "empty_among_correct": 63,
+      "empty_among_errors": 99,
+      "correct_to_wrong": 67,
+      "wrong_to_correct": 0,
+      "classes": {
+        "multiple_prefix_segments_differ_shared_exact_suffix": 46,
+        "exact_chain": 68,
+        "first_CDS_segment_replacement_only": 17,
+        "downstream_TIS_trim_existing_CDS_path": 27,
+        "no_shared_exact_terminal_CDS_segment": 42
+      }
+    }
+  },
+  "by_species": {
+    "Athaliana": {
+      "n": 11,
+      "raw_correct": 9,
+      "raw_errors": 2,
+      "decoded_empty": 5,
+      "empty_among_correct": 4,
+      "empty_among_errors": 1,
+      "correct_to_wrong": 5,
+      "wrong_to_correct": 0,
+      "classes": {
+        "exact_chain": 9,
+        "no_shared_exact_terminal_CDS_segment": 1,
+        "multiple_prefix_segments_differ_shared_exact_suffix": 1
+      }
+    },
+    "Cquinoa": {
+      "n": 69,
+      "raw_correct": 13,
+      "raw_errors": 56,
+      "decoded_empty": 33,
+      "empty_among_correct": 7,
+      "empty_among_errors": 26,
+      "correct_to_wrong": 7,
+      "wrong_to_correct": 0,
+      "classes": {
+        "multiple_prefix_segments_differ_shared_exact_suffix": 18,
+        "exact_chain": 13,
+        "first_CDS_segment_replacement_only": 11,
+        "downstream_TIS_trim_existing_CDS_path": 11,
+        "no_shared_exact_terminal_CDS_segment": 16
+      }
+    },
+    "Lervoides": {
+      "n": 37,
+      "raw_correct": 21,
+      "raw_errors": 16,
+      "decoded_empty": 16,
+      "empty_among_correct": 11,
+      "empty_among_errors": 5,
+      "correct_to_wrong": 11,
+      "wrong_to_correct": 0,
+      "classes": {
+        "no_shared_exact_terminal_CDS_segment": 5,
+        "exact_chain": 21,
+        "multiple_prefix_segments_differ_shared_exact_suffix": 5,
+        "first_CDS_segment_replacement_only": 2,
+        "first_segment_TIS_boundary_only": 2,
+        "downstream_TIS_trim_existing_CDS_path": 2
+      }
+    },
+    "Lsativa": {
+      "n": 74,
+      "raw_correct": 26,
+      "raw_errors": 48,
+      "decoded_empty": 38,
+      "empty_among_correct": 16,
+      "empty_among_errors": 22,
+      "correct_to_wrong": 17,
+      "wrong_to_correct": 0,
+      "classes": {
+        "no_shared_exact_terminal_CDS_segment": 12,
+        "multiple_prefix_segments_differ_shared_exact_suffix": 17,
+        "exact_chain": 26,
+        "downstream_TIS_trim_existing_CDS_path": 11,
+        "first_CDS_segment_replacement_only": 8
+      }
+    },
+    "Oeuropaea": {
+      "n": 108,
+      "raw_correct": 29,
+      "raw_errors": 79,
+      "decoded_empty": 50,
+      "empty_among_correct": 16,
+      "empty_among_errors": 34,
+      "correct_to_wrong": 16,
+      "wrong_to_correct": 0,
+      "classes": {
+        "no_shared_exact_terminal_CDS_segment": 29,
+        "multiple_prefix_segments_differ_shared_exact_suffix": 26,
+        "downstream_TIS_trim_existing_CDS_path": 20,
+        "exact_chain": 29,
+        "first_CDS_segment_replacement_only": 4
+      }
+    },
+    "Othomaeum": {
+      "n": 41,
+      "raw_correct": 12,
+      "raw_errors": 29,
+      "decoded_empty": 11,
+      "empty_among_correct": 5,
+      "empty_among_errors": 6,
+      "correct_to_wrong": 6,
+      "wrong_to_correct": 0,
+      "classes": {
+        "exact_chain": 12,
+        "multiple_prefix_segments_differ_shared_exact_suffix": 15,
+        "no_shared_exact_terminal_CDS_segment": 13,
+        "downstream_TIS_trim_existing_CDS_path": 1
+      }
+    },
+    "Rcommunis": {
+      "n": 34,
+      "raw_correct": 7,
+      "raw_errors": 27,
+      "decoded_empty": 9,
+      "empty_among_correct": 4,
+      "empty_among_errors": 5,
+      "correct_to_wrong": 5,
+      "wrong_to_correct": 0,
+      "classes": {
+        "no_shared_exact_terminal_CDS_segment": 11,
+        "exact_chain": 7,
+        "first_CDS_segment_replacement_only": 5,
+        "multiple_prefix_segments_differ_shared_exact_suffix": 8,
+        "downstream_TIS_trim_existing_CDS_path": 3
+      }
+    }
+  },
+  "oracle_by_correctness": {
+    "error": {
+      "emission": {
+        "positive": 130,
+        "negative": 127,
+        "zero": 0,
+        "median": 62.0703125,
+        "min": -144767.09963989258,
+        "max": 93706.12268066406
+      },
+      "transition": {
+        "positive": 257,
+        "negative": 0,
+        "zero": 0,
+        "median": 6151.12603165758,
+        "min": 1279.8763534780633,
+        "max": 72057.42390432394
+      },
+      "total": {
+        "positive": 185,
+        "negative": 72,
+        "zero": 0,
+        "median": 6147.8116712112715,
+        "min": -127810.79682129729,
+        "max": 141774.97215697478
+      }
+    },
+    "correct": {
+      "emission": {
+        "positive": 51,
+        "negative": 66,
+        "zero": 0,
+        "median": -5285.757812500002,
+        "min": -43227.751953125015,
+        "max": 114700.638671875
+      },
+      "transition": {
+        "positive": 117,
+        "negative": 0,
+        "zero": 0,
+        "median": 5466.8271426335195,
+        "min": 1360.9365918828078,
+        "max": 53380.40505168662
+      },
+      "total": {
+        "positive": 59,
+        "negative": 58,
+        "zero": 0,
+        "median": 22.09730348676385,
+        "min": -36285.42086442245,
+        "max": 168062.65010239073
+      }
+    }
+  },
+  "by_variant_strand": {
+    "run0 +": {
+      "n": 174,
+      "empty": 0,
+      "raw_chain_replayed": 174,
+      "correct_to_wrong": 0,
+      "wrong_to_correct": 0
+    },
+    "run0 -": {
+      "n": 200,
+      "empty": 162,
+      "raw_chain_replayed": 7,
+      "correct_to_wrong": 67,
+      "wrong_to_correct": 0
+    },
+    "run9_s16_cds +": {
+      "n": 174,
+      "empty": 0,
+      "raw_chain_replayed": 152,
+      "correct_to_wrong": 0,
+      "wrong_to_correct": 3
+    },
+    "run9_s16_cds -": {
+      "n": 200,
+      "empty": 162,
+      "raw_chain_replayed": 5,
+      "correct_to_wrong": 67,
+      "wrong_to_correct": 0
+    },
+    "run9_s16_utr +": {
+      "n": 174,
+      "empty": 0,
+      "raw_chain_replayed": 161,
+      "correct_to_wrong": 0,
+      "wrong_to_correct": 1
+    },
+    "run9_s16_utr -": {
+      "n": 200,
+      "empty": 162,
+      "raw_chain_replayed": 7,
+      "correct_to_wrong": 67,
+      "wrong_to_correct": 0
+    }
+  },
+  "score_additivity_max_error": 2.9103830456733704e-11,
+  "by_class": {
+    "downstream_TIS_trim_existing_CDS_path": {
+      "n": 48,
+      "raw_correct": 0,
+      "raw_errors": 48,
+      "decoded_empty": 22,
+      "empty_among_correct": 0,
+      "empty_among_errors": 22,
+      "correct_to_wrong": 0,
+      "wrong_to_correct": 0,
+      "classes": {
+        "downstream_TIS_trim_existing_CDS_path": 48
+      }
+    },
+    "exact_chain": {
+      "n": 117,
+      "raw_correct": 117,
+      "raw_errors": 0,
+      "decoded_empty": 63,
+      "empty_among_correct": 63,
+      "empty_among_errors": 0,
+      "correct_to_wrong": 67,
+      "wrong_to_correct": 0,
+      "classes": {
+        "exact_chain": 117
+      }
+    },
+    "first_CDS_segment_replacement_only": {
+      "n": 30,
+      "raw_correct": 0,
+      "raw_errors": 30,
+      "decoded_empty": 14,
+      "empty_among_correct": 0,
+      "empty_among_errors": 14,
+      "correct_to_wrong": 0,
+      "wrong_to_correct": 0,
+      "classes": {
+        "first_CDS_segment_replacement_only": 30
+      }
+    },
+    "first_segment_TIS_boundary_only": {
+      "n": 2,
+      "raw_correct": 0,
+      "raw_errors": 2,
+      "decoded_empty": 0,
+      "empty_among_correct": 0,
+      "empty_among_errors": 0,
+      "correct_to_wrong": 0,
+      "wrong_to_correct": 0,
+      "classes": {
+        "first_segment_TIS_boundary_only": 2
+      }
+    },
+    "multiple_prefix_segments_differ_shared_exact_suffix": {
+      "n": 90,
+      "raw_correct": 0,
+      "raw_errors": 90,
+      "decoded_empty": 31,
+      "empty_among_correct": 0,
+      "empty_among_errors": 31,
+      "correct_to_wrong": 0,
+      "wrong_to_correct": 0,
+      "classes": {
+        "multiple_prefix_segments_differ_shared_exact_suffix": 90
+      }
+    },
+    "no_shared_exact_terminal_CDS_segment": {
+      "n": 87,
+      "raw_correct": 0,
+      "raw_errors": 87,
+      "decoded_empty": 32,
+      "empty_among_correct": 0,
+      "empty_among_errors": 32,
+      "correct_to_wrong": 0,
+      "wrong_to_correct": 0,
+      "classes": {
+        "no_shared_exact_terminal_CDS_segment": 87
+      }
+    }
+  },
+  "definitions": {
+    "exact_chain": "All sorted CDS intervals identical; UTR/exon envelopes not represented.",
+    "first_segment_TIS_boundary_only": "Same number of CDS segments; every segment after first identical in transcription order; first CDS segment has same 3-prime endpoint, only its TIS boundary differs. Upstream extension is allowed geometrically; physical transcript-exon feasibility not established.",
+    "downstream_TIS_trim_existing_CDS_path": "Reference can be obtained by dropping zero or more leading original CDS segments then moving start inside next original CDS segment, preserving its 3-prime endpoint and all following CDS intervals. Classification does not test ORF, reading-frame, splice motifs, or transcript exon envelopes.",
+    "first_CDS_segment_replacement_only": "All segments after first identical; first segment differs at its 3-prime endpoint, so TIS relocation alone cannot suffice.",
+    "multiple_prefix_segments_differ_shared_exact_suffix": "Not above classes. One or more exact CDS segments shared at 3-prime tail, but more than first-segment-only change or existing-CDS-path start truncation required. This does not prove global decoder nonrepresentability.",
+    "no_shared_exact_terminal_CDS_segment": "No exact last CDS interval shared. This can include a changed terminal segment start OR stop, not necessarily a changed stop."
+  }
+}

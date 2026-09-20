@@ -774,7 +774,7 @@ def test_fix_weak_starts_disabled_leaves_transcript_alone(tiny_kozak_pwm, tmp_pa
 def test_fix_weak_starts_defaults_to_disabled(tmp_path):
     """fix_orf()'s own default -- not the test helpers' explicit True above --
     must leave weak-start transcripts untouched. Cross-species validation
-    (docs/short_first_exon_validation_results.md) found the repair helps in
+    (docs/experiments/short_first_exon_validation_results.md) found the repair helps in
     some species and is purely harmful in others, so it must stay opt-in via
     --fix-weak-starts rather than run automatically."""
     gff = tmp_path / "in.gff"
