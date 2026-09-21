@@ -686,23 +686,19 @@ If you use GeneCAD in your research, please cite:
 <details><summary>Docker Build</summary>
 
 ```bash
-# Build the image (requires Linux with Docker and NVIDIA drivers)
+# Build the image locally (requires Linux with Docker and NVIDIA drivers)
 sudo usermod -aG docker ubuntu && newgrp docker
-docker build --progress=plain --no-cache -t genecad:v0.1.0 .
+docker build --progress=plain --no-cache -t genecad:dev .
 
 # Test the build — runs the full pipeline on the Arabidopsis example
-docker run --rm --gpus all -v $(pwd):/workspace -w /workspace genecad:v0.1.0 \
+docker run --rm --gpus all -v $(pwd):/workspace -w /workspace genecad:dev \
   bash predict.sh
-
-# Publish to GitHub Container Registry
-# Requires a personal access token with "write:packages" stored in GHCR_TOKEN
-IMAGE=ghcr.io/plantcad/genecad_v1
-docker tag genecad:v0.1.0 $IMAGE:v0.1.0
-docker tag genecad:v0.1.0 $IMAGE:latest
-echo $GHCR_TOKEN | docker login ghcr.io -u YOUR_GITHUB_USERNAME --password-stdin
-docker push $IMAGE:v0.1.0
-docker push $IMAGE:latest
 ```
+
+Official images are built and published automatically by
+[`docker-publish.yml`](.github/workflows/docker-publish.yml) on every push to
+`main` and on every version tag, as `ghcr.io/plantcad/genecad_v1:latest` and
+`:<version>`. There's no need to tag or push a release image by hand.
 
 </details>
 
