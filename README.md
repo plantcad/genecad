@@ -696,9 +696,10 @@ docker run --rm --gpus all -v $(pwd):/workspace -w /workspace genecad:dev \
 ```
 
 Official images are built and published automatically by
-[`docker-publish.yml`](.github/workflows/docker-publish.yml) on every push to
-`main` and on every version tag, as `ghcr.io/plantcad/genecad_v1:latest` and
-`:<version>`. There's no need to tag or push a release image by hand.
+[`docker-publish.yml`](.github/workflows/docker-publish.yml) whenever
+`Dockerfile`, `pyproject.toml`, `uv.lock`, `src/`, or `scripts/` change on
+`main`, and on every version tag, as `ghcr.io/plantcad/genecad_v1:latest`
+and `:<version>`. There's no need to tag or push a release image by hand.
 
 </details>
 
