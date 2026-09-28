@@ -346,9 +346,18 @@ If set, overrides automatic DDP/SLURM detection. Can also be set via LAUNCHER en
 (Default: python)
 * `--model-checkpoint` - Overrides the GeneCAD head model set by `--mode`. Accepts a local path to a `.ckpt` file or a
 HuggingFace model repo ID. Note that this does **not** override the base PlantCAD model set by `--mode`
-* `--no-frame-aware` - Decode with the original 5-state Viterbi, which ignores the genome sequence. By default,
-decoding is frame-aware: the CDS is constrained to begin on ATG, end on a stop codon, stay in frame across introns,
-and contain no in-frame stop, so every predicted CDS translates cleanly.
+* `--decoder` - How per-base predictions become gene models: `hybrid`, `frame-aware` or `plain`. (Default: hybrid)
+  * `hybrid` decodes each chromosome with the original 5-state Viterbi, then uses frame-aware decoding only around genes
+  that need it (see [hybrid decoding](docs/hybrid_decode.md)): transcripts that ORF repair cannot fix are re-decoded
+  locally, and consecutive same-strand genes that one frame-aware transcript spans are merged. Frame-aware decoding
+  constrains the CDS to begin on ATG, end on a stop codon, stay in frame across introns and contain no in-frame stop.
+  * `frame-aware` decodes whole chromosomes frame-aware (the v0.5.0 default). It also creates new loci made of tiny ORFs
+  and splits long genes into several ORFs.
+  * `plain` uses the 5-state Viterbi only, which ignores the genome sequence.
+* `--no-frame-aware` - Same as `--decoder plain`.
+* `--merge-max-gap` - Largest gap (bp) between consecutive same-strand genes for which hybrid decoding tries a merge.
+(Default: 20000)
+* `--keep-partial` - Keep transcripts that cannot be made a valid ORF (flagged `partial=true`) instead of dropping them.
 * `--min-intron-length` - Shortest intron frame-aware decoding may emit. Guards against short introns being invented
 to step over an in-frame stop codon. Lower it for compact genomes with genuinely short introns. (Default: 20)
 * `--min-coding-run-length` - Runs of coding sequence adjacent to an intron shorter than this are penalized, not
@@ -365,7 +374,7 @@ accordingly.
 * `--orf-max-shift` - Maximum distance (nt, in spliced transcript coordinates) that the start and stop codon may be
 moved when repairing CDS boundaries against the genome sequence. Repairs never alter exon structure and never leave
 the predicted exonic sequence; models that cannot be resolved this way are flagged `partial=true` rather than
-forced. Use 0 to disable repair. (Default: 300)
+forced, and are dropped unless `--keep-partial` is set. Use 0 to disable repair. (Default: 300)
 
 #### Pipeline Breakdown
 
@@ -394,6 +403,8 @@ Refer to the `docs/` folder for full parameter lists for each step/script.
 5. [Filter GFFs](docs/filter_raw_gff.md) - `scripts/filter_raw_gff.py` - Removes fragmented or excessively short gene models.
 6. [Merge Chromosme GFFs](docs/merge_gff.md) - `scripts/merge_gff.py` - Merges per-chromosome GFF files into a single unified file.
 7. [Repair ORFs](docs/fix_orf.md) - `scripts/fix_orf.py` - Repairs CDS boundaries against the genome sequence so each transcript is a valid, translatable ORF.
+   1. [Hybrid decoding](docs/hybrid_decode.md) - `scripts/hybrid_decode.py` - With `--decoder hybrid` (the default), rescues transcripts
+   ORF repair could not fix and merges split genes by frame-aware decoding of local windows.
 8. [Refine with ReelProtein](docs/refine.md) - `scripts/refine.py` - **REQUIRES GPU** - Uses ReelProtein to evaluate  and filter gene models for likely
 protein functionality and merges gene fragments.
 
@@ -404,6 +415,8 @@ After running, the output directory contains:
 ```
 <OUTPUT_DIR>/
 ├── <SPECIES_ID>_GeneCAD_raw.gff      ← all predicted gene models (pre-refinement)
+├── <SPECIES_ID>_GeneCAD_orf.gff      ← after ORF repair
+├── <SPECIES_ID>_GeneCAD_hybrid.gff   ← after hybrid decoding (--decoder hybrid only)
 ├── <SPECIES_ID>_GeneCAD_final.gff    ← final, protein-validated annotations
 └── <CHR_ID>/                         ← per-chromosome intermediates (for debugging)
     ├── predictions_filtered_<CHR_ID>.gff

@@ -32,11 +32,22 @@ Options:
                                                 that cannot be resolved are flagged partial=true
                                                 rather than forced. Use 0 to disable repair.
                                                 (default: 300)
-    --no-frame-aware        Decode with the original 5-state Viterbi, which ignores the
-                                                genome sequence. By default decoding is frame-aware: the
-                                                CDS is constrained to begin on ATG, end on a stop codon,
-                                                stay in frame across introns, and contain no in-frame
-                                                stop, so every predicted CDS translates cleanly.
+    --decoder MODE          How per-base predictions become gene models (default: hybrid).
+                                                hybrid: plain 5-state Viterbi genome-wide, then frame-aware
+                                                decoding only around genes that need it: transcripts ORF
+                                                repair cannot fix are re-decoded locally, and consecutive
+                                                same-strand genes that one frame-aware transcript spans are
+                                                merged. Frame-aware decoding constrains the CDS to begin on
+                                                ATG, end on a stop codon, stay in frame across introns and
+                                                contain no in-frame stop.
+                                                frame-aware: frame-aware decoding of whole chromosomes
+                                                (v0.5.0 default; creates more tiny and split genes).
+                                                plain: 5-state Viterbi only.
+    --no-frame-aware        Same as --decoder plain.
+    --merge-max-gap N       Largest gap (bp) between consecutive same-strand genes for which
+                                                hybrid decoding tries a merge (default: 20000).
+    --keep-partial          Keep transcripts that cannot be made a valid ORF (flagged
+                                                partial=true) instead of dropping them.
     --min-intron-length N   Shortest intron frame-aware decoding may emit (default: 20).
                                                 Guards against short introns being invented to step over
                                                 an in-frame stop codon. Lower it for compact genomes
@@ -115,7 +126,9 @@ GPUS_ARG="0"
 TOP_N_CONTIGS="all"
 MIN_TRANSCRIPT_LENGTH="3"
 ORF_MAX_SHIFT="300"
-FRAME_AWARE="1"
+DECODER="hybrid"
+KEEP_PARTIAL="0"
+MERGE_MAX_GAP="20000"
 MIN_INTRON_LENGTH="20"
 MIN_CODING_RUN_LENGTH="9"
 EXON_LENGTH_STRICTNESS="16"
@@ -134,7 +147,10 @@ while [[ $# -gt 0 ]]; do
     -n|--top-n-contigs) TOP_N_CONTIGS="$2"; shift 2 ;;
     -l|--min-transcript-length) MIN_TRANSCRIPT_LENGTH="$2"; shift 2 ;;
     --orf-max-shift) ORF_MAX_SHIFT="$2"; shift 2 ;;
-    --no-frame-aware) FRAME_AWARE="0"; shift ;;
+    --decoder) DECODER="$2"; shift 2 ;;
+    --no-frame-aware) DECODER="plain"; shift ;;
+    --merge-max-gap) MERGE_MAX_GAP="$2"; shift 2 ;;
+    --keep-partial) KEEP_PARTIAL="1"; shift ;;
     --min-intron-length) MIN_INTRON_LENGTH="$2"; shift 2 ;;
     --min-coding-run-length) MIN_CODING_RUN_LENGTH="$2"; shift 2 ;;
     --exon-length-strictness) EXON_LENGTH_STRICTNESS="$2"; shift 2 ;;
@@ -184,6 +200,17 @@ fi
 
 if ! [[ "$CPU_WORKERS" =~ ^[0-9]+$ ]] || [[ "$CPU_WORKERS" -lt 1 ]]; then
     echo "Error: --cpu-workers must be a positive integer."
+    exit 1
+fi
+
+case "$DECODER" in
+    hybrid|plain) FRAME_AWARE="0" ;;
+    frame-aware)  FRAME_AWARE="1" ;;
+    *) echo "Error: --decoder must be hybrid, frame-aware or plain."; exit 1 ;;
+esac
+
+if ! [[ "$MERGE_MAX_GAP" =~ ^[0-9]+$ ]]; then
+    echo "Error: --merge-max-gap must be a non-negative integer."
     exit 1
 fi
 
@@ -259,6 +286,7 @@ echo "Mode:        $MODE  ($BASE_MODEL + $HEAD_MODEL)"
 echo "Top contigs: $TOP_N_CONTIGS"
 echo "Min tx len:  $MIN_TRANSCRIPT_LENGTH"
 echo "ORF shift:   $ORF_MAX_SHIFT"
+echo "Decoder:     $DECODER (keep partial: $KEEP_PARTIAL, merge max gap: $MERGE_MAX_GAP)"
 echo "Frame-aware: $FRAME_AWARE (min intron $MIN_INTRON_LENGTH, min exon $MIN_CODING_RUN_LENGTH @ strictness $EXON_LENGTH_STRICTNESS, allow U12 introns: $ALLOW_U12_INTRONS)"
 echo "CPU workers: $CPU_WORKERS"
 echo "================================================================="
@@ -826,12 +854,50 @@ if [[ "$ORF_MAX_SHIFT" -eq 0 ]]; then
 elif [[ -f "$ORF_GFF" ]]; then
     echo "Skipping ORF repair — ${SPECIES_ID}_GeneCAD_orf.gff already exists"
 else
+    # Hybrid decoding needs the partial transcripts to rescue them, and drops
+    # the unrescued ones itself.
+    DROP_PARTIAL_ARGS=()
+    if [[ "$KEEP_PARTIAL" == "0" && "$DECODER" != "hybrid" ]]; then
+        DROP_PARTIAL_ARGS=(--drop-partial)
+    fi
     $PYTHON "$SCRIPT_DIR/scripts/fix_orf.py" \
         --input-gff "$RAW_GFF" \
         --input-fasta "$INPUT_FILE" \
         --output-gff "$ORF_GFF" \
         --max-shift "$ORF_MAX_SHIFT" \
-        --report "$OUTPUT_DIR/${SPECIES_ID}_GeneCAD_orf_report.tsv"
+        --report "$OUTPUT_DIR/${SPECIES_ID}_GeneCAD_orf_report.tsv" \
+        "${DROP_PARTIAL_ARGS[@]}"
+fi
+
+REFINE_INPUT_GFF="$ORF_GFF"
+if [[ "$DECODER" == "hybrid" ]]; then
+    HYBRID_GFF="$OUTPUT_DIR/${SPECIES_ID}_GeneCAD_hybrid.gff"
+    echo ""
+    echo "[7/8] Hybrid decoding: rescuing partial and merging split genes..."
+    if [[ -f "$HYBRID_GFF" ]]; then
+        echo "Skipping hybrid decoding — ${SPECIES_ID}_GeneCAD_hybrid.gff already exists"
+    else
+        HYBRID_ARGS=()
+        if [[ "$KEEP_PARTIAL" == "1" ]]; then
+            HYBRID_ARGS+=(--keep-partial)
+        fi
+        if [[ "$ALLOW_U12_INTRONS" == "1" ]]; then
+            HYBRID_ARGS+=(--allow-u12-introns)
+        fi
+        $PYTHON "$SCRIPT_DIR/scripts/hybrid_decode.py" \
+            --input-gff "$ORF_GFF" \
+            --input-fasta "$INPUT_FILE" \
+            --predictions-root "$OUTPUT_DIR" \
+            --output-gff "$HYBRID_GFF" \
+            --domain "$MODE" \
+            --max-gap "$MERGE_MAX_GAP" \
+            --workers "$CPU_WORKERS" \
+            --min-intron-length "$MIN_INTRON_LENGTH" \
+            --min-coding-run-length "$MIN_CODING_RUN_LENGTH" \
+            --exon-length-strictness "$EXON_LENGTH_STRICTNESS" \
+            "${HYBRID_ARGS[@]}"
+    fi
+    REFINE_INPUT_GFF="$HYBRID_GFF"
 fi
 
 echo ""
@@ -843,7 +909,7 @@ if [[ -f "$FINAL_GFF" ]]; then
     echo "Skipping refinement — ${SPECIES_ID}_GeneCAD_final.gff already exists"
 else
     $PYTHON "$SCRIPT_DIR/scripts/refine.py" \
-        --input-gff "$ORF_GFF" \
+        --input-gff "$REFINE_INPUT_GFF" \
         --input-fasta "$INPUT_FILE" \
         --output-gff "$FINAL_GFF" \
         --gpus "$GPU_LIST_STR"
