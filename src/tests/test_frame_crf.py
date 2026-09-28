@@ -811,3 +811,25 @@ def test_returning_expanded_states_maps_back_to_features():
         "stop_end_a",
         "stop_end_g",
     )
+
+
+@pytest.mark.parametrize("compressed", [False, True])
+def test_load_chromosome_codes_reads_one_record(tmp_path, compressed):
+    import gzip
+
+    text = ">chr1 description\nACGT\nAC\n>chr2\nGGGG\n"
+    path = tmp_path / ("genome.fa.gz" if compressed else "genome.fa")
+    if compressed:
+        with gzip.open(path, "wt") as out:
+            out.write(text)
+    else:
+        path.write_text(text)
+
+    assert np.array_equal(
+        fh.load_chromosome_codes(str(path), "chr1"), fh.encode_sequence("ACGTAC")
+    )
+    assert np.array_equal(
+        fh.load_chromosome_codes(str(path), "chr2"), fh.encode_sequence("GGGG")
+    )
+    with pytest.raises(ValueError, match="not found"):
+        fh.load_chromosome_codes(str(path), "chr3")

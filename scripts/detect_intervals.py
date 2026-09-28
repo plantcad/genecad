@@ -15,8 +15,8 @@ from src.frame_crf import (
     DEFAULT_SPLICE_MOTIF_GROUPS,
     GT_AG,
     SpliceMotifGroup,
-    encode_sequence,
     frame_aware_decode,
+    load_chromosome_codes,
     reverse_complement_codes,
 )
 import torch
@@ -195,35 +195,6 @@ def _detect_intervals(
         interval_entity_names=config.interval_entity_names
     )
     return region_intervals
-
-
-def load_chromosome_codes(fasta_path: str, chromosome_id: str) -> np.ndarray:
-    """Read one chromosome from a FASTA file and encode it as base codes.
-
-    The file is streamed a record at a time so that whole-genome FASTAs do not
-    have to be held in memory.
-    """
-    import gzip
-
-    opener = gzip.open if fasta_path.endswith(".gz") else open
-    with opener(fasta_path, "rt") as fh:  # pyrefly: ignore[bad-argument-type]
-        current: str | None = None
-        chunks: list[str] = []
-        for line in fh:
-            if line.startswith(">"):
-                if current == chromosome_id:
-                    break
-                current = line[1:].strip().split()[0]
-                chunks = []
-            elif current == chromosome_id:
-                chunks.append(line.strip())
-    if not chunks:
-        raise ValueError(f"Sequence {chromosome_id!r} not found in {fasta_path}")
-    logger.info(
-        f"Loaded sequence {chromosome_id!r} ({sum(len(c) for c in chunks)} bp) "
-        f"from {fasta_path}"
-    )
-    return encode_sequence("".join(chunks))
 
 
 def detect_intervals(

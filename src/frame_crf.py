@@ -1027,6 +1027,35 @@ def encode_sequence(sequence: str) -> np.ndarray:
     return _BASE_LOOKUP[raw]
 
 
+def load_chromosome_codes(fasta_path: str, chromosome_id: str) -> np.ndarray:
+    """Read one chromosome from a FASTA file and encode it as base codes.
+
+    The file is streamed a record at a time so that whole-genome FASTAs do not
+    have to be held in memory.
+    """
+    import gzip
+
+    opener = gzip.open if fasta_path.endswith(".gz") else open
+    with opener(fasta_path, "rt") as fh:  # pyrefly: ignore[bad-argument-type]
+        current: str | None = None
+        chunks: list[str] = []
+        for line in fh:
+            if line.startswith(">"):
+                if current == chromosome_id:
+                    break
+                current = line[1:].strip().split()[0]
+                chunks = []
+            elif current == chromosome_id:
+                chunks.append(line.strip())
+    if not chunks:
+        raise ValueError(f"Sequence {chromosome_id!r} not found in {fasta_path}")
+    logger.info(
+        f"Loaded sequence {chromosome_id!r} ({sum(len(c) for c in chunks)} bp) "
+        f"from {fasta_path}"
+    )
+    return encode_sequence("".join(chunks))
+
+
 def reverse_complement_codes(codes: np.ndarray) -> np.ndarray:
     """Reverse complement an encoded sequence.
 
