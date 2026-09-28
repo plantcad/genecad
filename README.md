@@ -150,17 +150,13 @@ genecad predict \
 
 #### Output
 
-Output files and intermediate files are saved to the specified output directory.
-There are two main output files: both are in GFF3 format and can be used with other
-pieces of software such as **IGV**, **JBrowse2**, or **Apollo**.
+The result is one GFF3 file at the top of the output directory:
 
-`[species_name]_GeneCAD_raw.gff` contains the raw predictions from GeneCAD.
+`[species_name]_GeneCAD_final.gff`
 
-`[species_name]_GeneCAD_final.gff` contains the predictions after the ReelProtein filtering step.
-
-> [!TIP]
-> Use `*_final.gff` for most downstream purposes. The raw file is provided in case you want
-> to perform any custom filtering process, but is not recommended for use as-is.
+Use this file. It works with other software such as **IGV**, **JBrowse2** or **Apollo**.
+Everything else is an intermediate file, kept in `intermediate/` and in one folder per
+chromosome, for troubleshooting. See [Outputs](#outputs-1) for the full list.
 
 #### Evaluate prediction output
 
@@ -338,8 +334,12 @@ genecad predict [OPTIONS]
 * `--mode` `-m` - Mode, or set of models to use. Options: plant, animal. (Default plant)
 * `--top-n-contigs` `-n` - Predict only the `N` longest fasta sequences in the input. Must be an integer or "all". (Default: all)
 * `--min-transcript-length` `-l` - Minimum allowed transcript length. Shorter transcripts will be removed. (Default: 3)
-* `--cpu-workers` `-c` - CPU workers used during GFF export. (Default: 1)
-* `--batch-size` `-b` - Inference batch size for GPU (Default is auto-scaled to GPU VRAM)
+* `--cpu-workers` `-c` - CPU workers used during GFF export and hybrid decoding. (Default: 1)
+* `--cpu-stage-parallel` - How many chromosomes run their CPU steps (decoding, GFF export) at the same time.
+Decoding needs about 0.35 GB of RAM per Mb of chromosome, so several large chromosomes at once can run out of
+memory. `auto` runs as many as fit in the available RAM, at most one per GPU. Set a number to override.
+(Default: auto)
+* `--batch-size` `-b` - Inference batch size for GPU (Default is auto-scaled to GPU VRAM, at most 35)
 * `--gpus` `-g` - Comma-separated list of GPU IDs to use, or "all" to use all available GPUs (Default: 0)
 * `--launcher` - Custom entrypoint command to launch predict.py (e.g. 'srun python').
 If set, overrides automatic DDP/SLURM detection. Can also be set via LAUNCHER environment variable.
@@ -414,22 +414,33 @@ After running, the output directory contains:
 
 ```
 <OUTPUT_DIR>/
-├── <SPECIES_ID>_GeneCAD_raw.gff      ← all predicted gene models (pre-refinement)
-├── <SPECIES_ID>_GeneCAD_orf.gff      ← after ORF repair
-├── <SPECIES_ID>_GeneCAD_hybrid.gff   ← after hybrid decoding (--decoder hybrid only)
-├── <SPECIES_ID>_GeneCAD_final.gff    ← final, protein-validated annotations
-└── <CHR_ID>/                         ← per-chromosome intermediates (for debugging)
-    ├── predictions_filtered_<CHR_ID>.gff
+├── <SPECIES_ID>_GeneCAD_final.gff    ← the final annotation: use this file
+├── intermediate/                     ← for troubleshooting
+│   ├── <SPECIES_ID>_GeneCAD_raw.gff        all chromosomes merged, before ORF repair
+│   ├── <SPECIES_ID>_GeneCAD_orf.gff        after ORF repair (step 7)
+│   ├── <SPECIES_ID>_GeneCAD_orf_report.tsv ORF repair result per transcript
+│   └── <SPECIES_ID>_GeneCAD_hybrid.gff     after hybrid decoding (--decoder hybrid only)
+└── <CHR_ID>/                         ← per-chromosome intermediates
+    ├── predictions_<CHR_ID>/               the model's per-base predictions
+    ├── sequences_<CHR_ID>.zarr
+    ├── intervals_<CHR_ID>.zarr
     ├── predictions_raw_<CHR_ID>.gff
-    ├── sequences_Chr01.zarr
-    ├── predictions_Chr01.zarr
-    └── intervals_Chr01.zarr
+    └── predictions_filtered_<CHR_ID>.gff
 ```
+
+| File | What it is | Use it? |
+|---|---|---|
+| `<SPECIES_ID>_GeneCAD_final.gff` | Final gene models. With the default settings every transcript has a complete ORF. | **Yes** |
+| `intermediate/*_hybrid.gff` | Input to the last step (ReelProtein refinement) | No |
+| `intermediate/*_orf.gff` | After ORF repair; may still contain `partial=true` transcripts | No |
+| `intermediate/*_raw.gff` | Before ORF repair | No |
 
 > [!TIP]
 > GeneCAD intermediate files are typically several times larger than the input FASTA file
-> and can easily be 10s-100s Gb in total. We recommend deleting the intermediate .zarr files
-> after validating your final output GFFs.
+> and can easily be 10s-100s Gb in total. You can delete the intermediate .zarr files after
+> checking the final GFF. Keep the `predictions_<CHR_ID>/` folders if you may want to re-run
+> the CPU steps later (for example with another `--decoder`): with them, a re-run skips the
+> GPU prediction.
 
 ### Evaluate
 

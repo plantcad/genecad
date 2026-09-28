@@ -70,6 +70,12 @@ Options:
   -c, --cpu-workers N   CPU worker processes used in GFF export transcript grouping.
                                                 Uses an order-preserving map so outputs remain deterministic.
                                                 (default: 1)
+      --cpu-stage-parallel N|auto
+                                                How many chromosomes run their CPU stages (decoding, GFF
+                                                export) at the same time. Decoding needs about 0.35 GB of
+                                                RAM per Mb of chromosome, so several large chromosomes at
+                                                once can run out of memory. auto: as many as fit in the
+                                                available RAM, at most one per GPU. (default: auto)
   -b, --batch-size N    Inference batch size per GPU (default: auto — scaled to GPU VRAM)
   -g, --gpus LIST       Comma-separated GPU IDs to use, or 'all' for all available GPUs.
                         Chromosomes are distributed across GPUs in parallel.
@@ -83,7 +89,8 @@ Options:
   -h, --help            Show this help message
 
 Batch size auto-detection:
-  Starting guess = max(8, floor(free_gb × 0.90))
+  Starting guess = min(35, max(8, floor(free_gb × 0.90)))
+  The cap of 35 avoids a CUDA illegal-memory-access crash seen at larger batches on 80 GB H100s.
   nvidia-smi reports free memory *before* Python/model load, so the guess may overshoot.
   On CUDA OOM the worker reduces the batch by 20% and retries the missing windows
   without reloading the model. It stops if even one window cannot fit. Other errors
@@ -134,6 +141,7 @@ MIN_CODING_RUN_LENGTH="9"
 EXON_LENGTH_STRICTNESS="16"
 ALLOW_U12_INTRONS="0"
 CPU_WORKERS="1"
+CPU_STAGE_PARALLEL="auto"
 LAUNCHER_ARG="${LAUNCHER:-}"
 MODEL_CHECKPOINT_ARG=""
 BASE_MODEL_ARG=""
@@ -156,6 +164,7 @@ while [[ $# -gt 0 ]]; do
     --exon-length-strictness) EXON_LENGTH_STRICTNESS="$2"; shift 2 ;;
     --allow-u12-introns) ALLOW_U12_INTRONS="1"; shift ;;
     -c|--cpu-workers) CPU_WORKERS="$2"; shift 2 ;;
+    --cpu-stage-parallel) CPU_STAGE_PARALLEL="$2"; shift 2 ;;
     -b|--batch-size) BATCH_SIZE_ARG="$2"; shift 2 ;;
     -g|--gpus)       GPUS_ARG="$2";       shift 2 ;;
     --launcher)      LAUNCHER_ARG="$2";   shift 2 ;;
@@ -200,6 +209,11 @@ fi
 
 if ! [[ "$CPU_WORKERS" =~ ^[0-9]+$ ]] || [[ "$CPU_WORKERS" -lt 1 ]]; then
     echo "Error: --cpu-workers must be a positive integer."
+    exit 1
+fi
+
+if [[ "$CPU_STAGE_PARALLEL" != "auto" ]] && { ! [[ "$CPU_STAGE_PARALLEL" =~ ^[0-9]+$ ]] || [[ "$CPU_STAGE_PARALLEL" -lt 1 ]]; }; then
+    echo "Error: --cpu-stage-parallel must be a positive integer or 'auto'."
     exit 1
 fi
 
@@ -319,6 +333,10 @@ resolve_batch_size_for_gpu() {
     # before the prediction worker has to back off.
     local BS=$(( FREE_GB * 9 / 10 ))   # × 0.90
     [[ $BS -lt 8 ]] && BS=8
+    # Cap at 35 (what a 40 GB A100 gets). On 80 GB H100s the estimate is 71, and
+    # runs at 71 died on the first batch with "CUDA error: an illegal memory
+    # access", which the worker cannot recover from the way it does from OOM.
+    [[ $BS -gt 35 ]] && BS=35
     echo $BS
 }
 
@@ -721,6 +739,70 @@ while IFS= read -r chr; do
 done <<< "$CHROM_IDS"
 
 # =================================================================
+# How many chromosomes may run their CPU stages at once
+#
+# Decoding a chromosome holds its whole prediction in memory: about 0.35 GB
+# of RAM per Mb (measured on maize NAM: 0.31 GB/Mb frame-aware, 0.28 plain).
+# One chromosome per GPU at once overflows a 256 GB node for genomes with
+# several 250-300 Mb chromosomes, so by default only as many run as fit.
+# =================================================================
+
+# resolve_cpu_stage_parallel REQUESTED NUM_GPUS LARGEST_BP AVAILABLE_KB
+resolve_cpu_stage_parallel() {
+    if [[ "$1" != "auto" ]]; then
+        echo "$1"
+        return
+    fi
+    awk -v gpus="$2" -v bp="$3" -v kb="$4" 'BEGIN {
+        need = bp / 1e6 * 0.35 * 1048576
+        n = (need > 0) ? int(kb * 0.9 / need) : gpus
+        if (n > gpus) n = gpus
+        if (n < 1) n = 1
+        print n
+    }'
+}
+
+# Length of the longest sequence in the input FASTA, in bp.
+largest_sequence_bp() {
+    if [[ -f "$INPUT_FILE.fai" ]]; then
+        cut -f2 "$INPUT_FILE.fai" | sort -n | tail -1
+        return
+    fi
+    local cat_cmd=cat
+    [[ "$INPUT_FILE" == *.gz ]] && cat_cmd=zcat
+    $cat_cmd "$INPUT_FILE" | awk '/^>/ { if (n > max) max = n; n = 0; next }
+        { n += length($0) } END { if (n > max) max = n; print max + 0 }'
+}
+
+# Memory this job may use, in kB: MemAvailable, capped by cgroup and SLURM limits.
+available_memory_kb() {
+    local kb limit
+    kb=$(awk '/^MemAvailable:/ { print $2 }' /proc/meminfo)
+    limit=$(cat /sys/fs/cgroup/memory.max 2>/dev/null || true)
+    if [[ "$limit" =~ ^[0-9]+$ ]] && (( limit / 1024 < kb )); then
+        kb=$(( limit / 1024 ))
+    fi
+    if [[ "${SLURM_MEM_PER_NODE:-}" =~ ^[0-9]+$ ]] && (( SLURM_MEM_PER_NODE * 1024 < kb )); then
+        kb=$(( SLURM_MEM_PER_NODE * 1024 ))
+    fi
+    echo "$kb"
+}
+
+if [[ "$CPU_STAGE_PARALLEL" == "auto" && $NUM_GPUS -gt 1 ]]; then
+    LARGEST_BP=$(largest_sequence_bp)
+    AVAILABLE_KB=$(available_memory_kb)
+    CPU_STAGE_JOBS=$(resolve_cpu_stage_parallel auto "$NUM_GPUS" "$LARGEST_BP" "$AVAILABLE_KB")
+    echo "CPU stages: up to $CPU_STAGE_JOBS chromosome(s) at once" \
+        "(longest sequence $(( LARGEST_BP / 1000000 )) Mb, $(( AVAILABLE_KB / 1048576 )) GB RAM available)"
+    if (( LARGEST_BP / 1000000 * 35 / 100 > AVAILABLE_KB / 1048576 )); then
+        echo "WARNING: decoding the longest sequence may need more RAM than is available."
+    fi
+else
+    CPU_STAGE_JOBS=$(resolve_cpu_stage_parallel "$CPU_STAGE_PARALLEL" "$NUM_GPUS" 0 0)
+    [[ "$CPU_STAGE_PARALLEL" == "auto" ]] && CPU_STAGE_JOBS=1
+fi
+
+# =================================================================
 # Choose dispatch strategy
 #
 #   DDP  (torchrun)  — when chromosomes < GPUs:
@@ -787,15 +869,15 @@ if [[ "$PREDICT_MODE" == "ddp" || "$PREDICT_MODE" == "ddp_slurm" ]]; then
         process_chromosome "$CHR_ID" "$DDP_BATCH" "" || FAILED=$(( FAILED + 1 ))
     done
 else
-    # Per-GPU parallel — round-robin, NUM_GPUS concurrent jobs
+    # Per-GPU parallel — round-robin, at most CPU_STAGE_JOBS concurrent jobs
     declare -a PIDS=()
     chr_idx=0
     for CHR_ID in "${CHR_ARRAY[@]}"; do
         gpu_id="${GPU_ARRAY[$(( chr_idx % NUM_GPUS ))]}"
         bs="${GPU_BATCH_SIZES[$gpu_id]}"
 
-        # Wait for the oldest slot before launching, keeping exactly NUM_GPUS live jobs
-        if [[ ${#PIDS[@]} -ge $NUM_GPUS ]]; then
+        # Wait for the oldest slot before launching, keeping at most CPU_STAGE_JOBS live jobs
+        if [[ ${#PIDS[@]} -ge $CPU_STAGE_JOBS ]]; then
             if ! wait "${PIDS[0]}"; then
                 FAILED=$(( FAILED + 1 ))
             fi
@@ -831,8 +913,12 @@ echo "================================================================="
 echo "[6/8] Merging per-chromosome GFFs into single files..."
 echo "================================================================="
 
-RAW_GFF="$OUTPUT_DIR/${SPECIES_ID}_GeneCAD_raw.gff"
-ORF_GFF="$OUTPUT_DIR/${SPECIES_ID}_GeneCAD_orf.gff"
+# The final annotation is the only GFF at the top of OUTPUT_DIR; the files it is
+# built from are kept in intermediate/ for troubleshooting.
+INTERMEDIATE_DIR="$OUTPUT_DIR/intermediate"
+mkdir -p "$INTERMEDIATE_DIR"
+RAW_GFF="$INTERMEDIATE_DIR/${SPECIES_ID}_GeneCAD_raw.gff"
+ORF_GFF="$INTERMEDIATE_DIR/${SPECIES_ID}_GeneCAD_orf.gff"
 FINAL_GFF="$OUTPUT_DIR/${SPECIES_ID}_GeneCAD_final.gff"
 
 if [[ -f "$RAW_GFF" ]]; then
@@ -865,13 +951,13 @@ else
         --input-fasta "$INPUT_FILE" \
         --output-gff "$ORF_GFF" \
         --max-shift "$ORF_MAX_SHIFT" \
-        --report "$OUTPUT_DIR/${SPECIES_ID}_GeneCAD_orf_report.tsv" \
+        --report "$INTERMEDIATE_DIR/${SPECIES_ID}_GeneCAD_orf_report.tsv" \
         "${DROP_PARTIAL_ARGS[@]}"
 fi
 
 REFINE_INPUT_GFF="$ORF_GFF"
 if [[ "$DECODER" == "hybrid" ]]; then
-    HYBRID_GFF="$OUTPUT_DIR/${SPECIES_ID}_GeneCAD_hybrid.gff"
+    HYBRID_GFF="$INTERMEDIATE_DIR/${SPECIES_ID}_GeneCAD_hybrid.gff"
     echo ""
     echo "[7/8] Hybrid decoding: rescuing partial and merging split genes..."
     if [[ -f "$HYBRID_GFF" ]]; then
@@ -917,8 +1003,11 @@ fi
 
 echo ""
 echo "================================================================="
-echo "All done! Final predictions saved to:"
-echo "Raw:   $RAW_GFF"
-echo "ORF:   $ORF_GFF"
-echo "Final: $FINAL_GFF"
+echo "All done!"
+echo ""
+echo "Final annotation (use this file):"
+echo "  $FINAL_GFF"
+echo ""
+echo "Intermediate files, for troubleshooting only:"
+echo "  $INTERMEDIATE_DIR/"
 echo "================================================================="
