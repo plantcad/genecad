@@ -1,6 +1,7 @@
 import importlib.util
 import sys
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -16,6 +17,13 @@ from src.tests.segment_test_support import (
 
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 LENGTH = 60_000
+DECODING: dict[str, Any] = {
+    "decode_direct": False,
+    "viterbi_alpha": None,
+    "intergenic_bias": 0.0,
+    "domain": "plant",
+    "remove_incomplete_features": True,
+}
 
 
 def load_script(name):
@@ -65,16 +73,10 @@ def logits():
 
 
 def decode(root, **options):
-    settings = dict(
-        decode_direct=False,
-        viterbi_alpha=None,
-        intergenic_bias=0.0,
-        domain="plant",
-        remove_incomplete_features=True,
-    )
-    settings.update(options)
     output = root / "intervals.zarr"
-    detect.detect_intervals(input_dir=str(root), output=str(output), **settings)
+    detect.detect_intervals(
+        input_dir=str(root), output=str(output), **{**DECODING, **options}
+    )
     return output
 
 
@@ -84,18 +86,10 @@ def intervals(zarr):
 
 
 def in_memory_intervals(root, **options):
-    settings = dict(
-        decode_direct=False,
-        viterbi_alpha=None,
-        intergenic_bias=0.0,
-        domain="plant",
-        remove_incomplete_features=True,
-    )
-    settings.update(options)
     predictions = detect.merge_prediction_datasets(
         str(root), drop_variables=["token_predictions", "token_logits"]
     )
-    return detect._detect_intervals(predictions=predictions, **settings)
+    return detect._detect_intervals(predictions=predictions, **{**DECODING, **options})
 
 
 @pytest.mark.parametrize("segment_length", [257, LENGTH])
