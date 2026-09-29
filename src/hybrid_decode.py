@@ -332,17 +332,23 @@ def process_sequence(
     prediction store.  ``graph_options`` are FrameStateGraph parameters, plus
     ``allow_u12_introns``.  Returns ``(seqid, genes, stats)``."""
     from src.modeling import GeneClassifierConfig, token_transition_probs
-    from src.prediction import merge_prediction_datasets
+    from src.prediction import merge_prediction_datasets, open_segments
 
     codes = load_chromosome_codes(input_fasta, seqid)
-    ds = merge_prediction_datasets(
-        predictions_dir, drop_variables=["token_predictions", "token_logits"]
-    )
     names = GeneClassifierConfig().token_entity_names_with_background()
-    logits = ds["feature_logits"].sel(feature=names)
-    if logits.sizes["sequence"] != len(codes):
+    segments = open_segments(predictions_dir)
+    if segments is None:
+        # Legacy rank stores cannot be read piecewise
+        ds = merge_prediction_datasets(
+            predictions_dir, drop_variables=["token_predictions", "token_logits"]
+        )
+        logits = ds["feature_logits"].sel(feature=names)
+        n_positions = logits.sizes["sequence"]
+    else:
+        n_positions = segments.length
+    if n_positions != len(codes):
         raise ValueError(
-            f"Sequence {seqid!r} has {len(codes)} bases but {logits.sizes['sequence']} "
+            f"Sequence {seqid!r} has {len(codes)} bases but {n_positions} "
             f"positions were predicted; hybrid decoding requires the FASTA used for prediction"
         )
     transition = token_transition_probs(remove_incomplete_features=True, domain=domain)
@@ -352,7 +358,10 @@ def process_sequence(
         )
 
     def window(strand: str, lo: int, hi: int):
-        s = logits.sel(strand="positive" if strand == "+" else "negative")
+        name = "positive" if strand == "+" else "negative"
+        if segments is not None:
+            return segments.window(name, lo, hi, names)
+        s = logits.sel(strand=name)
         return s.isel(sequence=slice(lo, hi)).transpose("sequence", "feature").values
 
     options = dict(graph_options or {})

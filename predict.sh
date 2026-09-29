@@ -72,8 +72,9 @@ Options:
                                                 (default: 1)
       --cpu-stage-parallel N|auto
                                                 How many chromosomes run their CPU stages (decoding, GFF
-                                                export) at the same time. Decoding needs about 0.35 GB of
-                                                RAM per Mb of chromosome, so several large chromosomes at
+                                                export) at the same time. Frame-aware decoding needs about
+                                                0.35 GB of RAM per Mb of chromosome and plain or hybrid
+                                                decoding about 0.05 GB, so several large chromosomes at
                                                 once can run out of memory. auto: as many as fit in the
                                                 available RAM, at most one per GPU. (default: auto)
   -b, --batch-size N    Inference batch size per GPU (default: auto — scaled to GPU VRAM)
@@ -741,20 +742,22 @@ done <<< "$CHROM_IDS"
 # =================================================================
 # How many chromosomes may run their CPU stages at once
 #
-# Decoding a chromosome holds its whole prediction in memory: about 0.35 GB
-# of RAM per Mb (measured on maize NAM: 0.31 GB/Mb frame-aware, 0.28 plain).
-# One chromosome per GPU at once overflows a 256 GB node for genomes with
-# several 250-300 Mb chromosomes, so by default only as many run as fit.
+# Frame-aware decoding holds a chromosome's whole prediction in memory: about
+# 0.35 GB of RAM per Mb (measured on maize NAM: 0.31 GB/Mb). Plain and hybrid
+# decoding read the prediction segment by segment and need about 0.035 GB/Mb
+# (48 GB for the 1.37 Gb chromosome 5 of Vicia faba); 0.05 is assumed. One
+# chromosome per GPU at once can overflow a node for genomes with several large
+# chromosomes, so by default only as many run as fit.
 # =================================================================
 
-# resolve_cpu_stage_parallel REQUESTED NUM_GPUS LARGEST_BP AVAILABLE_KB
+# resolve_cpu_stage_parallel REQUESTED NUM_GPUS LARGEST_BP AVAILABLE_KB [GB_PER_MB]
 resolve_cpu_stage_parallel() {
     if [[ "$1" != "auto" ]]; then
         echo "$1"
         return
     fi
-    awk -v gpus="$2" -v bp="$3" -v kb="$4" 'BEGIN {
-        need = bp / 1e6 * 0.35 * 1048576
+    awk -v gpus="$2" -v bp="$3" -v kb="$4" -v per_mb="${5:-0.35}" 'BEGIN {
+        need = bp / 1e6 * per_mb * 1048576
         n = (need > 0) ? int(kb * 0.9 / need) : gpus
         if (n > gpus) n = gpus
         if (n < 1) n = 1
@@ -788,13 +791,20 @@ available_memory_kb() {
     echo "$kb"
 }
 
+if [[ "$DECODER" == "frame-aware" ]]; then
+    DECODE_GB_PER_MB="0.35"
+else
+    DECODE_GB_PER_MB="0.05"
+fi
+
 if [[ "$CPU_STAGE_PARALLEL" == "auto" && $NUM_GPUS -gt 1 ]]; then
     LARGEST_BP=$(largest_sequence_bp)
     AVAILABLE_KB=$(available_memory_kb)
-    CPU_STAGE_JOBS=$(resolve_cpu_stage_parallel auto "$NUM_GPUS" "$LARGEST_BP" "$AVAILABLE_KB")
+    CPU_STAGE_JOBS=$(resolve_cpu_stage_parallel auto "$NUM_GPUS" "$LARGEST_BP" "$AVAILABLE_KB" "$DECODE_GB_PER_MB")
     echo "CPU stages: up to $CPU_STAGE_JOBS chromosome(s) at once" \
         "(longest sequence $(( LARGEST_BP / 1000000 )) Mb, $(( AVAILABLE_KB / 1048576 )) GB RAM available)"
-    if (( LARGEST_BP / 1000000 * 35 / 100 > AVAILABLE_KB / 1048576 )); then
+    if awk -v bp="$LARGEST_BP" -v kb="$AVAILABLE_KB" -v per_mb="$DECODE_GB_PER_MB" \
+        'BEGIN { exit !(bp / 1e6 * per_mb * 1048576 > kb) }'; then
         echo "WARNING: decoding the longest sequence may need more RAM than is available."
     fi
 else

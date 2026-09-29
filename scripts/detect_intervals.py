@@ -6,6 +6,7 @@ from src.sequence import (
     convert_entity_labels_to_intervals,
     regularize_transition_matrix,
     viterbi_decode,
+    viterbi_decode_blocks,
 )
 from src.frame_crf import (
     AT_AC,
@@ -23,7 +24,11 @@ import torch
 import torch.nn.functional as F
 import numpy as np
 import xarray as xr
-from src.prediction import merge_prediction_datasets
+from src.prediction import (
+    SegmentedPredictions,
+    merge_prediction_datasets,
+    open_segments,
+)
 from src.modeling import GeneClassifierConfig, token_transition_probs
 import pandas as pd
 import torch._dynamo
@@ -36,6 +41,44 @@ logger = logging.getLogger(__name__)
 def flip(sequence: npt.ArrayLike) -> npt.ArrayLike:
     """Reverse a sequence along its first axis."""
     return np.flip(sequence, axis=0)
+
+
+def _transition_matrix(
+    config: GeneClassifierConfig, domain: str, remove_incomplete_features: bool
+) -> np.ndarray:
+    """Transition probabilities between the token entities used for Viterbi decoding."""
+    transition_probs = token_transition_probs(
+        remove_incomplete_features=remove_incomplete_features,
+        domain=domain,
+    )
+    if transition_probs.columns.tolist() != config.token_entity_names_with_background():
+        raise ValueError(
+            f"Transition probability classes must match token entity names; expected: {config.token_entity_names_with_background()}, got: {transition_probs.columns.tolist()}"
+        )
+    assert transition_probs.index.tolist() == transition_probs.columns.tolist()
+    return transition_probs.values
+
+
+def _intervals_dataset(
+    region_intervals: list[pd.DataFrame], config: GeneClassifierConfig
+) -> xr.Dataset:
+    """Combine the intervals found on each strand into one dataset."""
+    region_intervals = pd.concat(region_intervals, ignore_index=True, axis=0)
+    region_name_map = {
+        i: config.interval_entity_name(i) for i in region_intervals["entity"].unique()
+    }
+    region_intervals = (
+        region_intervals.rename(columns={"entity": "entity_index"})
+        .assign(entity_name=lambda df: df["entity_index"].map(region_name_map))
+        .rename_axis("interval", axis="index")
+    )
+    logger.info(f"Region intervals detected:\n{region_intervals}")
+    logger.info("Region interval info:\n")
+    region_intervals.info()
+    region_intervals = region_intervals.to_xarray().assign_attrs(
+        interval_entity_names=config.interval_entity_names
+    )
+    return region_intervals
 
 
 def _detect_intervals(
@@ -80,23 +123,11 @@ def _detect_intervals(
         remove_incomplete_features: bool,
         strand_base_codes: np.ndarray | None = None,
     ) -> np.ndarray:
-        transition_probs = token_transition_probs(
-            remove_incomplete_features=remove_incomplete_features,
-            domain=domain,
-        )
-        if (
-            transition_probs.columns.tolist()
-            != config.token_entity_names_with_background()
-        ):
-            raise ValueError(
-                f"Transition probability classes must match token entity names; expected: {config.token_entity_names_with_background()}, got: {transition_probs.columns.tolist()}"
-            )
+        matrix = _transition_matrix(config, domain, remove_incomplete_features)
         emissions = F.softmax(torch.from_numpy(logits), dim=-1).numpy()
         assert emissions.min() >= 0 and emissions.max() <= 1
-        assert transition_probs.index.tolist() == transition_probs.columns.tolist()
 
         alpha = viterbi_alpha
-        matrix = transition_probs.values
         if strand_base_codes is not None:
             # Regularization has to be applied to the 5x5 feature matrix before
             # it is expanded: smoothing the expanded matrix would fill in the
@@ -179,22 +210,65 @@ def _detect_intervals(
             )
             region_intervals.append(intervals.assign(strand=strand, decoding="viterbi"))
 
-    region_intervals = pd.concat(region_intervals, ignore_index=True, axis=0)
-    region_name_map = {
-        i: config.interval_entity_name(i) for i in region_intervals["entity"].unique()
-    }
-    region_intervals = (
-        region_intervals.rename(columns={"entity": "entity_index"})
-        .assign(entity_name=lambda df: df["entity_index"].map(region_name_map))
-        .rename_axis("interval", axis="index")
-    )
-    logger.info(f"Region intervals detected:\n{region_intervals}")
-    logger.info("Region interval info:\n")
-    region_intervals.info()
-    region_intervals = region_intervals.to_xarray().assign_attrs(
-        interval_entity_names=config.interval_entity_names
-    )
-    return region_intervals
+    return _intervals_dataset(region_intervals, config)
+
+
+def _detect_intervals_streaming(
+    predictions: SegmentedPredictions,
+    viterbi_alpha: float | None,
+    intergenic_bias: float,
+    domain: str,
+    remove_incomplete_features: bool,
+) -> xr.Dataset:
+    """Infer genomic intervals with Viterbi decoding, one prediction segment at a time.
+
+    Finds the same intervals as `_detect_intervals` does for the merged predictions.
+    The decoder carries its state from one segment to the next and backtracks once
+    per strand, so a gene that spans several segments is not split.
+
+    Parameters
+    ----------
+    predictions : SegmentedPredictions
+        Feature logits of both strands, read from disk as needed.
+
+    Returns
+    -------
+    xr.Dataset
+        Dataset containing inferred region intervals.
+    """
+    logger.info("Inferring regions from predicted labels")
+
+    config = GeneClassifierConfig()
+    matrix = _transition_matrix(config, domain, remove_incomplete_features)
+    intergenic = predictions.features.index("intergenic")
+
+    logger.info(f"Using intergenic bias: {intergenic_bias}")
+
+    def emissions(strand: str):
+        # The minus strand is decoded on the reversed logit array
+        for block in predictions.blocks(strand, reverse=(strand == "negative")):
+            logits = block.copy()
+            logits[:, intergenic] -= intergenic_bias
+            probs = F.softmax(torch.from_numpy(logits), dim=-1).numpy()
+            assert probs.min() >= 0 and probs.max() <= 1
+            yield probs
+
+    region_intervals = []
+    for strand in ("positive", "negative"):
+        logger.info(
+            f"Running viterbi decoding for {strand!r} strand ({viterbi_alpha=})"
+        )
+        labels = viterbi_decode_blocks(
+            emissions(strand), predictions.length, matrix, alpha=viterbi_alpha
+        )
+        if strand == "negative":
+            labels = flip(labels)
+        intervals = convert_entity_labels_to_intervals(
+            labels=labels, class_groups=config.interval_entity_classes
+        )
+        region_intervals.append(intervals.assign(strand=strand, decoding="viterbi"))
+
+    return _intervals_dataset(region_intervals, config)
 
 
 def detect_intervals(
@@ -211,6 +285,7 @@ def detect_intervals(
     min_coding_run_length: int = DEFAULT_MIN_CODING_RUN_LENGTH,
     exon_length_strictness: float = DEFAULT_EXON_LENGTH_STRICTNESS,
     include_utr_in_coding_run: bool = True,
+    save_sequences: bool = False,
 ):
     """Aggregate rank outputs and decode genomic intervals from logits.
 
@@ -219,57 +294,75 @@ def detect_intervals(
     args : argparse.Namespace
         Command-line arguments where ``args.input_dir`` points to
         committed prediction segments (or legacy ``predictions.*.zarr`` rank stores).
+    save_sequences : bool
+        Also save the predictions under ``/sequences``. Without it, plain Viterbi
+        decoding reads the segments one at a time instead of loading the chromosome.
     """
     logger.info(
         f"Detecting intervals from rank files in {input_dir} and saving to {output}"
     )
 
-    # Merge predictions from all ranks
-    sequence_predictions = merge_prediction_datasets(
-        input_dir,
-        drop_variables=["token_predictions", "token_logits"],
-    )
+    # Plain Viterbi decoding needs only one segment at a time. Frame-aware and direct
+    # decoding, and saving the predictions, work on the whole chromosome instead.
+    segments = None
+    if not (save_sequences or decode_direct or input_fasta is not None):
+        segments = open_segments(input_dir)
 
-    base_codes = None
-    if input_fasta is not None:
-        chromosome_id = sequence_predictions.attrs["chromosome_id"]
-        base_codes = load_chromosome_codes(input_fasta, chromosome_id)
-        n_positions = sequence_predictions.sizes["sequence"]
-        if len(base_codes) != n_positions:
-            raise ValueError(
-                f"Sequence {chromosome_id!r} has {len(base_codes)} bases but "
-                f"{n_positions} positions were predicted; frame-aware decoding "
-                f"requires the FASTA used for prediction"
-            )
+    saved = {}
+    if segments is not None:
+        logger.info("Detecting intervals")
+        interval_predictions = _detect_intervals_streaming(
+            predictions=segments,
+            viterbi_alpha=viterbi_alpha,
+            intergenic_bias=intergenic_bias,
+            domain=domain,
+            remove_incomplete_features=remove_incomplete_features,
+        )
+        interval_predictions = interval_predictions.assign_attrs(**segments.attrs)
+    else:
+        # Merge predictions from all ranks
+        sequence_predictions = merge_prediction_datasets(
+            input_dir,
+            drop_variables=["token_predictions", "token_logits"],
+        )
 
-    logger.info("Detecting intervals")
-    interval_predictions = _detect_intervals(
-        predictions=sequence_predictions,
-        decode_direct=decode_direct,
-        viterbi_alpha=viterbi_alpha,
-        intergenic_bias=intergenic_bias,
-        domain=domain,
-        remove_incomplete_features=remove_incomplete_features,
-        base_codes=base_codes,
-        min_intron_length=min_intron_length,
-        splice_motif_groups=splice_motif_groups,
-        min_coding_run_length=min_coding_run_length,
-        exon_length_strictness=exon_length_strictness,
-        include_utr_in_coding_run=include_utr_in_coding_run,
-    )
-    interval_predictions = interval_predictions.assign_attrs(
-        # Copy attributes from sequence predictions, which have
-        # been carried along from the original fasta extraction
-        **sequence_predictions.attrs
-    )
+        base_codes = None
+        if input_fasta is not None:
+            chromosome_id = sequence_predictions.attrs["chromosome_id"]
+            base_codes = load_chromosome_codes(input_fasta, chromosome_id)
+            n_positions = sequence_predictions.sizes["sequence"]
+            if len(base_codes) != n_positions:
+                raise ValueError(
+                    f"Sequence {chromosome_id!r} has {len(base_codes)} bases but "
+                    f"{n_positions} positions were predicted; frame-aware decoding "
+                    f"requires the FASTA used for prediction"
+                )
+
+        logger.info("Detecting intervals")
+        interval_predictions = _detect_intervals(
+            predictions=sequence_predictions,
+            decode_direct=decode_direct,
+            viterbi_alpha=viterbi_alpha,
+            intergenic_bias=intergenic_bias,
+            domain=domain,
+            remove_incomplete_features=remove_incomplete_features,
+            base_codes=base_codes,
+            min_intron_length=min_intron_length,
+            splice_motif_groups=splice_motif_groups,
+            min_coding_run_length=min_coding_run_length,
+            exon_length_strictness=exon_length_strictness,
+            include_utr_in_coding_run=include_utr_in_coding_run,
+        )
+        interval_predictions = interval_predictions.assign_attrs(
+            # Copy attributes from sequence predictions, which have
+            # been carried along from the original fasta extraction
+            **sequence_predictions.attrs
+        )
+        if save_sequences:
+            saved["/sequences"] = sequence_predictions
 
     logger.info("Merging sequence and interval predictions")
-    result = xr.DataTree.from_dict(
-        {
-            "/sequences": sequence_predictions,
-            "/intervals": interval_predictions,
-        }
-    )
+    result = xr.DataTree.from_dict({**saved, "/intervals": interval_predictions})
 
     logger.info(f"Final results:\n{result}")
 
@@ -406,6 +499,15 @@ def main():
         "doubles the intron state count. Ignored unless --input-fasta is set.",
     )
 
+    parser.add_argument(
+        "--save-sequences",
+        action="store_true",
+        help="Also save the predictions the intervals were decoded from, under "
+        "/sequences in the output zarr. Nothing in the pipeline reads them, and "
+        "saving them needs memory for the whole chromosome; without this option "
+        "plain Viterbi decoding reads the predictions one segment at a time.",
+    )
+
     args = parser.parse_args()
     splice_motif_groups = (
         (GT_AG, AT_AC) if args.allow_u12_introns else DEFAULT_SPLICE_MOTIF_GROUPS
@@ -433,6 +535,7 @@ def main():
             min_coding_run_length=args.min_coding_run_length,
             exon_length_strictness=args.exon_length_strictness,
             include_utr_in_coding_run=args.include_utr_in_coding_run,
+            save_sequences=args.save_sequences,
         )
     else:
         with open(args.manifest) as fh:
@@ -459,6 +562,7 @@ def main():
                 min_coding_run_length=args.min_coding_run_length,
                 exon_length_strictness=args.exon_length_strictness,
                 include_utr_in_coding_run=args.include_utr_in_coding_run,
+                save_sequences=args.save_sequences,
             )
 
 

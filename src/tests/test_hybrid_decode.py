@@ -10,6 +10,7 @@ from src import frame_crf as fh
 pytest.importorskip("torch")
 from src import hybrid_decode as hd  # noqa: E402
 from src.modeling import token_transition_probs  # noqa: E402
+from src.tests.segment_test_support import write_segments  # noqa: E402
 
 IG, IN, U5, CDS, U3 = range(5)
 
@@ -494,6 +495,59 @@ def test_cli_rescues_a_partial_gene_and_passes_other_sequences_through(
         "chr2\tGeneCAD\tCDS\t11\t40\t.\t+\t0\tParent=chr2_gene_1.t1"
         in (tmp_path / "out.gff").read_text()
     )
+
+
+def write_segmented_predictions(root, chrom, labels, segment_length):
+    """The same logits as write_predictions, in the layout the predict step writes."""
+    logits = {
+        "positive": np.log(emissions(labels)).astype(np.float32),
+        "negative": np.log(emissions(np.full(len(labels), IG))).astype(np.float32),
+    }
+    write_segments(root / chrom / f"predictions_{chrom}", logits, segment_length, chrom)
+
+
+@pytest.mark.parametrize("segment_length", [64, 1000, 10_000])
+def test_cli_result_does_not_depend_on_how_predictions_are_stored(
+    tmp_path, monkeypatch, segment_length
+):
+    sequence, labels = build_locus()
+    (tmp_path / "genome.fa").write_text(f">chr1\n{sequence}\n")
+    (tmp_path / "in.gff").write_text(
+        "##gff-version 3\n"
+        "chr1\tGeneCAD\tgene\t2201\t2490\t.\t+\t.\tID=chr1_gene_1;partial=true\n"
+        "chr1\tGeneCAD\tmRNA\t2201\t2490\t.\t+\t.\tID=chr1_gene_1.t1;Parent=chr1_gene_1;partial=true\n"
+        "chr1\tGeneCAD\tCDS\t2201\t2490\t.\t+\t0\tParent=chr1_gene_1.t1\n"
+    )
+    ranks, segments = tmp_path / "ranks", tmp_path / "segments"
+    write_predictions(ranks, "chr1", labels)
+    write_segmented_predictions(segments, "chr1", labels, segment_length)
+
+    script = load_script()
+    results = {}
+    for name, root in [("ranks", ranks), ("segments", segments)]:
+        output = tmp_path / f"{name}.gff"
+        monkeypatch.setattr(
+            "sys.argv",
+            [
+                "hybrid_decode.py",
+                "--input-gff",
+                str(tmp_path / "in.gff"),
+                "--input-fasta",
+                str(tmp_path / "genome.fa"),
+                "--predictions-root",
+                str(root),
+                "--output-gff",
+                str(output),
+            ],
+        )
+        script.main()
+        results[name] = output.read_text()
+
+    assert results["segments"] == results["ranks"]
+    _, by_seqid = hd.read_genes(str(tmp_path / "segments.gff"))
+    (rescued,) = by_seqid["chr1"]
+    assert rescued.feats == PLUS_GENE
+    assert not rescued.partial
 
 
 def test_cli_decoding_options_reach_the_frame_aware_graph(tmp_path, monkeypatch):
