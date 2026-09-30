@@ -82,7 +82,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import NamedTuple
+from typing import Iterable, Iterator, NamedTuple
 
 import numpy as np
 from numba import njit
@@ -1027,6 +1027,17 @@ def encode_sequence(sequence: str) -> np.ndarray:
     return _BASE_LOOKUP[raw]
 
 
+def _encode_record(
+    chromosome_id: str, chunks: list[str], fasta_path: str
+) -> np.ndarray:
+    """Encode the lines of one FASTA record as base codes."""
+    logger.info(
+        f"Loaded sequence {chromosome_id!r} ({sum(len(c) for c in chunks)} bp) "
+        f"from {fasta_path}"
+    )
+    return encode_sequence("".join(chunks))
+
+
 def load_chromosome_codes(fasta_path: str, chromosome_id: str) -> np.ndarray:
     """Read one chromosome from a FASTA file and encode it as base codes.
 
@@ -1049,11 +1060,53 @@ def load_chromosome_codes(fasta_path: str, chromosome_id: str) -> np.ndarray:
                 chunks.append(line.strip())
     if not chunks:
         raise ValueError(f"Sequence {chromosome_id!r} not found in {fasta_path}")
-    logger.info(
-        f"Loaded sequence {chromosome_id!r} ({sum(len(c) for c in chunks)} bp) "
-        f"from {fasta_path}"
-    )
-    return encode_sequence("".join(chunks))
+    return _encode_record(chromosome_id, chunks, fasta_path)
+
+
+def iter_chromosome_codes(
+    fasta_path: str, chromosome_ids: Iterable[str]
+) -> Iterator[tuple[str, np.ndarray]]:
+    """Read several chromosomes from a FASTA file in a single pass.
+
+    Yields ``(chromosome_id, codes)`` in the order the records appear in the
+    file, each exactly as `load_chromosome_codes` returns it. Calling that
+    function once per chromosome reads the file from the start every time, which
+    is very slow for an assembly with thousands of sequences.
+    """
+    import gzip
+
+    wanted = set(chromosome_ids)
+    seen: set[str] = set()
+    loaded: set[str] = set()
+    opener = gzip.open if fasta_path.endswith(".gz") else open
+    if wanted:
+        with opener(fasta_path, "rt") as fh:  # pyrefly: ignore[bad-argument-type]
+            current: str | None = None
+            collecting = False
+            chunks: list[str] = []
+            for line in fh:
+                if line.startswith(">"):
+                    if collecting and chunks:
+                        assert current is not None
+                        yield current, _encode_record(current, chunks, fasta_path)
+                        loaded.add(current)
+                        if loaded == wanted:
+                            return
+                    current = line[1:].strip().split()[0]
+                    # Like load_chromosome_codes, only the first record of a name counts
+                    collecting = current in wanted and current not in seen
+                    if collecting:
+                        seen.add(current)
+                    chunks = []
+                elif collecting:
+                    chunks.append(line.strip())
+            if collecting and chunks:
+                assert current is not None
+                yield current, _encode_record(current, chunks, fasta_path)
+                loaded.add(current)
+    missing = wanted - loaded
+    if missing:
+        raise ValueError(f"Sequence {min(missing)!r} not found in {fasta_path}")
 
 
 def reverse_complement_codes(codes: np.ndarray) -> np.ndarray:

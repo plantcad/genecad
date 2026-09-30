@@ -550,6 +550,84 @@ def test_cli_result_does_not_depend_on_how_predictions_are_stored(
     assert not rescued.partial
 
 
+def partial_gene_gff(chroms):
+    lines = ["##gff-version 3"]
+    for chrom in chroms:
+        gene = f"{chrom}_gene_1"
+        lines += [
+            f"{chrom}\tGeneCAD\tgene\t2201\t2490\t.\t+\t.\tID={gene};partial=true",
+            f"{chrom}\tGeneCAD\tmRNA\t2201\t2490\t.\t+\t.\tID={gene}.t1;Parent={gene};partial=true",
+            f"{chrom}\tGeneCAD\tCDS\t2201\t2490\t.\t+\t0\tParent={gene}.t1",
+        ]
+    return "\n".join(lines) + "\n"
+
+
+def run_hybrid(script, monkeypatch, tmp_path, output, workers):
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "hybrid_decode.py",
+            "--input-gff",
+            str(tmp_path / "in.gff"),
+            "--input-fasta",
+            str(tmp_path / "genome.fa"),
+            "--predictions-root",
+            str(tmp_path),
+            "--output-gff",
+            str(output),
+            "--workers",
+            str(workers),
+        ],
+    )
+    script.main()
+    return output.read_text()
+
+
+def test_cli_reads_a_fasta_with_many_sequences_once_and_repairs_them_all(
+    tmp_path, monkeypatch
+):
+    # More sequences than the workers read ahead, listed in the FASTA in the
+    # reverse of the order of the GFF, with a record that has no genes at all
+    sequence, labels = build_locus()
+    chroms = [f"chr{i}" for i in range(1, 8)]
+    records = [f">{name}\n{sequence}\n" for name in reversed(chroms)]
+    records.insert(3, ">unannotated\nACGTACGT\n")
+    (tmp_path / "genome.fa").write_text("".join(records))
+    (tmp_path / "in.gff").write_text(partial_gene_gff(chroms))
+    for name in chroms:
+        write_predictions(tmp_path, name, labels)
+
+    script = load_script()
+    outputs = {
+        workers: run_hybrid(
+            script, monkeypatch, tmp_path, tmp_path / f"out{workers}.gff", workers
+        )
+        for workers in (1, 2, 3)
+    }
+    assert outputs[2] == outputs[1]
+    assert outputs[3] == outputs[1]
+
+    _, by_seqid = hd.read_genes(str(tmp_path / "out1.gff"))
+    assert list(by_seqid) == chroms
+    for name in chroms:
+        (rescued,) = by_seqid[name]
+        assert rescued.feats == PLUS_GENE
+        assert not rescued.partial
+
+
+def test_cli_stops_when_a_sequence_with_predictions_is_not_in_the_fasta(
+    tmp_path, monkeypatch
+):
+    sequence, labels = build_locus()
+    (tmp_path / "genome.fa").write_text(f">chr1\n{sequence}\n")
+    (tmp_path / "in.gff").write_text(partial_gene_gff(["chr1", "chr2"]))
+    for name in ("chr1", "chr2"):
+        write_predictions(tmp_path, name, labels)
+
+    with pytest.raises(ValueError, match="'chr2' not found"):
+        run_hybrid(load_script(), monkeypatch, tmp_path, tmp_path / "out.gff", 1)
+
+
 def test_cli_decoding_options_reach_the_frame_aware_graph(tmp_path, monkeypatch):
     """The synthetic gene's intron is 200 nt, so requiring 300 nt introns must
     stop the rescue from rebuilding it."""

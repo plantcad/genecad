@@ -24,16 +24,64 @@ import multiprocessing
 import os
 import sys
 from collections import Counter
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait
 
 from src import hybrid_decode as hd
 from src.frame_crf import (
     DEFAULT_EXON_LENGTH_STRICTNESS,
     DEFAULT_MIN_CODING_RUN_LENGTH,
     DEFAULT_MIN_INTRON_LENGTH,
+    iter_chromosome_codes,
 )
 
 logger = logging.getLogger(__name__)
+
+
+def decode_sequences(jobs, input_fasta, options, workers):
+    """Run `process_sequence` for each job, returning its result by sequence name.
+
+    The FASTA is read once, in file order, and each sequence is handed to a worker
+    together with its bases. Letting every worker find its own sequence would read the
+    file from the start once per sequence. At most two sequences per worker are read
+    ahead, which bounds the memory they take.
+    """
+    wanted = {seqid: (genes, pdir) for seqid, genes, pdir in jobs}
+    results = {}
+    if workers <= 1:
+        for seqid, codes in iter_chromosome_codes(input_fasta, wanted):
+            genes, pdir = wanted[seqid]
+            results[seqid] = hd.process_sequence(
+                seqid, genes, input_fasta, pdir, *options, codes=codes
+            )
+        return results
+
+    def collect(done):
+        for future in done:
+            seqid, genes, stats = future.result()
+            results[seqid] = (seqid, genes, stats)
+
+    # spawn, not fork: the parent is already multi-threaded (torch, numba).
+    context = multiprocessing.get_context("spawn")
+    with ProcessPoolExecutor(max_workers=workers, mp_context=context) as pool:
+        pending = set()
+        for seqid, codes in iter_chromosome_codes(input_fasta, wanted):
+            genes, pdir = wanted[seqid]
+            pending.add(
+                pool.submit(
+                    hd.process_sequence,
+                    seqid,
+                    genes,
+                    input_fasta,
+                    pdir,
+                    *options,
+                    codes=codes,
+                )
+            )
+            if len(pending) >= 2 * workers:
+                done, pending = wait(pending, return_when=FIRST_COMPLETED)
+                collect(done)
+        collect(wait(pending).done)
+    return results
 
 
 def main() -> None:
@@ -132,18 +180,10 @@ def main() -> None:
         args.keep_partial,
         graph_options,
     )
-    calls = [
-        (seqid, genes, args.input_fasta, pdir, *options) for seqid, genes, pdir in jobs
-    ]
-    if args.workers > 1:
-        # spawn, not fork: the parent is already multi-threaded (torch, numba).
-        context = multiprocessing.get_context("spawn")
-        with ProcessPoolExecutor(max_workers=args.workers, mp_context=context) as pool:
-            results = list(pool.map(hd.process_sequence, *zip(*calls))) if calls else []
-    else:
-        results = [hd.process_sequence(*call) for call in calls]
+    results = decode_sequences(jobs, args.input_fasta, options, args.workers)
     totals: Counter = Counter()
-    for seqid, genes, stats in results:
+    for seqid, _, _ in jobs:
+        _, genes, stats = results[seqid]
         by_seqid[seqid] = genes
         totals.update(stats)
 

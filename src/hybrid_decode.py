@@ -327,14 +327,18 @@ def process_sequence(
     min_cds: int,
     keep_partial: bool,
     graph_options: dict | None = None,
+    *,
+    codes: np.ndarray | None = None,
 ) -> tuple[str, list[Gene], Counter]:
     """Rescue then merge the genes of one sequence, reading its FASTA record and
     prediction store.  ``graph_options`` are FrameStateGraph parameters, plus
-    ``allow_u12_introns``.  Returns ``(seqid, genes, stats)``."""
+    ``allow_u12_introns``.  ``codes`` are the encoded bases of the sequence, read
+    from the FASTA if not given.  Returns ``(seqid, genes, stats)``."""
     from src.modeling import GeneClassifierConfig, token_transition_probs
     from src.prediction import merge_prediction_datasets, open_segments
 
-    codes = load_chromosome_codes(input_fasta, seqid)
+    if codes is None:
+        codes = load_chromosome_codes(input_fasta, seqid)
     names = GeneClassifierConfig().token_entity_names_with_background()
     segments = open_segments(predictions_dir)
     if segments is None:
