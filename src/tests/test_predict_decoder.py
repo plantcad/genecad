@@ -42,6 +42,14 @@ def test_decoder_options(args, expected):
     assert result.stdout.strip().splitlines()[-1] == expected
 
 
+def test_no_frame_aware_still_works_but_warns_that_it_is_deprecated():
+    result = parse("--no-frame-aware")
+    assert result.stdout.strip().splitlines()[-1] == "plain 0 0 20000"
+    assert "deprecated" in result.stderr
+    assert "--decoder plain" in result.stderr
+    assert "deprecated" not in parse("--decoder", "plain").stderr
+
+
 @pytest.mark.parametrize("args", [("--decoder", "viterbi"), ("--merge-max-gap", "far")])
 def test_invalid_decoder_options_are_rejected(args):
     assert parse(*args).returncode != 0
@@ -107,7 +115,7 @@ def test_hybrid_keeps_partials_for_rescue_then_refines_the_hybrid_gff(tmp_path):
     ]
 
     fix_orf, hybrid, refine = calls
-    assert "--drop-partial" not in fix_orf
+    assert "--keep-partial" in fix_orf
     assert value(hybrid, "--input-gff") == value(fix_orf, "--output-gff")
     assert value(hybrid, "--predictions-root") == str(tmp_path / "out")
     assert value(hybrid, "--max-gap") == "20000"
@@ -123,21 +131,21 @@ def test_hybrid_keep_partial_is_passed_to_the_hybrid_step(tmp_path):
 
 
 @pytest.mark.parametrize("decoder", ["frame-aware", "plain"])
-def test_other_decoders_drop_partials_in_fix_orf_and_skip_hybrid(tmp_path, decoder):
+def test_other_decoders_let_fix_orf_drop_partials_and_skip_hybrid(tmp_path, decoder):
     calls = run_post_processing(tmp_path, decoder, "0")
     assert [c[0].rsplit("/", 1)[-1] for c in calls] == ["fix_orf.py", "refine.py"]
     fix_orf, refine = calls
-    assert "--drop-partial" in fix_orf
+    assert "--keep-partial" not in fix_orf
     assert value(refine, "--input-gff") == value(fix_orf, "--output-gff")
 
 
-def test_keep_partial_disables_dropping(tmp_path):
+def test_keep_partial_is_passed_on_to_fix_orf(tmp_path):
     fix_orf = call(run_post_processing(tmp_path, "frame-aware", "1"), "fix_orf.py")
-    assert "--drop-partial" not in fix_orf
+    assert "--keep-partial" in fix_orf
 
 
 # -------------------------------------------------------------------------------------------------
-# --cpu-stage-parallel: how many chromosomes run their CPU stages at once
+# --max-parallel-chromosomes: how many chromosomes are decoded and exported at once
 # -------------------------------------------------------------------------------------------------
 
 
@@ -154,8 +162,8 @@ def resolve(
     gb_per_mb: str = "",
 ) -> str:
     script = (
-        shell_function("resolve_cpu_stage_parallel")
-        + f"resolve_cpu_stage_parallel {requested} {gpus} "
+        shell_function("resolve_parallel_chromosomes")
+        + f"resolve_parallel_chromosomes {requested} {gpus} "
         + f"{largest_mb * 1_000_000} {available_gb * 1024 * 1024} {gb_per_mb}"
     )
     result = subprocess.run(["bash", "-c", script], text=True, capture_output=True)
@@ -172,7 +180,7 @@ def resolve(
         (4, 800, 256, "1"),  # does not fit even alone: still run one at a time
     ],
 )
-def test_auto_cpu_stage_parallel_fits_the_largest_chromosome_in_memory(
+def test_auto_parallel_chromosomes_fit_the_largest_chromosome_in_memory(
     gpus, largest_mb, available_gb, expected
 ):
     assert resolve("auto", gpus, largest_mb, available_gb) == expected
@@ -200,12 +208,16 @@ def test_memory_per_mb_follows_the_decoder(decoder, per_mb):
     assert result.stdout.strip() == per_mb
 
 
-def test_explicit_cpu_stage_parallel_is_used_as_given():
+def test_explicit_parallel_chromosomes_are_used_as_given():
     assert resolve("3", 4, 800, 16) == "3"
 
 
-def test_cpu_stage_parallel_option():
-    script = "usage() { exit 2; }\n" + option_parsing() + '\necho "$CPU_STAGE_PARALLEL"'
+def test_max_parallel_chromosomes_option():
+    script = (
+        "usage() { exit 2; }\n"
+        + option_parsing()
+        + '\necho "$MAX_PARALLEL_CHROMOSOMES"'
+    )
 
     def run(*args):
         return subprocess.run(
@@ -213,12 +225,14 @@ def test_cpu_stage_parallel_option():
         )
 
     assert run().stdout.strip().splitlines()[-1] == "auto"
-    assert run("--cpu-stage-parallel", "2").stdout.strip().splitlines()[-1] == "2"
-    assert run("--cpu-stage-parallel", "0").returncode != 0
-    assert run("--cpu-stage-parallel", "many").returncode != 0
+    assert run("--max-parallel-chromosomes", "2").stdout.strip().splitlines()[-1] == "2"
+    assert run("--max-parallel-chromosomes", "0").returncode != 0
+    assert run("--max-parallel-chromosomes", "many").returncode != 0
+    # The name used before this option was renamed is not accepted any more
+    assert run("--cpu-stage-parallel", "2").returncode != 0
 
 
-def test_chromosome_cpu_stages_never_exceed_the_limit(tmp_path):
+def test_chromosomes_decoded_at_once_never_exceed_the_limit(tmp_path):
     """Four GPUs but a limit of two: at most two process_chromosome calls overlap."""
     start = PREDICT_SH.index("    declare -a PIDS=()")
     end = PREDICT_SH.index("\nif [[ $FAILED -gt 0 ]]", start)
@@ -226,7 +240,7 @@ def test_chromosome_cpu_stages_never_exceed_the_limit(tmp_path):
     log = tmp_path / "log"
     script = (
         f'process_chromosome() {{ echo "+ $1" >> {log}; sleep 0.3; echo "- $1" >> {log}; }}\n'
-        "GPU_ARRAY=(0 1 2 3); NUM_GPUS=4; CPU_STAGE_JOBS=2; FAILED=0\n"
+        "GPU_ARRAY=(0 1 2 3); NUM_GPUS=4; PARALLEL_CHROMOSOMES=2; FAILED=0\n"
         "declare -A GPU_BATCH_SIZES=([0]=8 [1]=8 [2]=8 [3]=8)\n"
         "CHR_ARRAY=(c1 c2 c3 c4 c5 c6)\n" + loop
     )

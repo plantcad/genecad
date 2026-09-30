@@ -34,7 +34,7 @@ python hybrid_decode.py \
 
 ### Parameters
 
-* `--input-gff` - GFF3 after `fix_orf.py` without `--drop-partial`, from 5-state decoding
+* `--input-gff` - GFF3 after `fix_orf.py --keep-partial`, from 5-state decoding
 * `--input-fasta` - Genome FASTA file used for prediction
 * `--predictions-root` - Directory holding `<CHR_ID>/predictions_<CHR_ID>/` for each sequence, as written by
 `predict.sh`. Sequences without predictions are written back unchanged.
@@ -60,3 +60,27 @@ against the official annotations, compared with whole-chromosome frame-aware dec
 | hybrid | 110,901 | 192 | 2,385 | 1,979 | 58.6% | 62.5% |
 
 Hybrid decoding had higher recall and precision, and fewer split genes, on each of the 29 chromosomes.
+
+The same comparison on 11 more species, against their reference annotations. Frame-aware here
+is v0.5.0 with partial transcripts dropped, so both methods leave out transcripts without a
+valid ORF. Recall and precision are for exact CDS chains, in percent. Split and fused are counted
+as in the table above.
+
+| species | reference genes | recall frame-aware | recall hybrid | precision frame-aware | precision hybrid | split frame-aware | split hybrid | fused frame-aware | fused hybrid |
+|---|---|---|---|---|---|---|---|---|---|
+| Athaliana | 27,655 | 82.8 | 83.1 | 87.6 | 88.5 | 896 | 794 | 703 | 709 |
+| Bstricta | 27,297 | 71.4 | 71.5 | 73.7 | 74.6 | 912 | 644 | 326 | 345 |
+| Crubella | 27,643 | 78.8 | 79.0 | 80.5 | 81.3 | 554 | 433 | 405 | 411 |
+| Csativus | 21,235 | 59.1 | 59.6 | 61.0 | 62.1 | 342 | 243 | 390 | 427 |
+| Esalsugineum | 26,340 | 68.0 | 68.1 | 68.4 | 69.3 | 600 | 441 | 262 | 284 |
+| Fvesca | 34,000 | 56.7 | 57.0 | 69.3 | 71.3 | 1,211 | 983 | 832 | 873 |
+| Mesculenta | 32,794 | 74.8 | 75.6 | 77.4 | 79.4 | 1,085 | 789 | 611 | 610 |
+| Othomaeum | 28,440 | 25.4 | 25.3 | 27.1 | 27.6 | 1,277 | 1,144 | 1,813 | 1,832 |
+| Ppersica | 26,868 | 69.9 | 70.2 | 74.7 | 76.0 | 699 | 535 | 489 | 504 |
+| Spolyrhiza | 19,623 | 32.2 | 32.0 | 37.0 | 37.2 | 447 | 348 | 915 | 991 |
+| Zmarina | 21,459 | 57.8 | 58.1 | 61.7 | 63.0 | 880 | 715 | 335 | 354 |
+
+Hybrid decoding had higher precision and fewer split genes in all 11 species, and higher recall
+in 9 (0.1 and 0.2 points lower in Othomaeum and Spolyrhiza). It gave more fused genes in 10 of
+the 11 (1% to 10% more), which is the price of fewer split genes. Tiny genes fell from between
+48 and 1,583 per species with v0.5.0 to between 4 and 28.

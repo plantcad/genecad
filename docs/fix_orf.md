@@ -26,9 +26,9 @@ for the TTS. Bounds how far a repair may depart from the model's prediction, and
 being truncated to short ORFs. Default 300.
 * `--min-protein-length` - Minimum protein length in residues (excluding the stop codon) for a
 repair. Default 10.
-* `--drop-partial` - Flag. Leave transcripts that cannot be repaired (`partial=true`) out of the
-output, along with genes left with no transcript, instead of passing them through flagged. They are
-still listed in `--report`. `predict.sh` sets this unless `--keep-partial` is given or the decoder is
+* `--keep-partial` - Flag. Keep transcripts that cannot be repaired, flagged `partial=true`. By default
+they are left out of the output, along with genes left with no transcript, and are still listed in
+`--report`. `predict.sh` passes this when it is given `--keep-partial` and always when the decoder is
 `hybrid` (hybrid decoding needs the partial transcripts, and drops the ones it cannot rescue itself).
 * `--allow-noncanonical-introns` - Flag. Attempt repair even when the transcript has non-canonical
 introns. Off by default: an ORF built on untrustworthy splice calls is not trustworthy.

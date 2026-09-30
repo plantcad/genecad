@@ -104,6 +104,7 @@ def run(tmp_path, blocks, strand, intron=CANONICAL_INTRON, **kwargs):
         "weak_start_threshold": 9,
         "kozak_margin": 3.0,
         "weak_kozak_threshold": 5.0,
+        "keep_partial": True,
     }
     options.update(kwargs)
     stats = fix_orf.fix_orf(
@@ -656,6 +657,7 @@ def run_weak_start(tmp_path, spliced_seq, intron=WEAK_START_INTRON, **kwargs):
         "weak_start_threshold": 9,
         "kozak_margin": 3.0,
         "weak_kozak_threshold": 5.0,
+        "keep_partial": True,
     }
     options.update(kwargs)
     stats = fix_orf.fix_orf(
@@ -971,15 +973,15 @@ def test_calibration_can_be_turned_off(tiny_kozak_pwm, tmp_path):
 
 
 # -------------------------------------------------------------------------------------------------
-# --drop-partial
+# partial transcripts are dropped unless --keep-partial is given
 # -------------------------------------------------------------------------------------------------
 
 
 def test_drop_partial_removes_an_unrepairable_transcript_and_its_gene(tmp_path):
-    """With drop_partial, a transcript that cannot be made a valid ORF is left
-    out of the output entirely, and so is a gene left with no transcript."""
+    """Unless keep_partial is set, a transcript that cannot be made a valid ORF is
+    left out of the output entirely, and so is a gene left with no transcript."""
     stats, records = run(
-        tmp_path, PLUS_BROKEN, "+", intron=NONCANONICAL_INTRON, drop_partial=True
+        tmp_path, PLUS_BROKEN, "+", intron=NONCANONICAL_INTRON, keep_partial=False
     )
 
     assert stats["partial"] == 1
@@ -990,7 +992,7 @@ def test_drop_partial_removes_an_unrepairable_transcript_and_its_gene(tmp_path):
 @pytest.mark.parametrize("blocks", [PLUS_CORRECT, PLUS_BROKEN])
 def test_drop_partial_keeps_complete_and_repaired_transcripts(tmp_path, blocks):
     _, kept = run(tmp_path, blocks, "+")
-    stats, records = run(tmp_path, blocks, "+", drop_partial=True)
+    stats, records = run(tmp_path, blocks, "+", keep_partial=False)
 
     assert stats["dropped"] == 0
     assert [r.to_line() for r in records] == [r.to_line() for r in kept]
@@ -1028,7 +1030,7 @@ def test_drop_partial_keeps_a_gene_that_still_has_a_complete_isoform(tmp_path):
         min_protein_length=10,
         require_canonical=True,
         report_path=None,
-        drop_partial=True,
+        keep_partial=False,
     )
     _, records = fix_orf.read_gff(str(out))
 
@@ -1039,7 +1041,7 @@ def test_drop_partial_keeps_a_gene_that_still_has_a_complete_isoform(tmp_path):
     assert "partial" not in gene.attributes
 
 
-def test_drop_partial_is_off_by_default_and_on_via_the_cli(tmp_path, monkeypatch):
+def test_partial_transcripts_are_dropped_unless_kept_via_the_cli(tmp_path, monkeypatch):
     gff = tmp_path / "in.gff"
     fasta = tmp_path / "genome.fa"
     gff.write_text(build_gff(PLUS_BROKEN, "+"))
@@ -1051,7 +1053,6 @@ def test_drop_partial_is_off_by_default_and_on_via_the_cli(tmp_path, monkeypatch
         fix_orf.main()
         return fix_orf.read_gff(str(out))[1]
 
-    assert [r.type for r in cli(tmp_path / "default.gff") if r.type == "mRNA"] == [
-        "mRNA"
-    ]
-    assert cli(tmp_path / "dropped.gff", "--drop-partial") == []
+    assert cli(tmp_path / "default.gff") == []
+    kept = cli(tmp_path / "kept.gff", "--keep-partial")
+    assert [r.type for r in kept if r.type == "mRNA"] == ["mRNA"]

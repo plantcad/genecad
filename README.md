@@ -2,7 +2,7 @@
 
 # GeneCAD: Plant Genome Annotation with a DNA Foundation Model
 
-![](https://img.shields.io/badge/version-0.5.0-blue)
+![](https://img.shields.io/badge/version-0.6.0-blue)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![CI](https://github.com/plantcad/genecad/actions/workflows/ci.yaml/badge.svg)](https://github.com/plantcad/genecad/actions/workflows/ci.yaml)
 [![bioRxiv](https://img.shields.io/badge/bioRxiv-10.1101/2025.10.31.685877-b31b1b.svg)](https://doi.org/10.1101/2025.10.31.685877)
@@ -335,10 +335,10 @@ genecad predict [OPTIONS]
 * `--top-n-contigs` `-n` - Predict only the `N` longest fasta sequences in the input. Must be an integer or "all". (Default: all)
 * `--min-transcript-length` `-l` - Minimum allowed transcript length. Shorter transcripts will be removed. (Default: 3)
 * `--cpu-workers` `-c` - CPU workers used during GFF export and hybrid decoding. (Default: 1)
-* `--cpu-stage-parallel` - How many chromosomes run their CPU steps (decoding, GFF export) at the same time.
-Frame-aware decoding needs about 0.35 GB of RAM per Mb of chromosome and plain or hybrid decoding about 0.05 GB
-(the predictions are read segment by segment), so several large chromosomes at once can run out of memory. `auto` runs
-as many as fit in the available RAM, at most one per GPU. Set a number to override.
+* `--max-parallel-chromosomes` - How many chromosomes are decoded and exported to GFF at the same time. This is
+not a number of CPUs. Frame-aware decoding needs about 0.35 GB of RAM per Mb of chromosome and plain or hybrid
+decoding about 0.05 GB (the predictions are read segment by segment), so several large chromosomes at once can run
+out of memory. `auto` runs as many as fit in the available RAM, at most one per GPU. Set a number to override.
 (Default: auto)
 * `--batch-size` `-b` - Inference batch size for GPU (Default is auto-scaled to GPU VRAM, at most 35)
 * `--gpus` `-g` - Comma-separated list of GPU IDs to use, or "all" to use all available GPUs (Default: 0)
@@ -355,7 +355,7 @@ HuggingFace model repo ID. Note that this does **not** override the base PlantCA
   * `frame-aware` decodes whole chromosomes frame-aware (the v0.5.0 default). It also creates new loci made of tiny ORFs
   and splits long genes into several ORFs.
   * `plain` uses the 5-state Viterbi only, which ignores the genome sequence.
-* `--no-frame-aware` - Same as `--decoder plain`.
+* `--no-frame-aware` - Deprecated, use `--decoder plain` instead.
 * `--merge-max-gap` - Largest gap (bp) between consecutive same-strand genes for which hybrid decoding tries a merge.
 (Default: 20000)
 * `--keep-partial` - Keep transcripts that cannot be made a valid ORF (flagged `partial=true`) instead of dropping them.
