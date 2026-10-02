@@ -156,14 +156,14 @@ def shell_function(name: str) -> str:
 
 def resolve(
     requested: str,
-    gpus: int,
+    max_auto: int,
     largest_mb: int,
     available_gb: int,
     gb_per_mb: str = "",
 ) -> str:
     script = (
         shell_function("resolve_parallel_chromosomes")
-        + f"resolve_parallel_chromosomes {requested} {gpus} "
+        + f"resolve_parallel_chromosomes {requested} {max_auto} "
         + f"{largest_mb * 1_000_000} {available_gb * 1024 * 1024} {gb_per_mb}"
     )
     result = subprocess.run(["bash", "-c", script], text=True, capture_output=True)
@@ -172,32 +172,33 @@ def resolve(
 
 
 @pytest.mark.parametrize(
-    "gpus,largest_mb,available_gb,expected",
+    "max_auto,largest_mb,available_gb,expected",
     [
         (4, 300, 256, "2"),  # 300 Mb needs ~105 GB each; 0.9 * 256 GB fits two
-        (4, 50, 256, "4"),  # small chromosomes: never more than one per GPU
+        (4, 50, 256, "4"),  # small chromosomes: capped at max_auto
+        (16, 5, 256, "16"),  # thousands of small scaffolds: many at once
         (1, 300, 256, "1"),
         (4, 800, 256, "1"),  # does not fit even alone: still run one at a time
     ],
 )
 def test_auto_parallel_chromosomes_fit_the_largest_chromosome_in_memory(
-    gpus, largest_mb, available_gb, expected
+    max_auto, largest_mb, available_gb, expected
 ):
-    assert resolve("auto", gpus, largest_mb, available_gb) == expected
+    assert resolve("auto", max_auto, largest_mb, available_gb) == expected
 
 
 @pytest.mark.parametrize(
-    "gpus,largest_mb,available_gb,expected",
+    "max_auto,largest_mb,available_gb,expected",
     [
-        (4, 300, 256, "4"),  # 15 GB each: one per GPU
+        (4, 300, 256, "4"),  # 15 GB each: capped at max_auto
         (4, 1800, 256, "2"),  # 90 GB each: 0.9 * 256 GB fits two
         (4, 1800, 64, "1"),  # does not fit even alone: still run one at a time
     ],
 )
 def test_plain_and_hybrid_decoding_need_far_less_memory_per_mb(
-    gpus, largest_mb, available_gb, expected
+    max_auto, largest_mb, available_gb, expected
 ):
-    assert resolve("auto", gpus, largest_mb, available_gb, "0.05") == expected
+    assert resolve("auto", max_auto, largest_mb, available_gb, "0.05") == expected
 
 
 @pytest.mark.parametrize("decoder,per_mb", [("frame-aware", "0.35"), ("plain", "0.05")])

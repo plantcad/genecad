@@ -338,7 +338,8 @@ genecad predict [OPTIONS]
 * `--max-parallel-chromosomes` - How many chromosomes are decoded and exported to GFF at the same time. This is
 not a number of CPUs. Frame-aware decoding needs about 0.35 GB of RAM per Mb of chromosome and plain or hybrid
 decoding about 0.05 GB (the predictions are read segment by segment), so several large chromosomes at once can run
-out of memory. `auto` runs as many as fit in the available RAM, at most one per GPU. Set a number to override.
+out of memory. `auto` runs as many as fit in the available RAM, at most one per CPU core (up to 16), so genomes with thousands
+of small scaffolds are no longer decoded one at a time. Set a number to override.
 (Default: auto)
 * `--batch-size` `-b` - Inference batch size for GPU (Default is auto-scaled to GPU VRAM, at most 35)
 * `--gpus` `-g` - Comma-separated list of GPU IDs to use, or "all" to use all available GPUs (Default: 0)

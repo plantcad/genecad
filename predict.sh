@@ -76,7 +76,8 @@ Options:
                                                 decoding needs about 0.35 GB of RAM per Mb of chromosome
                                                 and plain or hybrid decoding about 0.05 GB, so several
                                                 large chromosomes at once can run out of memory. auto: as
-                                                many as fit in the available RAM, at most one per GPU.
+                                                many as fit in the available RAM, at most one per CPU core
+                                                (up to 16).
                                                 (default: auto)
   -b, --batch-size N    Inference batch size per GPU (default: auto — scaled to GPU VRAM)
   -g, --gpus LIST       Comma-separated GPU IDs to use, or 'all' for all available GPUs.
@@ -753,18 +754,18 @@ done <<< "$CHROM_IDS"
 # chromosomes, so by default only as many run as fit.
 # =================================================================
 
-# resolve_parallel_chromosomes REQUESTED NUM_GPUS LARGEST_BP AVAILABLE_KB [GB_PER_MB]
+# resolve_parallel_chromosomes REQUESTED MAX_AUTO LARGEST_BP AVAILABLE_KB [GB_PER_MB]
 # Prints how many chromosomes to run at once: REQUESTED if it is a number. If it is
-# auto, as many as fit in AVAILABLE_KB of RAM, but no more than one per GPU.
+# auto, as many as fit in AVAILABLE_KB of RAM, but no more than MAX_AUTO.
 resolve_parallel_chromosomes() {
     if [[ "$1" != "auto" ]]; then
         echo "$1"
         return
     fi
-    awk -v gpus="$2" -v bp="$3" -v kb="$4" -v per_mb="${5:-0.35}" 'BEGIN {
+    awk -v max_auto="$2" -v bp="$3" -v kb="$4" -v per_mb="${5:-0.35}" 'BEGIN {
         need = bp / 1e6 * per_mb * 1048576
-        n = (need > 0) ? int(kb * 0.9 / need) : gpus
-        if (n > gpus) n = gpus
+        n = (need > 0) ? int(kb * 0.9 / need) : max_auto
+        if (n > max_auto) n = max_auto
         if (n < 1) n = 1
         print n
     }'
@@ -802,10 +803,15 @@ else
     DECODE_GB_PER_MB="0.05"
 fi
 
-if [[ "$MAX_PARALLEL_CHROMOSOMES" == "auto" && $NUM_GPUS -gt 1 ]]; then
+if [[ "$MAX_PARALLEL_CHROMOSOMES" == "auto" ]]; then
     LARGEST_BP=$(largest_sequence_bp)
     AVAILABLE_KB=$(available_memory_kb)
-    PARALLEL_CHROMOSOMES=$(resolve_parallel_chromosomes auto "$NUM_GPUS" "$LARGEST_BP" "$AVAILABLE_KB" "$DECODE_GB_PER_MB")
+    # Decoding is single-threaded, so allow one chromosome per free core (each export
+    # also starts CPU_WORKERS processes), but never fewer than one per GPU or more than 16.
+    MAX_AUTO=$(( $(env -u OMP_NUM_THREADS -u OMP_THREAD_LIMIT nproc) / CPU_WORKERS ))
+    (( MAX_AUTO > 16 )) && MAX_AUTO=16
+    (( MAX_AUTO < NUM_GPUS )) && MAX_AUTO=$NUM_GPUS
+    PARALLEL_CHROMOSOMES=$(resolve_parallel_chromosomes auto "$MAX_AUTO" "$LARGEST_BP" "$AVAILABLE_KB" "$DECODE_GB_PER_MB")
     echo "Decoding up to $PARALLEL_CHROMOSOMES chromosome(s) at once" \
         "(longest sequence $(( LARGEST_BP / 1000000 )) Mb, $(( AVAILABLE_KB / 1048576 )) GB RAM available)"
     if awk -v bp="$LARGEST_BP" -v kb="$AVAILABLE_KB" -v per_mb="$DECODE_GB_PER_MB" \
@@ -813,8 +819,7 @@ if [[ "$MAX_PARALLEL_CHROMOSOMES" == "auto" && $NUM_GPUS -gt 1 ]]; then
         echo "WARNING: decoding the longest sequence may need more RAM than is available."
     fi
 else
-    PARALLEL_CHROMOSOMES=$(resolve_parallel_chromosomes "$MAX_PARALLEL_CHROMOSOMES" "$NUM_GPUS" 0 0)
-    [[ "$MAX_PARALLEL_CHROMOSOMES" == "auto" ]] && PARALLEL_CHROMOSOMES=1
+    PARALLEL_CHROMOSOMES=$(resolve_parallel_chromosomes "$MAX_PARALLEL_CHROMOSOMES" 1 0 0)
 fi
 
 # =================================================================
@@ -825,8 +830,8 @@ fi
 #     Ensures every GPU is busy even for tiny genomes.
 #
 #   Per-GPU parallel — when chromosomes >= GPUs:
-#     Each GPU owns its chromosomes independently; up to NUM_GPUS
-#     chromosomes run at the same time. Avoids 1000× torchrun spawns.
+#     Each GPU owns its chromosomes independently. The CPU stages run up to
+#     PARALLEL_CHROMOSOMES chromosomes at the same time. Avoids 1000× torchrun spawns.
 # =================================================================
 
 echo "================================================================="
