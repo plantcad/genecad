@@ -257,3 +257,68 @@ def test_merge_group_transcripts_recalculates_phases(tmp_path):
     assert cds_features_rev[1][3] == "10"
     assert cds_features_rev[1][4] == "18"
     assert cds_features_rev[1][7] == "2"
+
+
+def test_embed_batch_splits_the_batch_when_the_gpu_runs_out_of_memory(monkeypatch):
+    """An out-of-memory batch is retried in halves; no protein may be skipped."""
+    import contextlib
+    import types
+
+    import numpy as np
+
+    class OutOfMemory(RuntimeError):
+        pass
+
+    class Tensor:
+        def __init__(self, rows):
+            self.rows = rows
+
+        def to(self, device):
+            return self
+
+    fake_torch = types.SimpleNamespace(
+        tensor=Tensor,
+        no_grad=contextlib.nullcontext,
+        cuda=types.SimpleNamespace(
+            OutOfMemoryError=OutOfMemory, empty_cache=lambda: None
+        ),
+    )
+    monkeypatch.setattr(reelprotein, "torch", fake_torch)
+
+    class Hidden:
+        def __init__(self, rows):
+            self.rows = rows
+
+        def __getitem__(self, key):
+            row, span = key
+            return types.SimpleNamespace(
+                mean=lambda dim: types.SimpleNamespace(
+                    detach=lambda: types.SimpleNamespace(
+                        cpu=lambda: types.SimpleNamespace(
+                            numpy=lambda: types.SimpleNamespace(
+                                squeeze=lambda: np.full(2, self.rows[row][0])
+                            )
+                        )
+                    )
+                )
+            )
+
+    calls = []
+
+    def model(input_ids, attention_mask):
+        calls.append(len(input_ids.rows))
+        if len(input_ids.rows) > 2:
+            raise OutOfMemory("CUDA out of memory")
+        return types.SimpleNamespace(last_hidden_state=Hidden(input_ids.rows))
+
+    def tokenizer(seqs, add_special_tokens, padding):
+        rows = [[float(s.split()[0] == "A") + i] for i, s in enumerate(seqs)]
+        return {"input_ids": rows, "attention_mask": rows}
+
+    ids = ["p1", "p2", "p3", "p4", "p5"]
+    result = reelprotein._embed_batch(
+        model, tokenizer, "cpu", ids, ["A A", "A A", "A A", "A A", "A A"], [2] * 5
+    )
+
+    assert [pid for pid, _ in result] == ids
+    assert calls == [5, 2, 3, 1, 2]

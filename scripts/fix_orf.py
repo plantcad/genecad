@@ -60,8 +60,11 @@ The repair is deliberately constrained so that it cannot invent gene structure:
     experimentation; the raw prediction is the safer default.
 
 Transcripts that cannot be repaired under these rules are *not* forced into an
-ORF.  They are passed through unchanged and flagged (partial=true, orf_issue=…,
-plus GFF3 start_range / end_range) so downstream steps can filter them.
+ORF.  By default they are left out of the output: on maize NAM, 99% of the tiny
+(<= 10 aa) genes in the v0.5.0 output were such partial transcripts, and dropping
+them removed no correctly predicted gene.  With --keep-partial they are passed
+through unchanged and flagged (partial=true, orf_issue=..., plus GFF3 start_range /
+end_range) so downstream steps can filter them.
 
 Usage
 -----
@@ -894,6 +897,7 @@ def fix_orf(
     kozak_margin: float = 3.0,
     weak_kozak_threshold: float = 5.0,
     calibrate_margin: bool = True,
+    keep_partial: bool = False,
 ) -> Counter:
     logger.info(f"Reading GFF {input_gff}")
     header, records = read_gff(input_gff)
@@ -993,14 +997,32 @@ def fix_orf(
             if result.missing_stop:
                 mrna.attributes["end_range"] = f"{mrna.end},."
             parent = by_id.get(mrna.parent or "")
-            if parent is not None and parent.type == GENE:
+            if parent is not None and parent.type == GENE and keep_partial:
                 parent.attributes["partial"] = "true"
+
+    # Unless keep_partial is set, partial transcripts (and genes left with none)
+    # are removed rather than flagged; they are still listed in the report.
+    dropped: set[str] = set()
+    if not keep_partial:
+        dropped = {m for m, r in results.items() if r.status == "partial"}
+        stats["dropped"] = len(dropped)
+        kept_parents = {
+            t.mrna.parent for m, t in transcripts.items() if m not in dropped
+        }
+        dropped |= {
+            t.mrna.parent or ""
+            for m, t in transcripts.items()
+            if m in dropped and t.mrna.parent not in kept_parents
+        }
+        dropped.discard("")
 
     output: list[Record] = []
     replaced_parents = set(replacements)
     for record in records:
         if record.parent in replaced_parents and record.type in EXONIC_TYPES:
             continue  # superseded by regenerated features
+        if record.id in dropped or record.parent in dropped:
+            continue
         output.append(record)
     for mrna_id, new_records in replacements.items():
         output.extend(new_records)
@@ -1045,6 +1067,8 @@ def fix_orf(
         f"({100 * stats['complete'] / max(total, 1):.1f}% -> "
         f"{100 * valid / max(total, 1):.1f}%)"
     )
+    if not keep_partial:
+        logger.info(f"  dropped (partial): {stats['dropped']}")
     issues = {k[6:]: v for k, v in stats.items() if k.startswith("issue:")}
     if issues:
         # Not all issues mean "unrepaired": weak_start_kozak is a repair
@@ -1140,6 +1164,13 @@ def main() -> None:
         "silently.",
     )
     parser.add_argument(
+        "--keep-partial",
+        action="store_true",
+        help="Keep transcripts that cannot be repaired, flagged partial=true, "
+        "instead of leaving them out of the output along with genes left with no "
+        "transcript. Dropped transcripts are still listed in --report.",
+    )
+    parser.add_argument(
         "--report",
         default=None,
         help="Optional TSV path for per-transcript status output",
@@ -1159,6 +1190,7 @@ def main() -> None:
         kozak_margin=args.kozak_margin,
         weak_kozak_threshold=args.weak_kozak_threshold,
         calibrate_margin=args.calibrate_margin,
+        keep_partial=args.keep_partial,
     )
 
 

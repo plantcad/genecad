@@ -32,11 +32,22 @@ Options:
                                                 that cannot be resolved are flagged partial=true
                                                 rather than forced. Use 0 to disable repair.
                                                 (default: 300)
-    --no-frame-aware        Decode with the original 5-state Viterbi, which ignores the
-                                                genome sequence. By default decoding is frame-aware: the
-                                                CDS is constrained to begin on ATG, end on a stop codon,
-                                                stay in frame across introns, and contain no in-frame
-                                                stop, so every predicted CDS translates cleanly.
+    --decoder MODE          How per-base predictions become gene models (default: hybrid).
+                                                hybrid: plain 5-state Viterbi genome-wide, then frame-aware
+                                                decoding only around genes that need it: transcripts ORF
+                                                repair cannot fix are re-decoded locally, and consecutive
+                                                same-strand genes that one frame-aware transcript spans are
+                                                merged. Frame-aware decoding constrains the CDS to begin on
+                                                ATG, end on a stop codon, stay in frame across introns and
+                                                contain no in-frame stop.
+                                                frame-aware: frame-aware decoding of whole chromosomes
+                                                (v0.5.0 default; creates more tiny and split genes).
+                                                plain: 5-state Viterbi only.
+    --no-frame-aware        Deprecated, use --decoder plain instead.
+    --merge-max-gap N       Largest gap (bp) between consecutive same-strand genes for which
+                                                hybrid decoding tries a merge (default: 20000).
+    --keep-partial          Keep transcripts that cannot be made a valid ORF (flagged
+                                                partial=true) instead of dropping them.
     --min-intron-length N   Shortest intron frame-aware decoding may emit (default: 20).
                                                 Guards against short introns being invented to step over
                                                 an in-frame stop codon. Lower it for compact genomes
@@ -59,6 +70,15 @@ Options:
   -c, --cpu-workers N   CPU worker processes used in GFF export transcript grouping.
                                                 Uses an order-preserving map so outputs remain deterministic.
                                                 (default: 1)
+      --max-parallel-chromosomes N|auto
+                                                How many chromosomes are decoded and exported to GFF at
+                                                the same time. This is not a number of CPUs. Frame-aware
+                                                decoding needs about 0.35 GB of RAM per Mb of chromosome
+                                                and plain or hybrid decoding about 0.05 GB, so several
+                                                large chromosomes at once can run out of memory. auto: as
+                                                many as fit in the available RAM, at most one per CPU core
+                                                (up to 16).
+                                                (default: auto)
   -b, --batch-size N    Inference batch size per GPU (default: auto — scaled to GPU VRAM)
   -g, --gpus LIST       Comma-separated GPU IDs to use, or 'all' for all available GPUs.
                         Chromosomes are distributed across GPUs in parallel.
@@ -72,7 +92,8 @@ Options:
   -h, --help            Show this help message
 
 Batch size auto-detection:
-  Starting guess = max(8, floor(free_gb × 0.90))
+  Starting guess = min(35, max(8, floor(free_gb × 0.90)))
+  The cap of 35 avoids a CUDA illegal-memory-access crash seen at larger batches on 80 GB H100s.
   nvidia-smi reports free memory *before* Python/model load, so the guess may overshoot.
   On CUDA OOM the worker reduces the batch by 20% and retries the missing windows
   without reloading the model. It stops if even one window cannot fit. Other errors
@@ -115,12 +136,15 @@ GPUS_ARG="0"
 TOP_N_CONTIGS="all"
 MIN_TRANSCRIPT_LENGTH="3"
 ORF_MAX_SHIFT="300"
-FRAME_AWARE="1"
+DECODER="hybrid"
+KEEP_PARTIAL="0"
+MERGE_MAX_GAP="20000"
 MIN_INTRON_LENGTH="20"
 MIN_CODING_RUN_LENGTH="9"
 EXON_LENGTH_STRICTNESS="16"
 ALLOW_U12_INTRONS="0"
 CPU_WORKERS="1"
+MAX_PARALLEL_CHROMOSOMES="auto"
 LAUNCHER_ARG="${LAUNCHER:-}"
 MODEL_CHECKPOINT_ARG=""
 BASE_MODEL_ARG=""
@@ -134,12 +158,18 @@ while [[ $# -gt 0 ]]; do
     -n|--top-n-contigs) TOP_N_CONTIGS="$2"; shift 2 ;;
     -l|--min-transcript-length) MIN_TRANSCRIPT_LENGTH="$2"; shift 2 ;;
     --orf-max-shift) ORF_MAX_SHIFT="$2"; shift 2 ;;
-    --no-frame-aware) FRAME_AWARE="0"; shift ;;
+    --decoder) DECODER="$2"; shift 2 ;;
+    --no-frame-aware)
+        echo "Warning: --no-frame-aware is deprecated, use --decoder plain instead." >&2
+        DECODER="plain"; shift ;;
+    --merge-max-gap) MERGE_MAX_GAP="$2"; shift 2 ;;
+    --keep-partial) KEEP_PARTIAL="1"; shift ;;
     --min-intron-length) MIN_INTRON_LENGTH="$2"; shift 2 ;;
     --min-coding-run-length) MIN_CODING_RUN_LENGTH="$2"; shift 2 ;;
     --exon-length-strictness) EXON_LENGTH_STRICTNESS="$2"; shift 2 ;;
     --allow-u12-introns) ALLOW_U12_INTRONS="1"; shift ;;
     -c|--cpu-workers) CPU_WORKERS="$2"; shift 2 ;;
+    --max-parallel-chromosomes) MAX_PARALLEL_CHROMOSOMES="$2"; shift 2 ;;
     -b|--batch-size) BATCH_SIZE_ARG="$2"; shift 2 ;;
     -g|--gpus)       GPUS_ARG="$2";       shift 2 ;;
     --launcher)      LAUNCHER_ARG="$2";   shift 2 ;;
@@ -184,6 +214,22 @@ fi
 
 if ! [[ "$CPU_WORKERS" =~ ^[0-9]+$ ]] || [[ "$CPU_WORKERS" -lt 1 ]]; then
     echo "Error: --cpu-workers must be a positive integer."
+    exit 1
+fi
+
+if [[ "$MAX_PARALLEL_CHROMOSOMES" != "auto" ]] && { ! [[ "$MAX_PARALLEL_CHROMOSOMES" =~ ^[0-9]+$ ]] || [[ "$MAX_PARALLEL_CHROMOSOMES" -lt 1 ]]; }; then
+    echo "Error: --max-parallel-chromosomes must be a positive integer or 'auto'."
+    exit 1
+fi
+
+case "$DECODER" in
+    hybrid|plain) FRAME_AWARE="0" ;;
+    frame-aware)  FRAME_AWARE="1" ;;
+    *) echo "Error: --decoder must be hybrid, frame-aware or plain."; exit 1 ;;
+esac
+
+if ! [[ "$MERGE_MAX_GAP" =~ ^[0-9]+$ ]]; then
+    echo "Error: --merge-max-gap must be a non-negative integer."
     exit 1
 fi
 
@@ -259,6 +305,7 @@ echo "Mode:        $MODE  ($BASE_MODEL + $HEAD_MODEL)"
 echo "Top contigs: $TOP_N_CONTIGS"
 echo "Min tx len:  $MIN_TRANSCRIPT_LENGTH"
 echo "ORF shift:   $ORF_MAX_SHIFT"
+echo "Decoder:     $DECODER (keep partial: $KEEP_PARTIAL, merge max gap: $MERGE_MAX_GAP)"
 echo "Frame-aware: $FRAME_AWARE (min intron $MIN_INTRON_LENGTH, min exon $MIN_CODING_RUN_LENGTH @ strictness $EXON_LENGTH_STRICTNESS, allow U12 introns: $ALLOW_U12_INTRONS)"
 echo "CPU workers: $CPU_WORKERS"
 echo "================================================================="
@@ -291,6 +338,10 @@ resolve_batch_size_for_gpu() {
     # before the prediction worker has to back off.
     local BS=$(( FREE_GB * 9 / 10 ))   # × 0.90
     [[ $BS -lt 8 ]] && BS=8
+    # Cap at 35 (what a 40 GB A100 gets). On 80 GB H100s the estimate is 71, and
+    # runs at 71 died on the first batch with "CUDA error: an illegal memory
+    # access", which the worker cannot recover from the way it does from OOM.
+    [[ $BS -gt 35 ]] && BS=35
     echo $BS
 }
 
@@ -693,6 +744,85 @@ while IFS= read -r chr; do
 done <<< "$CHROM_IDS"
 
 # =================================================================
+# How many chromosomes may be decoded and exported at once
+#
+# Frame-aware decoding holds a chromosome's whole prediction in memory: about
+# 0.35 GB of RAM per Mb (measured on maize NAM: 0.31 GB/Mb). Plain and hybrid
+# decoding read the prediction segment by segment and need about 0.035 GB/Mb
+# (48 GB for the 1.37 Gb chromosome 5 of Vicia faba); 0.05 is assumed. One
+# chromosome per GPU at once can overflow a node for genomes with several large
+# chromosomes, so by default only as many run as fit.
+# =================================================================
+
+# resolve_parallel_chromosomes REQUESTED MAX_AUTO LARGEST_BP AVAILABLE_KB [GB_PER_MB]
+# Prints how many chromosomes to run at once: REQUESTED if it is a number. If it is
+# auto, as many as fit in AVAILABLE_KB of RAM, but no more than MAX_AUTO.
+resolve_parallel_chromosomes() {
+    if [[ "$1" != "auto" ]]; then
+        echo "$1"
+        return
+    fi
+    awk -v max_auto="$2" -v bp="$3" -v kb="$4" -v per_mb="${5:-0.35}" 'BEGIN {
+        need = bp / 1e6 * per_mb * 1048576
+        n = (need > 0) ? int(kb * 0.9 / need) : max_auto
+        if (n > max_auto) n = max_auto
+        if (n < 1) n = 1
+        print n
+    }'
+}
+
+# Length of the longest sequence in the input FASTA, in bp.
+largest_sequence_bp() {
+    if [[ -f "$INPUT_FILE.fai" ]]; then
+        cut -f2 "$INPUT_FILE.fai" | sort -n | tail -1
+        return
+    fi
+    local cat_cmd=cat
+    [[ "$INPUT_FILE" == *.gz ]] && cat_cmd=zcat
+    $cat_cmd "$INPUT_FILE" | awk '/^>/ { if (n > max) max = n; n = 0; next }
+        { n += length($0) } END { if (n > max) max = n; print max + 0 }'
+}
+
+# Memory this job may use, in kB: MemAvailable, capped by cgroup and SLURM limits.
+available_memory_kb() {
+    local kb limit
+    kb=$(awk '/^MemAvailable:/ { print $2 }' /proc/meminfo)
+    limit=$(cat /sys/fs/cgroup/memory.max 2>/dev/null || true)
+    if [[ "$limit" =~ ^[0-9]+$ ]] && (( limit / 1024 < kb )); then
+        kb=$(( limit / 1024 ))
+    fi
+    if [[ "${SLURM_MEM_PER_NODE:-}" =~ ^[0-9]+$ ]] && (( SLURM_MEM_PER_NODE * 1024 < kb )); then
+        kb=$(( SLURM_MEM_PER_NODE * 1024 ))
+    fi
+    echo "$kb"
+}
+
+if [[ "$DECODER" == "frame-aware" ]]; then
+    DECODE_GB_PER_MB="0.35"
+else
+    DECODE_GB_PER_MB="0.05"
+fi
+
+if [[ "$MAX_PARALLEL_CHROMOSOMES" == "auto" ]]; then
+    LARGEST_BP=$(largest_sequence_bp)
+    AVAILABLE_KB=$(available_memory_kb)
+    # Decoding is single-threaded, so allow one chromosome per free core (each export
+    # also starts CPU_WORKERS processes), but never fewer than one per GPU or more than 16.
+    MAX_AUTO=$(( $(env -u OMP_NUM_THREADS -u OMP_THREAD_LIMIT nproc) / CPU_WORKERS ))
+    (( MAX_AUTO > 16 )) && MAX_AUTO=16
+    (( MAX_AUTO < NUM_GPUS )) && MAX_AUTO=$NUM_GPUS
+    PARALLEL_CHROMOSOMES=$(resolve_parallel_chromosomes auto "$MAX_AUTO" "$LARGEST_BP" "$AVAILABLE_KB" "$DECODE_GB_PER_MB")
+    echo "Decoding up to $PARALLEL_CHROMOSOMES chromosome(s) at once" \
+        "(longest sequence $(( LARGEST_BP / 1000000 )) Mb, $(( AVAILABLE_KB / 1048576 )) GB RAM available)"
+    if awk -v bp="$LARGEST_BP" -v kb="$AVAILABLE_KB" -v per_mb="$DECODE_GB_PER_MB" \
+        'BEGIN { exit !(bp / 1e6 * per_mb * 1048576 > kb) }'; then
+        echo "WARNING: decoding the longest sequence may need more RAM than is available."
+    fi
+else
+    PARALLEL_CHROMOSOMES=$(resolve_parallel_chromosomes "$MAX_PARALLEL_CHROMOSOMES" 1 0 0)
+fi
+
+# =================================================================
 # Choose dispatch strategy
 #
 #   DDP  (torchrun)  — when chromosomes < GPUs:
@@ -700,8 +830,8 @@ done <<< "$CHROM_IDS"
 #     Ensures every GPU is busy even for tiny genomes.
 #
 #   Per-GPU parallel — when chromosomes >= GPUs:
-#     Each GPU owns its chromosomes independently; up to NUM_GPUS
-#     chromosomes run at the same time. Avoids 1000× torchrun spawns.
+#     Each GPU owns its chromosomes independently. The CPU stages run up to
+#     PARALLEL_CHROMOSOMES chromosomes at the same time. Avoids 1000× torchrun spawns.
 # =================================================================
 
 echo "================================================================="
@@ -759,15 +889,15 @@ if [[ "$PREDICT_MODE" == "ddp" || "$PREDICT_MODE" == "ddp_slurm" ]]; then
         process_chromosome "$CHR_ID" "$DDP_BATCH" "" || FAILED=$(( FAILED + 1 ))
     done
 else
-    # Per-GPU parallel — round-robin, NUM_GPUS concurrent jobs
+    # Per-GPU parallel — round-robin, at most PARALLEL_CHROMOSOMES concurrent jobs
     declare -a PIDS=()
     chr_idx=0
     for CHR_ID in "${CHR_ARRAY[@]}"; do
         gpu_id="${GPU_ARRAY[$(( chr_idx % NUM_GPUS ))]}"
         bs="${GPU_BATCH_SIZES[$gpu_id]}"
 
-        # Wait for the oldest slot before launching, keeping exactly NUM_GPUS live jobs
-        if [[ ${#PIDS[@]} -ge $NUM_GPUS ]]; then
+        # Wait for the oldest slot before launching, keeping at most PARALLEL_CHROMOSOMES live jobs
+        if [[ ${#PIDS[@]} -ge $PARALLEL_CHROMOSOMES ]]; then
             if ! wait "${PIDS[0]}"; then
                 FAILED=$(( FAILED + 1 ))
             fi
@@ -803,8 +933,12 @@ echo "================================================================="
 echo "[6/8] Merging per-chromosome GFFs into single files..."
 echo "================================================================="
 
-RAW_GFF="$OUTPUT_DIR/${SPECIES_ID}_GeneCAD_raw.gff"
-ORF_GFF="$OUTPUT_DIR/${SPECIES_ID}_GeneCAD_orf.gff"
+# The final annotation is the only GFF at the top of OUTPUT_DIR; the files it is
+# built from are kept in intermediate/ for troubleshooting.
+INTERMEDIATE_DIR="$OUTPUT_DIR/intermediate"
+mkdir -p "$INTERMEDIATE_DIR"
+RAW_GFF="$INTERMEDIATE_DIR/${SPECIES_ID}_GeneCAD_raw.gff"
+ORF_GFF="$INTERMEDIATE_DIR/${SPECIES_ID}_GeneCAD_orf.gff"
 FINAL_GFF="$OUTPUT_DIR/${SPECIES_ID}_GeneCAD_final.gff"
 
 if [[ -f "$RAW_GFF" ]]; then
@@ -826,12 +960,50 @@ if [[ "$ORF_MAX_SHIFT" -eq 0 ]]; then
 elif [[ -f "$ORF_GFF" ]]; then
     echo "Skipping ORF repair — ${SPECIES_ID}_GeneCAD_orf.gff already exists"
 else
+    # Hybrid decoding needs the partial transcripts to rescue them, and drops
+    # the unrescued ones itself.
+    KEEP_PARTIAL_ARGS=()
+    if [[ "$KEEP_PARTIAL" == "1" || "$DECODER" == "hybrid" ]]; then
+        KEEP_PARTIAL_ARGS=(--keep-partial)
+    fi
     $PYTHON "$SCRIPT_DIR/scripts/fix_orf.py" \
         --input-gff "$RAW_GFF" \
         --input-fasta "$INPUT_FILE" \
         --output-gff "$ORF_GFF" \
         --max-shift "$ORF_MAX_SHIFT" \
-        --report "$OUTPUT_DIR/${SPECIES_ID}_GeneCAD_orf_report.tsv"
+        --report "$INTERMEDIATE_DIR/${SPECIES_ID}_GeneCAD_orf_report.tsv" \
+        "${KEEP_PARTIAL_ARGS[@]}"
+fi
+
+REFINE_INPUT_GFF="$ORF_GFF"
+if [[ "$DECODER" == "hybrid" ]]; then
+    HYBRID_GFF="$INTERMEDIATE_DIR/${SPECIES_ID}_GeneCAD_hybrid.gff"
+    echo ""
+    echo "[7/8] Hybrid decoding: rescuing partial and merging split genes..."
+    if [[ -f "$HYBRID_GFF" ]]; then
+        echo "Skipping hybrid decoding — ${SPECIES_ID}_GeneCAD_hybrid.gff already exists"
+    else
+        HYBRID_ARGS=()
+        if [[ "$KEEP_PARTIAL" == "1" ]]; then
+            HYBRID_ARGS+=(--keep-partial)
+        fi
+        if [[ "$ALLOW_U12_INTRONS" == "1" ]]; then
+            HYBRID_ARGS+=(--allow-u12-introns)
+        fi
+        $PYTHON "$SCRIPT_DIR/scripts/hybrid_decode.py" \
+            --input-gff "$ORF_GFF" \
+            --input-fasta "$INPUT_FILE" \
+            --predictions-root "$OUTPUT_DIR" \
+            --output-gff "$HYBRID_GFF" \
+            --domain "$MODE" \
+            --max-gap "$MERGE_MAX_GAP" \
+            --workers "$CPU_WORKERS" \
+            --min-intron-length "$MIN_INTRON_LENGTH" \
+            --min-coding-run-length "$MIN_CODING_RUN_LENGTH" \
+            --exon-length-strictness "$EXON_LENGTH_STRICTNESS" \
+            "${HYBRID_ARGS[@]}"
+    fi
+    REFINE_INPUT_GFF="$HYBRID_GFF"
 fi
 
 echo ""
@@ -843,7 +1015,7 @@ if [[ -f "$FINAL_GFF" ]]; then
     echo "Skipping refinement — ${SPECIES_ID}_GeneCAD_final.gff already exists"
 else
     $PYTHON "$SCRIPT_DIR/scripts/refine.py" \
-        --input-gff "$ORF_GFF" \
+        --input-gff "$REFINE_INPUT_GFF" \
         --input-fasta "$INPUT_FILE" \
         --output-gff "$FINAL_GFF" \
         --gpus "$GPU_LIST_STR"
@@ -851,8 +1023,11 @@ fi
 
 echo ""
 echo "================================================================="
-echo "All done! Final predictions saved to:"
-echo "Raw:   $RAW_GFF"
-echo "ORF:   $ORF_GFF"
-echo "Final: $FINAL_GFF"
+echo "All done!"
+echo ""
+echo "Final annotation (use this file):"
+echo "  $FINAL_GFF"
+echo ""
+echo "Intermediate files, for troubleshooting only:"
+echo "  $INTERMEDIATE_DIR/"
 echo "================================================================="

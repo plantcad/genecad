@@ -422,6 +422,8 @@ def step_detect_intervals(
             domain,
             "--input-fasta",
             input_fasta,
+            # The plots read the predictions back from the intervals zarr
+            "--save-sequences",
         ]
     )
 

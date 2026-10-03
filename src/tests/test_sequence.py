@@ -1,4 +1,6 @@
 # pyrefly: ignore-errors
+import tracemalloc
+
 import pytest
 import numpy as np
 import pandas as pd
@@ -15,6 +17,7 @@ from src.sequence import (
     create_index_windows,
     create_sequence_windows,
     viterbi_decode,
+    viterbi_decode_blocks,
     brute_force_decode,
     partition_sequence,
     expand_sequence_slice,
@@ -941,3 +944,86 @@ def test_expand_sequence_slice():
 
 
 # fmt: off
+
+
+def random_model(rng, n_states):
+    transitions = rng.random((n_states, n_states)) ** 4 + 1e-3
+    return transitions / transitions.sum(axis=1, keepdims=True)
+
+
+@pytest.mark.parametrize("n_states", [1, 2, 5])
+@pytest.mark.parametrize("alpha", [None, 0.01])
+def test_viterbi_decode_blocks_matches_viterbi_decode(n_states, alpha):
+    rng = np.random.default_rng(n_states)
+    length = 3001
+    emissions = rng.dirichlet(np.full(n_states, 0.3), size=length).astype(np.float32)
+    transitions = random_model(rng, n_states)
+    expected = viterbi_decode(emissions, transitions, alpha=alpha)
+    for size in [1, 2, 7, 500, length, 2 * length]:
+        blocks = (emissions[i : i + size] for i in range(0, length, size))
+        actual = viterbi_decode_blocks(blocks, length, transitions, alpha=alpha)
+        np.testing.assert_array_equal(actual, expected)
+
+
+def test_viterbi_decode_blocks_accepts_empty_blocks():
+    rng = np.random.default_rng(0)
+    emissions = rng.dirichlet(np.ones(3), size=40)
+    transitions = random_model(rng, 3)
+    blocks = [emissions[:0], emissions[:25], emissions[25:25], emissions[25:], emissions[:0]]
+    np.testing.assert_array_equal(
+        viterbi_decode_blocks(blocks, 40, transitions),
+        viterbi_decode(emissions, transitions),
+    )
+
+
+def test_viterbi_decode_blocks_does_not_split_a_run_at_block_boundaries():
+    # State 1 has only weak evidence over 1,000 positions, with a few positions
+    # leaning back to state 0. Deciding each block on its own would break the run.
+    transitions = np.array([[0.99, 0.01], [0.01, 0.99]])
+    emissions = np.tile([0.4, 0.6], (1200, 1))
+    emissions[:100] = [0.9, 0.1]
+    emissions[1100:] = [0.9, 0.1]
+    emissions[100:1100][::97] = [0.55, 0.45]
+
+    expected = viterbi_decode(emissions, transitions)
+    assert np.count_nonzero(np.diff(expected)) == 2
+    for size in [7, 64, 333]:
+        blocks = (emissions[i : i + size] for i in range(0, len(emissions), size))
+        actual = viterbi_decode_blocks(blocks, len(emissions), transitions)
+        np.testing.assert_array_equal(actual, expected)
+
+
+def test_viterbi_decode_blocks_rejects_inconsistent_blocks():
+    rng = np.random.default_rng(0)
+    emissions = rng.dirichlet(np.ones(2), size=6)
+    transitions = random_model(rng, 2)
+    with pytest.raises(ValueError, match="cover 5 positions"):
+        viterbi_decode_blocks([emissions[:5]], 6, transitions)
+    with pytest.raises(ValueError, match="exceed"):
+        viterbi_decode_blocks([emissions, emissions], 6, transitions)
+    with pytest.raises(ValueError, match="2 states"):
+        viterbi_decode_blocks([rng.dirichlet(np.ones(3), size=6)], 6, transitions)
+    with pytest.raises(ValueError, match="empty"):
+        viterbi_decode_blocks([], 0, transitions)
+    with pytest.raises(ValueError, match="Epsilon"):
+        viterbi_decode_blocks([emissions], 6, transitions, epsilon=2.0)
+
+
+def test_viterbi_decode_blocks_memory_does_not_grow_with_the_emissions():
+    length, size = 2_000_000, 50_000
+    transitions = random_model(np.random.default_rng(0), 5)
+
+    def blocks():
+        rng = np.random.default_rng(1)
+        for start in range(0, length, size):
+            yield rng.dirichlet(np.ones(5), size=min(size, length - start))
+
+    tracemalloc.start()
+    try:
+        path = viterbi_decode_blocks(blocks(), length, transitions)
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert len(path) == length
+    # All emissions as float64 would take 80 MB; the backpointers take 10 MB.
+    assert peak < 32 * 1024**2
