@@ -413,19 +413,28 @@ def _embed_batch(model, tok, device, pdb_ids, seqs, lens):
 
     If the GPU runs out of memory (another job may be using it), the batch is split
     in half and retried, so no protein is skipped. A single protein that still does
-    not fit raises the error.
+    not fit is logged and left out.
     """
     enc = tok(seqs, add_special_tokens=True, padding="longest")
-    input_ids = torch.tensor(enc["input_ids"]).to(device)
-    attention_mask = torch.tensor(enc["attention_mask"]).to(device)
+    out = None
     try:
+        input_ids = torch.tensor(enc["input_ids"]).to(device)
+        attention_mask = torch.tensor(enc["attention_mask"]).to(device)
         with torch.no_grad():
             out = model(input_ids, attention_mask=attention_mask)
     except torch.cuda.OutOfMemoryError:
-        del input_ids, attention_mask
+        pass
+    if out is None:
+        # Retry outside the except block: inside it, the traceback still holds the
+        # failed forward pass and its memory.
+        input_ids = attention_mask = None
         torch.cuda.empty_cache()
         if len(pdb_ids) == 1:
-            raise
+            logger.error(
+                f"[Step 2] Protein {pdb_ids[0]} ({lens[0]} aa) does not fit in GPU "
+                "memory and has no score."
+            )
+            return []
         mid = len(pdb_ids) // 2
         logger.warning(
             f"[Step 2] Out of GPU memory on a batch of {len(pdb_ids)} proteins; "

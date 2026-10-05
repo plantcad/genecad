@@ -322,3 +322,73 @@ def test_embed_batch_splits_the_batch_when_the_gpu_runs_out_of_memory(monkeypatc
 
     assert [pid for pid, _ in result] == ids
     assert calls == [5, 2, 3, 1, 2]
+
+
+def test_embed_batch_leaves_out_a_protein_that_never_fits_and_keeps_the_rest(
+    monkeypatch,
+):
+    import contextlib
+    import types
+
+    class OutOfMemory(RuntimeError):
+        pass
+
+    class Tensor:
+        def __init__(self, rows):
+            self.rows = rows
+
+        def to(self, device):
+            return self
+
+    monkeypatch.setattr(
+        reelprotein,
+        "torch",
+        types.SimpleNamespace(
+            tensor=Tensor,
+            no_grad=contextlib.nullcontext,
+            cuda=types.SimpleNamespace(
+                OutOfMemoryError=OutOfMemory, empty_cache=lambda: None
+            ),
+        ),
+    )
+
+    class Vector:
+        def __init__(self, value):
+            self.value = value
+
+        def mean(self, dim):
+            return self
+
+        def detach(self):
+            return self
+
+        def cpu(self):
+            return self
+
+        def numpy(self):
+            return self
+
+        def squeeze(self):
+            return self.value
+
+    class Hidden:
+        def __init__(self, rows):
+            self.rows = rows
+
+        def __getitem__(self, key):
+            return Vector(self.rows[key[0]][0])
+
+    def model(input_ids, attention_mask):
+        if any(row[0] == 99 for row in input_ids.rows):
+            raise OutOfMemory("CUDA out of memory")
+        return types.SimpleNamespace(last_hidden_state=Hidden(input_ids.rows))
+
+    def tokenizer(seqs, add_special_tokens, padding):
+        rows = [[99 if s == "HUGE" else i] for i, s in enumerate(seqs)]
+        return {"input_ids": rows, "attention_mask": rows}
+
+    result = reelprotein._embed_batch(
+        model, tokenizer, "cpu", ["a", "b", "c"], ["x", "HUGE", "y"], [1, 4, 1]
+    )
+
+    assert [pid for pid, _ in result] == ["a", "c"]
