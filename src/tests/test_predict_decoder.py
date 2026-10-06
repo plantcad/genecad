@@ -1,5 +1,6 @@
 """Tests for predict.sh's --decoder / --keep-partial handling (steps 7-8)."""
 
+import os
 import subprocess
 from pathlib import Path
 
@@ -312,3 +313,26 @@ def test_intermediates_go_to_their_own_folder_and_the_final_gff_is_named_at_the_
 
     summary = result.stdout[result.stdout.index("All done!") :]
     assert f"Final annotation (use this file):\n  {final}" in summary
+
+
+def test_available_cores_ignores_omp_num_threads():
+    script = shell_function("available_cores") + "available_cores"
+    expected = subprocess.run(
+        ["env", "-u", "OMP_NUM_THREADS", "nproc"], text=True, capture_output=True
+    ).stdout.strip()
+    result = subprocess.run(
+        ["bash", "-c", script],
+        text=True,
+        capture_output=True,
+        env={**os.environ, "OMP_NUM_THREADS": "1"},
+    )
+    assert result.stdout.strip() == expected
+
+
+def test_available_cores_falls_back_to_one_without_nproc():
+    script = "nproc() { return 127; }\n" + shell_function("available_cores")
+    script = script.replace("env -u OMP_NUM_THREADS -u OMP_THREAD_LIMIT nproc", "nproc")
+    result = subprocess.run(
+        ["bash", "-c", script + "available_cores"], text=True, capture_output=True
+    )
+    assert result.stdout.strip() == "1"

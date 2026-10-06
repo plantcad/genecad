@@ -783,6 +783,12 @@ largest_sequence_bp() {
         { n += length($0) } END { if (n > max) max = n; print max + 0 }'
 }
 
+# CPU cores this job may use. nproc reads OMP_NUM_THREADS, which batch wrappers set to 1,
+# so it is run without it; it still respects taskset and Slurm/cgroup limits.
+available_cores() {
+    env -u OMP_NUM_THREADS -u OMP_THREAD_LIMIT nproc 2>/dev/null || echo 1
+}
+
 # Memory this job may use, in kB: MemAvailable, capped by cgroup and SLURM limits.
 available_memory_kb() {
     local kb limit
@@ -808,7 +814,7 @@ if [[ "$MAX_PARALLEL_CHROMOSOMES" == "auto" ]]; then
     AVAILABLE_KB=$(available_memory_kb)
     # Decoding is single-threaded, so allow one chromosome per free core (each export
     # also starts CPU_WORKERS processes), but never fewer than one per GPU or more than 16.
-    MAX_AUTO=$(( $(env -u OMP_NUM_THREADS -u OMP_THREAD_LIMIT nproc) / CPU_WORKERS ))
+    MAX_AUTO=$(( $(available_cores) / CPU_WORKERS ))
     (( MAX_AUTO > 16 )) && MAX_AUTO=16
     (( MAX_AUTO < NUM_GPUS )) && MAX_AUTO=$NUM_GPUS
     PARALLEL_CHROMOSOMES=$(resolve_parallel_chromosomes auto "$MAX_AUTO" "$LARGEST_BP" "$AVAILABLE_KB" "$DECODE_GB_PER_MB")
