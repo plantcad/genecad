@@ -1,4 +1,5 @@
 from contextlib import contextmanager
+from datetime import timedelta
 import os
 from typing import Iterator
 
@@ -25,7 +26,10 @@ def init_process_group() -> None:
     # ranks and performs no GPU collective ops (all_reduce, broadcast, etc.).
     # NCCL triggers P2P GPU memory probes during init which cause
     # "illegal memory access" errors on servers where GPUs lack P2P support.
-    dist.init_process_group(backend="gloo")
+    # Ranks that finish early wait at the barrier for the slowest one. The default
+    # timeout of 30 minutes is shorter than the gap between ranks on a long
+    # chromosome, so allow a day.
+    dist.init_process_group(backend="gloo", timeout=timedelta(hours=24))
 
 
 def process_group() -> tuple[int, int]:
