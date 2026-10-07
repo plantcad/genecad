@@ -318,7 +318,7 @@ def test_intermediates_go_to_their_own_folder_and_the_final_gff_is_named_at_the_
 def test_available_cores_ignores_omp_num_threads():
     script = shell_function("available_cores") + "available_cores"
     expected = subprocess.run(
-        ["env", "-u", "OMP_NUM_THREADS", "nproc"], text=True, capture_output=True
+        ["bash", "-c", "unset OMP_NUM_THREADS; nproc"], text=True, capture_output=True
     ).stdout.strip()
     result = subprocess.run(
         ["bash", "-c", script],
@@ -329,10 +329,226 @@ def test_available_cores_ignores_omp_num_threads():
     assert result.stdout.strip() == expected
 
 
-def test_available_cores_falls_back_to_one_without_nproc():
-    script = "nproc() { return 127; }\n" + shell_function("available_cores")
-    script = script.replace("env -u OMP_NUM_THREADS -u OMP_THREAD_LIMIT nproc", "nproc")
-    result = subprocess.run(
-        ["bash", "-c", script + "available_cores"], text=True, capture_output=True
+def test_available_cores_does_not_need_env():
+    script = (
+        "env() { echo 'broken env' >&2; return 126; }\n"
+        + shell_function("available_cores")
+        + "available_cores"
     )
+    result = subprocess.run(
+        ["bash", "-c", script],
+        text=True,
+        capture_output=True,
+        env={**os.environ, "OMP_NUM_THREADS": "1"},
+    )
+    assert int(result.stdout.strip()) > 1 or os.cpu_count() == 1
+
+
+def test_available_cores_falls_back_to_one_without_nproc_and_getconf():
+    script = (
+        "nproc() { return 127; }\ngetconf() { return 127; }\n"
+        + shell_function("available_cores")
+        + "available_cores"
+    )
+    result = subprocess.run(["bash", "-c", script], text=True, capture_output=True)
     assert result.stdout.strip() == "1"
+
+
+def run_functions(call: str, names: list[str], env: dict[str, str]) -> str:
+    script = "".join(shell_function(name) for name in names) + call
+    result = subprocess.run(
+        ["bash", "-c", script],
+        text=True,
+        capture_output=True,
+        env={**os.environ, **env},
+    )
+    assert result.returncode == 0, result.stderr
+    return result.stdout.strip()
+
+
+def write(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text)
+
+
+def cgroup_env(tmp_path: Path, proc_cgroup: str) -> dict[str, str]:
+    write(tmp_path / "proc_cgroup", proc_cgroup)
+    return {
+        "CGROUP_ROOT": str(tmp_path / "cg"),
+        "CGROUP_FILE": str(tmp_path / "proc_cgroup"),
+    }
+
+
+def test_cgroup_v2_limit_is_found_in_a_parent_cgroup(tmp_path):
+    root = tmp_path / "cg"
+    write(root / "cgroup.controllers", "cpu memory")
+    write(root / "job.slice" / "memory.max", str(8 * 1024**3))
+    write(root / "job.slice" / "step" / "memory.max", "max")
+    write(root / "job.slice" / "cpu.max", "400000 100000")
+    env = cgroup_env(tmp_path, "0::/job.slice/step\n")
+    assert run_functions("cgroup_limit memory", ["cgroup_limit"], env) == str(
+        8 * 1024 * 1024
+    )
+    assert run_functions("cgroup_limit cpu", ["cgroup_limit"], env) == "4"
+
+
+def test_cgroup_v2_without_a_limit_prints_nothing(tmp_path):
+    root = tmp_path / "cg"
+    write(root / "cgroup.controllers", "cpu memory")
+    write(root / "memory.max", "max")
+    write(root / "cpu.max", "max 100000")
+    env = cgroup_env(tmp_path, "0::/\n")
+    assert run_functions("cgroup_limit memory", ["cgroup_limit"], env) == ""
+    assert run_functions("cgroup_limit cpu", ["cgroup_limit"], env) == ""
+
+
+def test_cgroup_v1_limits_are_read(tmp_path):
+    root = tmp_path / "cg"
+    write(
+        root / "memory" / "docker" / "abc" / "memory.limit_in_bytes", str(2 * 1024**3)
+    )
+    write(root / "cpu" / "docker" / "abc" / "cpu.cfs_quota_us", "150000")
+    write(root / "cpu" / "docker" / "abc" / "cpu.cfs_period_us", "100000")
+    env = cgroup_env(
+        tmp_path, "4:memory:/docker/abc\n3:cpu,cpuacct:/docker/abc\n1:name=systemd:/\n"
+    )
+    assert run_functions("cgroup_limit memory", ["cgroup_limit"], env) == str(
+        2 * 1024 * 1024
+    )
+    assert run_functions("cgroup_limit cpu", ["cgroup_limit"], env) == "2"
+
+
+def test_cgroup_v1_unlimited_memory_is_a_huge_number_that_never_wins(tmp_path):
+    root = tmp_path / "cg"
+    write(root / "memory" / "memory.limit_in_bytes", "9223372036854771712")
+    write(tmp_path / "meminfo", "MemAvailable:   64000000 kB\n")
+    env = cgroup_env(tmp_path, "4:memory:/\n")
+    env["MEMINFO_FILE"] = str(tmp_path / "meminfo")
+    names = ["cgroup_limit", "available_memory_kb"]
+    assert run_functions("available_memory_kb", names, env) == "64000000"
+
+
+def test_available_memory_uses_the_smallest_limit(tmp_path):
+    root = tmp_path / "cg"
+    write(root / "cgroup.controllers", "memory")
+    write(root / "memory.max", str(16 * 1024**3))
+    write(tmp_path / "meminfo", "MemAvailable:   64000000 kB\n")
+    env = cgroup_env(tmp_path, "0::/\n")
+    env["MEMINFO_FILE"] = str(tmp_path / "meminfo")
+    names = ["cgroup_limit", "available_memory_kb"]
+    assert run_functions("available_memory_kb", names, env) == str(16 * 1024 * 1024)
+    env["SLURM_MEM_PER_NODE"] = "4096"
+    assert run_functions("available_memory_kb", names, env) == str(4096 * 1024)
+    env = {k: v for k, v in env.items() if k != "SLURM_MEM_PER_NODE"}
+    env.update(SLURM_MEM_PER_CPU="1000", SLURM_CPUS_ON_NODE="2")
+    assert run_functions("available_memory_kb", names, env) == str(2000 * 1024)
+
+
+def test_available_memory_is_zero_when_it_cannot_be_read(tmp_path):
+    env = cgroup_env(tmp_path, "")
+    env["MEMINFO_FILE"] = str(tmp_path / "does_not_exist")
+    names = ["cgroup_limit", "available_memory_kb"]
+    assert run_functions("available_memory_kb", names, env) == "0"
+
+
+def test_available_cores_applies_a_cpu_quota(tmp_path):
+    root = tmp_path / "cg"
+    write(root / "cgroup.controllers", "cpu")
+    write(root / "cpu.max", "200000 100000")
+    env = cgroup_env(tmp_path, "0::/\n")
+    env["OMP_NUM_THREADS"] = "1"
+    names = ["cgroup_limit", "available_cores"]
+    assert run_functions("available_cores", names, env) == "2"
+
+
+def test_allow_missing_predictions_option_is_passed_to_hybrid_decoding():
+    assert '--allow-missing-predictions) ALLOW_MISSING_PREDICTIONS="1"' in PREDICT_SH
+    assert "HYBRID_ARGS+=(--allow-missing-predictions)" in PREDICT_SH
+
+
+def test_finished_sequences_without_prediction_files_are_predicted_again():
+    """Hybrid decoding reads the logits, so deleting them must not leave the run broken."""
+    assert PREDICT_SH.count('os.environ.get("NEEDS_LOGITS") != "1"') == 2
+    start = PREDICT_SH.index("NEEDS_LOGITS=0")
+    block = PREDICT_SH[start : PREDICT_SH.index("export NEEDS_LOGITS")]
+    assert '"$DECODER" == "hybrid"' in block
+    assert '"$ALLOW_MISSING_PREDICTIONS" != "1"' in block
+    assert "_GeneCAD_final.gff" in block and "_GeneCAD_hybrid.gff" in block
+
+
+def make_chromosome_files(root: Path, chrom: str, filtered: bool = True) -> None:
+    folder = root / chrom
+    write(folder / f"sequences_{chrom}.zarr" / ".zgroup", "{}")
+    write(folder / f"intervals_{chrom}.zarr" / ".zgroup", "{}")
+    write(folder / f"predictions_{chrom}" / "_SUCCESS.json", "{}")
+    write(folder / f"predictions_{chrom}.lock", "")
+    write(folder / f"predictions_raw_{chrom}.gff", "raw")
+    if filtered:
+        write(folder / f"predictions_filtered_{chrom}.gff", "filtered")
+
+
+def test_cleaning_a_decoded_chromosome_keeps_its_gff_and_predictions(tmp_path):
+    make_chromosome_files(tmp_path, "chr1")
+    run_functions(
+        "clean_decoded_chromosome chr1",
+        ["clean_decoded_chromosome"],
+        {"OUTPUT_DIR": str(tmp_path)},
+    )
+    folder = tmp_path / "chr1"
+    assert not (folder / "sequences_chr1.zarr").exists()
+    assert not (folder / "intervals_chr1.zarr").exists()
+    for kept in (
+        "predictions_chr1",
+        "predictions_chr1.lock",
+        "predictions_raw_chr1.gff",
+        "predictions_filtered_chr1.gff",
+    ):
+        assert (folder / kept).exists(), kept
+
+
+def test_a_chromosome_without_its_filtered_gff_is_not_cleaned(tmp_path):
+    make_chromosome_files(tmp_path, "chr1", filtered=False)
+    run_functions(
+        "clean_decoded_chromosome chr1",
+        ["clean_decoded_chromosome"],
+        {"OUTPUT_DIR": str(tmp_path)},
+    )
+    assert (tmp_path / "chr1" / "sequences_chr1.zarr").exists()
+    assert (tmp_path / "chr1" / "intervals_chr1.zarr").exists()
+
+
+def test_predictions_are_removed_only_after_the_final_gff_exists(tmp_path):
+    make_chromosome_files(tmp_path, "chr1")
+    make_chromosome_files(tmp_path, "chr2")
+    env = {"OUTPUT_DIR": str(tmp_path), "FINAL_GFF": str(tmp_path / "final.gff")}
+    run_functions("clean_predictions chr1 chr2", ["clean_predictions"], env)
+    assert (tmp_path / "chr1" / "predictions_chr1").exists()
+
+    write(tmp_path / "final.gff", "")  # an empty final GFF does not count
+    run_functions("clean_predictions chr1 chr2", ["clean_predictions"], env)
+    assert (tmp_path / "chr2" / "predictions_chr2").exists()
+
+    write(tmp_path / "final.gff", "##gff-version 3\n")
+    run_functions("clean_predictions chr1", ["clean_predictions"], env)
+    assert not (tmp_path / "chr1" / "predictions_chr1").exists()
+    assert not (tmp_path / "chr1" / "predictions_chr1.lock").exists()
+    assert (tmp_path / "chr1" / "predictions_filtered_chr1.gff").exists()
+    assert (tmp_path / "chr1" / "predictions_raw_chr1.gff").exists()
+    assert (tmp_path / "chr2" / "predictions_chr2").exists()  # not listed
+    assert (tmp_path / "final.gff").exists()
+
+
+def test_cleaning_does_nothing_without_an_output_directory(tmp_path):
+    write(tmp_path / "chr1" / "predictions_filtered_chr1.gff", "x")
+    env = {"OUTPUT_DIR": "", "FINAL_GFF": str(tmp_path / "final.gff")}
+    write(tmp_path / "final.gff", "x")
+    run_functions("clean_predictions chr1", ["clean_predictions"], env)
+    run_functions("clean_decoded_chromosome chr1", ["clean_decoded_chromosome"], env)
+    assert (tmp_path / "chr1" / "predictions_filtered_chr1.gff").exists()
+
+
+def test_clean_intermediates_is_off_by_default_and_exported():
+    assert 'CLEAN_INTERMEDIATES="0"' in PREDICT_SH
+    assert '--clean-intermediates) CLEAN_INTERMEDIATES="1"' in PREDICT_SH
+    assert "export -f process_chromosome clean_decoded_chromosome" in PREDICT_SH
+    assert "export CLEAN_INTERMEDIATES OUTPUT_DIR" in PREDICT_SH

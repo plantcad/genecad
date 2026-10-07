@@ -480,6 +480,7 @@ def test_cli_rescues_a_partial_gene_and_passes_other_sequences_through(
             str(tmp_path / "out.gff"),
             "--workers",
             workers,
+            "--allow-missing-predictions",
         ],
     )
     script.main()
@@ -660,3 +661,36 @@ def test_cli_decoding_options_reach_the_frame_aware_graph(tmp_path, monkeypatch)
 
     _, by_seqid = hd.read_genes(str(tmp_path / "out.gff"))
     assert all(g.feats != PLUS_GENE for g in by_seqid.get("chr1", []))
+
+
+def test_cli_stops_when_predictions_are_missing_unless_allowed(
+    tmp_path, monkeypatch, capsys
+):
+    sequence, labels = build_locus()
+    (tmp_path / "genome.fa").write_text(f">chr1\n{sequence}\n")
+    (tmp_path / "in.gff").write_text(
+        "##gff-version 3\n"
+        "chr1\tGeneCAD\tgene\t2201\t2490\t.\t+\t.\tID=chr1_gene_1;partial=true\n"
+        "chr1\tGeneCAD\tmRNA\t2201\t2490\t.\t+\t.\tID=chr1_gene_1.t1;Parent=chr1_gene_1;partial=true\n"
+        "chr1\tGeneCAD\tCDS\t2201\t2490\t.\t+\t0\tParent=chr1_gene_1.t1\n"
+    )
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "hybrid_decode.py",
+            "--input-gff",
+            str(tmp_path / "in.gff"),
+            "--input-fasta",
+            str(tmp_path / "genome.fa"),
+            "--predictions-root",
+            str(tmp_path),
+            "--output-gff",
+            str(tmp_path / "out.gff"),
+        ],
+    )
+    with pytest.raises(SystemExit) as stopped:
+        load_script().main()
+
+    assert stopped.value.code == 2
+    assert "--allow-missing-predictions" in capsys.readouterr().err
+    assert not (tmp_path / "out.gff").exists()

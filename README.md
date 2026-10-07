@@ -360,6 +360,14 @@ HuggingFace model repo ID. Note that this does **not** override the base PlantCA
 * `--merge-max-gap` - Largest gap (bp) between consecutive same-strand genes for which hybrid decoding tries a merge.
 (Default: 20000)
 * `--keep-partial` - Keep transcripts that cannot be made a valid ORF (flagged `partial=true`) instead of dropping them.
+* `--clean-intermediates` - Save disk space. The sequence and interval files of a chromosome are deleted once its
+predictions are decoded, and the prediction files (the largest, about 50 MB per Mb of sequence) are deleted once the
+final GFF is written. All GFF files are kept, so repeating the run afterwards does nothing. The prediction files are
+needed again only if the hybrid or final GFF is deleted; they are then predicted again, which needs a GPU. They are
+needed throughout the run, so this lowers the disk use after the run, not the peak.
+* `--allow-missing-predictions` - Hybrid decoding needs the prediction files of every sequence. If they were deleted,
+the sequence is predicted again by default. With this option it is not: its partial genes stay as they are and it
+takes no part in merging.
 * `--min-intron-length` - Shortest intron frame-aware decoding may emit. Guards against short introns being invented
 to step over an in-frame stop codon. Lower it for compact genomes with genuinely short introns. (Default: 20)
 * `--min-coding-run-length` - Runs of coding sequence adjacent to an intron shorter than this are penalized, not
@@ -382,7 +390,12 @@ forced, and are dropped unless `--keep-partial` is set. Use 0 to disable repair.
 
 > [!TIP]
 > The `genecad predict` pipeline is modular and fully **resumable** - if the output from a given
-> step is present in the output directory, the pipeline will skip that step.
+> step is present in the output directory, the pipeline will skip that step. The merged GFF is
+> built again on every run and replaced only if it changed (for example after a chromosome was
+> processed again), and the ORF repair, hybrid and refinement steps are then redone from it. A
+> chromosome whose folder you delete is processed again. Changing a parameter does **not** redo
+> a finished step: delete that step's output file in `intermediate/` (or the final GFF) to apply
+> a new `--orf-max-shift`, `--merge-max-gap` or similar.
 
 The individual components of the prediction pipeline are also accessible as python scripts.
 While this is not the main recommended method to run the GeneCAD pipeline, some users may
@@ -439,10 +452,11 @@ After running, the output directory contains:
 
 > [!TIP]
 > GeneCAD intermediate files are typically several times larger than the input FASTA file
-> and can easily be 10s-100s Gb in total. You can delete the intermediate .zarr files after
-> checking the final GFF. Keep the `predictions_<CHR_ID>/` folders if you may want to re-run
-> the CPU steps later (for example with another `--decoder`): with them, a re-run skips the
-> GPU prediction.
+> and can easily be 10s-100s Gb in total. Use `--clean-intermediates` to delete the .zarr files
+> as the run proceeds, or delete them yourself after checking the final GFF. Keep the
+> `predictions_<CHR_ID>/` folders if you may want to re-run the CPU steps later (for example
+> with another `--decoder`): with them, a re-run skips the GPU prediction. If they are gone and
+> a step that needs them is run again, the chromosomes are predicted again (on a GPU).
 
 ### Evaluate
 

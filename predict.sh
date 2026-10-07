@@ -1,5 +1,9 @@
 #!/bin/bash
 set -e
+if (( BASH_VERSINFO[0] < 4 )); then
+    echo "Error: predict.sh needs bash 4 or newer (this is bash $BASH_VERSION)." >&2
+    exit 1
+fi
 SCRIPT_DIR="$(cd "$(dirname "$(realpath "$0")")" && pwd)"
 
 # =================================================================
@@ -48,6 +52,19 @@ Options:
                                                 hybrid decoding tries a merge (default: 20000).
     --keep-partial          Keep transcripts that cannot be made a valid ORF (flagged
                                                 partial=true) instead of dropping them.
+    --clean-intermediates   Save disk space. Delete the sequence and interval files of a
+                                                chromosome once its predictions are decoded, and the
+                                                prediction files of all chromosomes once the final GFF
+                                                is written. The GFF files are kept, so a run that is
+                                                repeated afterwards is not redone. Prediction files
+                                                are needed again only if the hybrid or final GFF is
+                                                deleted; they are then predicted again.
+    --allow-missing-predictions
+                                                Hybrid decoding needs the prediction files of every
+                                                sequence. If they were deleted (for example to save disk
+                                                space) the sequence is predicted again, which needs a
+                                                GPU. With this option it is not: those sequences keep
+                                                their partial genes and are not merged.
     --min-intron-length N   Shortest intron frame-aware decoding may emit (default: 20).
                                                 Guards against short introns being invented to step over
                                                 an in-frame stop codon. Lower it for compact genomes
@@ -138,6 +155,8 @@ MIN_TRANSCRIPT_LENGTH="3"
 ORF_MAX_SHIFT="300"
 DECODER="hybrid"
 KEEP_PARTIAL="0"
+ALLOW_MISSING_PREDICTIONS="0"
+CLEAN_INTERMEDIATES="0"
 MERGE_MAX_GAP="20000"
 MIN_INTRON_LENGTH="20"
 MIN_CODING_RUN_LENGTH="9"
@@ -164,6 +183,8 @@ while [[ $# -gt 0 ]]; do
         DECODER="plain"; shift ;;
     --merge-max-gap) MERGE_MAX_GAP="$2"; shift 2 ;;
     --keep-partial) KEEP_PARTIAL="1"; shift ;;
+    --allow-missing-predictions) ALLOW_MISSING_PREDICTIONS="1"; shift ;;
+    --clean-intermediates) CLEAN_INTERMEDIATES="1"; shift ;;
     --min-intron-length) MIN_INTRON_LENGTH="$2"; shift 2 ;;
     --min-coding-run-length) MIN_CODING_RUN_LENGTH="$2"; shift 2 ;;
     --exon-length-strictness) EXON_LENGTH_STRICTNESS="$2"; shift 2 ;;
@@ -510,6 +531,17 @@ EXTRACT_MANIFEST="$BATCH_SIZE_STATE_DIR/extract_manifest.json"
 export -n CHROM_IDS
 CHROM_IDS_FILE="$BATCH_SIZE_STATE_DIR/chromosome_ids.txt"
 printf '%s\n' "$CHROM_IDS" > "$CHROM_IDS_FILE"
+# Hybrid decoding reads the prediction files of every sequence. A sequence that is finished
+# but whose prediction files are gone is therefore predicted again, unless the hybrid or
+# final GFF already exists or --allow-missing-predictions was given.
+NEEDS_LOGITS=0
+if [[ "$DECODER" == "hybrid" && "$ALLOW_MISSING_PREDICTIONS" != "1" \
+    && ! -f "$OUTPUT_DIR/${SPECIES_ID}_GeneCAD_final.gff" \
+    && ! -f "$OUTPUT_DIR/intermediate/${SPECIES_ID}_GeneCAD_hybrid.gff" ]]; then
+    NEEDS_LOGITS=1
+fi
+export NEEDS_LOGITS
+
 EXTRACT_MANIFEST_COUNT=$(OUTPUT_DIR="$OUTPUT_DIR" $PYTHON - "$EXTRACT_MANIFEST" "$CHROM_IDS_FILE" <<'PYEOF'
 import json
 import os
@@ -527,7 +559,13 @@ for chrom_id in chrom_ids:
     filtered_gff = os.path.join(chrom_dir, f"predictions_filtered_{chrom_id}.gff")
     # Skip chromosomes that already have sequences.zarr, or are already
     # fully done (no need to re-extract sequences for those on resume).
-    if os.path.exists(sequences_zarr) or os.path.isfile(filtered_gff):
+    predictions_done = os.path.isfile(
+        os.path.join(chrom_dir, f"predictions_{chrom_id}", "_SUCCESS.json")
+    )
+    finished = os.path.isfile(filtered_gff) and (
+        predictions_done or os.environ.get("NEEDS_LOGITS") != "1"
+    )
+    if os.path.exists(sequences_zarr) or finished:
         continue
     entries.append({"chromosome_id": chrom_id, "output_zarr": sequences_zarr})
 
@@ -553,6 +591,26 @@ echo ""
 # =================================================================
 # Step 2: Per-chromosome pipeline (all 6 steps)
 # =================================================================
+
+# Removes only files with these exact names inside the output directory.
+# clean_decoded_chromosome ID: the sequence and interval files, no longer used once
+# the chromosome has its filtered GFF.
+clean_decoded_chromosome() {
+    local dir="$OUTPUT_DIR/$1"
+    [[ -n "$OUTPUT_DIR" && -s "$dir/predictions_filtered_$1.gff" ]] || return 0
+    rm -rf "$dir/sequences_$1.zarr" "$dir/intervals_$1.zarr"
+}
+
+# clean_predictions ID...: the prediction files, which hybrid decoding reads last.
+# Nothing is removed unless the final GFF exists.
+clean_predictions() {
+    [[ -n "$OUTPUT_DIR" && -s "$FINAL_GFF" ]] || return 0
+    local id
+    for id in "$@"; do
+        rm -rf "$OUTPUT_DIR/$id/predictions_$id" "$OUTPUT_DIR/$id/predictions_$id.lock"
+        rm -rf "$OUTPUT_DIR/$id/sequences_$id.zarr" "$OUTPUT_DIR/$id/intervals_$id.zarr"
+    done
+}
 
 process_chromosome() {
     local CHR_ID="$1"
@@ -635,6 +693,9 @@ process_chromosome() {
             --output-gff "$FILTERED_GENECAD_GFF" || return $?
     fi
 
+    if [[ "$CLEAN_INTERMEDIATES" == "1" ]]; then
+        clean_decoded_chromosome "$CHR_ID"
+    fi
     echo "${LOG_PREFIX} Done!"
 }
 
@@ -684,7 +745,10 @@ for chrom in Path(sys.argv[1]).read_text().splitlines():
     if not chrom.strip():
         continue
     directory = output / chrom
-    if (directory / f"predictions_filtered_{chrom}.gff").is_file():
+    predictions_done = (directory / f"predictions_{chrom}" / "_SUCCESS.json").is_file()
+    if (directory / f"predictions_filtered_{chrom}.gff").is_file() and (
+        predictions_done or os.environ.get("NEEDS_LOGITS") != "1"
+    ):
         continue
     work[keys[index % len(keys)]].append({
         "chromosome_id": chrom,
@@ -734,8 +798,8 @@ else
     FRAME_AWARE_ARGS=()
 fi
 
-export -f process_chromosome
-export OUTPUT_DIR SPECIES_ID BASE_MODEL HEAD_MODEL TOKENIZER_PATH DTYPE PYTHON PYTHONPATH
+export -f process_chromosome clean_decoded_chromosome
+export CLEAN_INTERMEDIATES OUTPUT_DIR SPECIES_ID BASE_MODEL HEAD_MODEL TOKENIZER_PATH DTYPE PYTHON PYTHONPATH
 export GPU_LIST_STR NUM_GPUS BATCH_SIZE_STATE_DIR
 
 CHR_ARRAY=()
@@ -783,22 +847,81 @@ largest_sequence_bp() {
         { n += length($0) } END { if (n > max) max = n; print max + 0 }'
 }
 
-# CPU cores this job may use. nproc reads OMP_NUM_THREADS, which batch wrappers set to 1,
-# so it is run without it; it still respects taskset and Slurm/cgroup limits.
-available_cores() {
-    env -u OMP_NUM_THREADS -u OMP_THREAD_LIMIT nproc 2>/dev/null || echo 1
+# The smallest value of a cgroup limit found in this process's cgroup and its parents.
+# Works with cgroup v2 (memory.max, cpu.max) and v1 (memory.limit_in_bytes, cpu.cfs_*).
+# Prints nothing when no limit is set. CGROUP_ROOT and CGROUP_FILE exist for the tests.
+cgroup_limit() {
+    local what="$1"   # memory (kB) or cpu (cores, rounded up)
+    local root="${CGROUP_ROOT:-/sys/fs/cgroup}" file="${CGROUP_FILE:-/proc/self/cgroup}"
+    local dir rel value period best=""
+    rel=$(awk -F: '$1 == "0" { print $3; exit }' "$file" 2>/dev/null || true)
+    if [[ -f "$root/cgroup.controllers" || -n "$rel" ]]; then   # cgroup v2
+        dir="$root$rel"
+        while [[ "$dir" == "$root"* ]]; do
+            if [[ "$what" == "memory" ]]; then
+                value=$(cat "$dir/memory.max" 2>/dev/null || true)
+                [[ "$value" =~ ^[0-9]+$ ]] && value=$(( value / 1024 )) || value=""
+            else
+                value="" period=""
+                if [[ -r "$dir/cpu.max" ]]; then read -r value period < "$dir/cpu.max" || true; fi
+                [[ "$value" =~ ^[0-9]+$ && "$period" =~ ^[0-9]+$ && "$period" -gt 0 ]] \
+                    && value=$(( (value + period - 1) / period )) || value=""
+            fi
+            [[ -n "$value" ]] && { [[ -z "$best" || "$value" -lt "$best" ]] && best="$value"; }
+            [[ "$dir" == "$root" ]] && break
+            dir="${dir%/*}"
+        done
+    else   # cgroup v1: each controller has its own tree
+        local controller=memory
+        [[ "$what" == "cpu" ]] && controller=cpu
+        rel=$(awk -F: -v c="$controller" '$2 ~ "(^|,)" c "(,|$)" { print $3; exit }' "$file" 2>/dev/null || true)
+        dir="$root/$controller$rel"
+        while [[ "$dir" == "$root/$controller"* ]]; do
+            if [[ "$what" == "memory" ]]; then
+                value=$(cat "$dir/memory.limit_in_bytes" 2>/dev/null || true)
+                [[ "$value" =~ ^[0-9]+$ ]] && value=$(( value / 1024 )) || value=""
+            else
+                value=$(cat "$dir/cpu.cfs_quota_us" 2>/dev/null || true)
+                period=$(cat "$dir/cpu.cfs_period_us" 2>/dev/null || true)
+                [[ "$value" =~ ^[0-9]+$ && "$period" =~ ^[0-9]+$ && "$period" -gt 0 ]] \
+                    && value=$(( (value + period - 1) / period )) || value=""
+            fi
+            [[ -n "$value" ]] && { [[ -z "$best" || "$value" -lt "$best" ]] && best="$value"; }
+            [[ "$dir" == "$root/$controller" ]] && break
+            dir="${dir%/*}"
+        done
+    fi
+    echo "$best"
 }
 
-# Memory this job may use, in kB: MemAvailable, capped by cgroup and SLURM limits.
+# CPU cores this job may use. nproc reads OMP_NUM_THREADS, which batch wrappers set to 1,
+# so it is run with that unset; it still respects taskset and Slurm binding. A cgroup CPU
+# quota (docker --cpus) is not visible to nproc, so it is applied here. env(1) is avoided
+# on purpose: a container image may put a different env first in PATH.
+available_cores() {
+    local cores quota
+    cores=$( (unset OMP_NUM_THREADS OMP_THREAD_LIMIT; nproc 2>/dev/null) \
+        || getconf _NPROCESSORS_ONLN 2>/dev/null || echo 1)
+    quota=$(cgroup_limit cpu)
+    [[ "$quota" =~ ^[0-9]+$ ]] && (( quota >= 1 && quota < cores )) && cores=$quota
+    echo "$cores"
+}
+
+# Memory this job may use, in kB: MemAvailable, capped by the cgroup and Slurm limits.
+# Prints 0 when it cannot be read, which makes auto parallelism fall back to one at a time.
 available_memory_kb() {
     local kb limit
-    kb=$(awk '/^MemAvailable:/ { print $2 }' /proc/meminfo)
-    limit=$(cat /sys/fs/cgroup/memory.max 2>/dev/null || true)
-    if [[ "$limit" =~ ^[0-9]+$ ]] && (( limit / 1024 < kb )); then
-        kb=$(( limit / 1024 ))
+    kb=$(awk '/^MemAvailable:/ { print $2 }' "${MEMINFO_FILE:-/proc/meminfo}" 2>/dev/null || true)
+    [[ "$kb" =~ ^[0-9]+$ ]] || kb=0
+    limit=$(cgroup_limit memory)
+    if [[ "$limit" =~ ^[0-9]+$ ]] && (( limit < kb )); then
+        kb=$limit
     fi
     if [[ "${SLURM_MEM_PER_NODE:-}" =~ ^[0-9]+$ ]] && (( SLURM_MEM_PER_NODE * 1024 < kb )); then
         kb=$(( SLURM_MEM_PER_NODE * 1024 ))
+    elif [[ "${SLURM_MEM_PER_CPU:-}" =~ ^[0-9]+$ && "${SLURM_CPUS_ON_NODE:-}" =~ ^[0-9]+$ ]] \
+        && (( SLURM_MEM_PER_CPU * SLURM_CPUS_ON_NODE * 1024 < kb )); then
+        kb=$(( SLURM_MEM_PER_CPU * SLURM_CPUS_ON_NODE * 1024 ))
     fi
     echo "$kb"
 }
@@ -819,8 +942,10 @@ if [[ "$MAX_PARALLEL_CHROMOSOMES" == "auto" ]]; then
     (( MAX_AUTO < NUM_GPUS )) && MAX_AUTO=$NUM_GPUS
     PARALLEL_CHROMOSOMES=$(resolve_parallel_chromosomes auto "$MAX_AUTO" "$LARGEST_BP" "$AVAILABLE_KB" "$DECODE_GB_PER_MB")
     echo "Decoding up to $PARALLEL_CHROMOSOMES chromosome(s) at once" \
-        "(longest sequence $(( LARGEST_BP / 1000000 )) Mb, $(( AVAILABLE_KB / 1048576 )) GB RAM available)"
-    if awk -v bp="$LARGEST_BP" -v kb="$AVAILABLE_KB" -v per_mb="$DECODE_GB_PER_MB" \
+        "(longest sequence $(( LARGEST_BP / 1000000 )) Mb, $(( AVAILABLE_KB / 1048576 )) GB RAM available, CPU allows $MAX_AUTO)"
+    if [[ "$AVAILABLE_KB" -eq 0 ]]; then
+        echo "WARNING: could not read the available memory; decoding one chromosome at a time."
+    elif awk -v bp="$LARGEST_BP" -v kb="$AVAILABLE_KB" -v per_mb="$DECODE_GB_PER_MB" \
         'BEGIN { exit !(bp / 1e6 * per_mb * 1048576 > kb) }'; then
         echo "WARNING: decoding the longest sequence may need more RAM than is available."
     fi
@@ -931,6 +1056,28 @@ for CHR_ID in "${CHR_ARRAY[@]}"; do
     RECALL_GFFS=("${RECALL_GFFS[@]}" "${OUTPUT_DIR}/${CHR_ID}/predictions_filtered_$CHR_ID.gff")
 done
 
+# A finished stage is skipped, but only while the files it was built from are unchanged.
+# refresh_stage OUTPUT INPUT...: when OUTPUT was built from other inputs it is moved aside
+# (OUTPUT.stale, removed once the run succeeds) so that it is built again.
+refresh_stage() {
+    local output="$1" reason status=0
+    shift
+    [[ -f "$output" ]] || return 0
+    reason=$($PYTHON "$SCRIPT_DIR/scripts/stage_inputs.py" check "$output" "$@") || status=$?
+    if [[ $status -eq 10 ]]; then
+        echo "Rebuilding $(basename "$output"): $reason"
+        mv -f "$output" "$output.stale"
+        rm -f "$output.inputs.json"
+    elif [[ $status -ne 0 ]]; then
+        return "$status"
+    fi
+}
+
+# record_stage OUTPUT INPUT...: remember which inputs OUTPUT was built from.
+record_stage() {
+    $PYTHON "$SCRIPT_DIR/scripts/stage_inputs.py" record "$@"
+}
+
 # =================================================================
 # Merge all per-chromosome GFFs into single files
 # =================================================================
@@ -947,12 +1094,18 @@ RAW_GFF="$INTERMEDIATE_DIR/${SPECIES_ID}_GeneCAD_raw.gff"
 ORF_GFF="$INTERMEDIATE_DIR/${SPECIES_ID}_GeneCAD_orf.gff"
 FINAL_GFF="$OUTPUT_DIR/${SPECIES_ID}_GeneCAD_final.gff"
 
-if [[ -f "$RAW_GFF" ]]; then
-    echo "Skipping merge — ${SPECIES_ID}_GeneCAD_raw.gff already exists"
+# Merge again every time and keep the existing file only when it is identical, so that
+# a sequence that was processed again is never missing from the merged annotation, and
+# the steps after it are redone only when something really changed.
+$PYTHON "$MERGE_SCRIPT" \
+    --output-gff "$RAW_GFF.new" \
+    --input-gffs "${RECALL_GFFS[@]}"
+if [[ -f "$RAW_GFF" ]] && cmp -s "$RAW_GFF.new" "$RAW_GFF"; then
+    rm -f "$RAW_GFF.new"
+    echo "${SPECIES_ID}_GeneCAD_raw.gff is up to date"
 else
-    $PYTHON "$MERGE_SCRIPT" \
-        --output-gff "$RAW_GFF" \
-        --input-gffs "${RECALL_GFFS[@]}"
+    [[ -f "$RAW_GFF" ]] && echo "Per-chromosome results changed: ${SPECIES_ID}_GeneCAD_raw.gff was rebuilt"
+    mv -f "$RAW_GFF.new" "$RAW_GFF"
 fi
 
 echo ""
@@ -960,6 +1113,7 @@ echo "================================================================="
 echo "[7/8] Repairing CDS boundaries against the genome sequence..."
 echo "================================================================="
 
+[[ "$ORF_MAX_SHIFT" -eq 0 ]] || refresh_stage "$ORF_GFF" "$RAW_GFF"
 if [[ "$ORF_MAX_SHIFT" -eq 0 ]]; then
     echo "Skipping ORF repair — disabled via --orf-max-shift 0"
     ORF_GFF="$RAW_GFF"
@@ -979,6 +1133,7 @@ else
         --max-shift "$ORF_MAX_SHIFT" \
         --report "$INTERMEDIATE_DIR/${SPECIES_ID}_GeneCAD_orf_report.tsv" \
         "${KEEP_PARTIAL_ARGS[@]}"
+    record_stage "$ORF_GFF" "$RAW_GFF"
 fi
 
 REFINE_INPUT_GFF="$ORF_GFF"
@@ -986,12 +1141,16 @@ if [[ "$DECODER" == "hybrid" ]]; then
     HYBRID_GFF="$INTERMEDIATE_DIR/${SPECIES_ID}_GeneCAD_hybrid.gff"
     echo ""
     echo "[7/8] Hybrid decoding: rescuing partial and merging split genes..."
+    refresh_stage "$HYBRID_GFF" "$ORF_GFF"
     if [[ -f "$HYBRID_GFF" ]]; then
         echo "Skipping hybrid decoding — ${SPECIES_ID}_GeneCAD_hybrid.gff already exists"
     else
         HYBRID_ARGS=()
         if [[ "$KEEP_PARTIAL" == "1" ]]; then
             HYBRID_ARGS+=(--keep-partial)
+        fi
+        if [[ "$ALLOW_MISSING_PREDICTIONS" == "1" ]]; then
+            HYBRID_ARGS+=(--allow-missing-predictions)
         fi
         if [[ "$ALLOW_U12_INTRONS" == "1" ]]; then
             HYBRID_ARGS+=(--allow-u12-introns)
@@ -1008,6 +1167,7 @@ if [[ "$DECODER" == "hybrid" ]]; then
             --min-coding-run-length "$MIN_CODING_RUN_LENGTH" \
             --exon-length-strictness "$EXON_LENGTH_STRICTNESS" \
             "${HYBRID_ARGS[@]}"
+        record_stage "$HYBRID_GFF" "$ORF_GFF"
     fi
     REFINE_INPUT_GFF="$HYBRID_GFF"
 fi
@@ -1017,6 +1177,7 @@ echo "================================================================="
 echo "[8/8] Running protein refinement on merged predictions..."
 echo "================================================================="
 
+refresh_stage "$FINAL_GFF" "$REFINE_INPUT_GFF"
 if [[ -f "$FINAL_GFF" ]]; then
     echo "Skipping refinement — ${SPECIES_ID}_GeneCAD_final.gff already exists"
 else
@@ -1025,6 +1186,13 @@ else
         --input-fasta "$INPUT_FILE" \
         --output-gff "$FINAL_GFF" \
         --gpus "$GPU_LIST_STR"
+    record_stage "$FINAL_GFF" "$REFINE_INPUT_GFF"
+fi
+rm -f "$FINAL_GFF.stale" "$RAW_GFF.stale" "$ORF_GFF.stale" "${HYBRID_GFF:-$RAW_GFF}.stale"
+
+if [[ "$CLEAN_INTERMEDIATES" == "1" ]]; then
+    clean_predictions "${CHR_ARRAY[@]}"
+    echo "Removed the sequence, interval and prediction files (--clean-intermediates)."
 fi
 
 echo ""

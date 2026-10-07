@@ -108,6 +108,12 @@ def main() -> None:
         help="Directory holding <chrom>/predictions_<chrom>/ for each sequence",
     )
     parser.add_argument("--output-gff", required=True, help="Output GFF3 file")
+    parser.add_argument(
+        "--allow-missing-predictions",
+        action="store_true",
+        help="Leave sequences whose prediction files are missing unchanged "
+        "instead of stopping with an error",
+    )
     parser.add_argument("--domain", choices=["plant", "animal"], default="plant")
     parser.add_argument(
         "--flank",
@@ -161,10 +167,17 @@ def main() -> None:
         else:
             missing.append(seqid)
     if missing:
-        logger.warning(
-            f"{len(missing)} sequence(s) have no predictions and were left unchanged, "
-            f"e.g. {missing[:5]}"
+        message = (
+            f"{len(missing)} sequence(s) have no predictions, e.g. {missing[:5]}. "
+            "Without them, partial genes on these sequences cannot be rescued "
+            "and split genes cannot be merged."
         )
+        if not args.allow_missing_predictions:
+            parser.error(
+                message + " Predict them again (predict.sh does this by default), "
+                "or pass --allow-missing-predictions to leave these sequences unchanged."
+            )
+        logger.warning(message + " They were left unchanged.")
 
     graph_options = {
         "min_intron_length": args.min_intron_length,
