@@ -9,17 +9,25 @@ import hashlib
 import fcntl
 import json
 import logging
+import os
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from pathlib import Path
 import shutil
+from typing import TypeVar
 from uuid import uuid4
 
 from src.atomic_io import atomic_output_path
 
 logger = logging.getLogger(__name__)
+Item = TypeVar("Item")
+Result = TypeVar("Result")
 RUN = "run.json"
 SUCCESS = "_SUCCESS.json"
 VERSION = 1
+HASH_WORKERS_ENV = "GENECAD_HASH_WORKERS"
+MAX_HASH_WORKERS = 64
 
 
 class PredictionResumeError(ValueError):
@@ -52,12 +60,76 @@ def digest_file(path: str | Path) -> str:
     return digest.hexdigest()
 
 
+def hash_workers() -> int:
+    """Threads used to read and hash prediction files.
+
+    Hashing is bound by per-file latency on network file systems (Lustre, NFS),
+    so files are read concurrently; hashlib and file reads release the GIL.
+    """
+    value = os.environ.get(HASH_WORKERS_ENV)
+    if value is not None:
+        try:
+            workers = int(value)
+        except ValueError:
+            workers = 0
+        if workers < 1:
+            raise ValueError(
+                f"{HASH_WORKERS_ENV} must be a positive integer: {value!r}"
+            )
+        return workers
+    try:
+        cpus = len(os.sched_getaffinity(0))
+    except AttributeError:  # not available on macOS
+        cpus = os.cpu_count() or 1
+    return min(MAX_HASH_WORKERS, 4 * cpus)
+
+
+def _parallel(
+    function: Callable[[Item], Result], items: list[Item], workers: int
+) -> list[Result | Exception]:
+    """The result of ``function`` for each item, or the exception it raised, in order."""
+
+    def capture(item: Item) -> Result | Exception:
+        try:
+            return function(item)
+        except Exception as error:
+            return error
+
+    workers = min(workers, len(items))
+    if workers <= 1:
+        return [capture(item) for item in items]
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        return list(pool.map(capture, items))
+
+
+def _digests(paths: list[Path], workers: int) -> list[str]:
+    """Digests in input order; raises the error of the first file that failed."""
+    digests = []
+    for value in _parallel(digest_file, paths, workers):
+        if isinstance(value, Exception):
+            raise value
+        digests.append(value)
+    return digests
+
+
+def _list_files(root: Path) -> list[Path]:
+    return [p for p in sorted(root.rglob("*")) if p.is_file()]
+
+
 def file_hashes(path: str | Path) -> dict[str, str]:
     root = Path(path)
+    files = _list_files(root)
     return {
-        str(p.relative_to(root)): digest_file(p)
-        for p in sorted(root.rglob("*"))
-        if p.is_file()
+        str(p.relative_to(root)): digest
+        for p, digest in zip(files, _digests(files, hash_workers()))
+    }
+
+
+def receipt_digests(root: Path) -> dict[str, str]:
+    receipts = sorted(root.glob("segment.*.json"))
+    return {
+        p.name: digest
+        for p, digest in zip(receipts, _digests(receipts, hash_workers()))
     }
 
 
@@ -109,36 +181,77 @@ def prepare_run(output_dir: str, identity: dict, length: int) -> None:
             shutil.rmtree(path)
 
 
+def _check_receipt(
+    receipt: Path, run_id: str, verify: bool
+) -> tuple[dict, Path, list[Path]]:
+    record = read_json(receipt)
+    receipt_hash = record.pop("receipt_hash")
+    store = receipt.with_suffix(".zarr")
+    if (
+        receipt_hash != fingerprint(record)
+        or record["run_id"] != run_id
+        or record["store"] != store.name
+        or record["strand"] not in ("positive", "negative")
+        or not 0 <= record["start"] < record["stop"]
+        or not 0 <= record["window_start"] < record["window_stop"]
+        or not record["files"]
+        or not store.is_dir()
+    ):
+        raise ValueError(f"Invalid receipt: {receipt}")
+    return record, store, _list_files(store) if verify else []
+
+
 def segments(root: str | Path, *, verify: bool, repair: bool = False) -> list[dict]:
+    """Valid segments in receipt order.
+
+    Receipts are read, and all files of all stores hashed, concurrently; the
+    outcome (records, warnings, deletions and which error is raised) is the same
+    as checking the receipts one at a time in sorted order.
+    """
     root = Path(root)
     run_id = fingerprint(read_json(root / RUN))
+    workers = hash_workers()
+    receipts = sorted(root.glob("segment.*.json"))
+    checked = _parallel(
+        lambda receipt: _check_receipt(receipt, run_id, verify), receipts, workers
+    )
+    files = [
+        path
+        for value in checked
+        if not isinstance(value, Exception)
+        for path in value[2]
+    ]
+    hashed = iter(_parallel(digest_file, files, workers))
+
     records = []
-    for receipt in sorted(root.glob("segment.*.json")):
-        try:
-            record = read_json(receipt)
-            receipt_hash = record.pop("receipt_hash")
-            store = receipt.with_suffix(".zarr")
-            if (
-                receipt_hash != fingerprint(record)
-                or record["run_id"] != run_id
-                or record["store"] != store.name
-                or record["strand"] not in ("positive", "negative")
-                or not 0 <= record["start"] < record["stop"]
-                or not 0 <= record["window_start"] < record["window_stop"]
-                or not record["files"]
-                or not store.is_dir()
+    for receipt, value in zip(receipts, checked):
+        error: Exception | None = None
+        if isinstance(value, Exception):
+            error = value
+        else:
+            record, store, store_files = value
+            digests = [next(hashed) for _ in store_files]
+            failed = [d for d in digests if isinstance(d, Exception)]
+            if failed:
+                error = failed[0]
+            elif (
+                verify
+                and {
+                    str(path.relative_to(store)): digest
+                    for path, digest in zip(store_files, digests)
+                }
+                != record["files"]
             ):
-                raise ValueError(f"Invalid receipt: {receipt}")
-            if verify and file_hashes(store) != record["files"]:
-                raise ValueError(f"Prediction checksum mismatch: {store}")
-            records.append(record)
-        except (OSError, ValueError, KeyError, TypeError):
-            if not repair:
-                raise
-            logger.warning(
-                "Discarding incomplete/corrupt prediction segment %s", receipt
-            )
-            receipt.unlink(missing_ok=True)
+                error = ValueError(f"Prediction checksum mismatch: {store}")
+            else:
+                records.append(record)
+                continue
+        if not isinstance(error, (OSError, ValueError, KeyError, TypeError)):
+            raise error
+        if not repair:
+            raise error
+        logger.warning("Discarding incomplete/corrupt prediction segment %s", receipt)
+        receipt.unlink(missing_ok=True)
     return records
 
 
@@ -204,9 +317,7 @@ def finish_run(output_dir: str) -> None:
         root / SUCCESS,
         {
             "run_id": fingerprint(run),
-            "receipts": {
-                p.name: digest_file(p) for p in sorted(root.glob("segment.*.json"))
-            },
+            "receipts": receipt_digests(root),
         },
     )
 
@@ -216,7 +327,7 @@ def completed_segments(output_dir: str) -> list[dict]:
     root = Path(output_dir)
     run = read_json(root / RUN)
     complete = read_json(root / SUCCESS)
-    receipts = {p.name: digest_file(p) for p in sorted(root.glob("segment.*.json"))}
+    receipts = receipt_digests(root)
     if complete != {"run_id": fingerprint(run), "receipts": receipts}:
         raise ValueError(f"Prediction completion manifest mismatch in {root}")
     records = segments(root, verify=True)

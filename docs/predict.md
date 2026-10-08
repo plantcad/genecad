@@ -86,7 +86,15 @@ readable by interval detection but cannot be resumed without progress receipts.
 Use a new output directory to regenerate legacy predictions. Old chromosome-wide
 `.tmp` directories are not imported.
 
-File hashing uses 4 MiB blocks. Windows are generated in batches, but the current
+File hashing uses 4 MiB blocks. Receipts are read and segment files hashed by a
+pool of threads, because on network file systems (Lustre, NFS) the time per file,
+not disk bandwidth, limits a single reader. The pool has `min(64, 4 × CPUs)`
+threads; set `GENECAD_HASH_WORKERS` to change it (`1` hashes one file at a time).
+The result is the same for any number of threads. Every process that verifies
+predictions starts its own pool, so decoding several chromosomes in parallel
+multiplies the number of concurrent reads.
+
+Windows are generated in batches, but the current
 sequence and padded strand remain in RAM, so long chromosomes can still require
 substantial memory. Checksums and segment files add I/O. Other pipeline stages
 retain their atomic output writes and stage-level resume checks. The shell skips
