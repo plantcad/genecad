@@ -531,17 +531,13 @@ EXTRACT_MANIFEST="$BATCH_SIZE_STATE_DIR/extract_manifest.json"
 export -n CHROM_IDS
 CHROM_IDS_FILE="$BATCH_SIZE_STATE_DIR/chromosome_ids.txt"
 printf '%s\n' "$CHROM_IDS" > "$CHROM_IDS_FILE"
-# Hybrid decoding reads the prediction files of every sequence. A sequence that is finished
-# but whose prediction files are gone is therefore predicted again, unless the hybrid or
-# final GFF already exists or --allow-missing-predictions was given.
+# Finished sequences are not predicted again in the first pass. Hybrid decoding, which reads
+# the prediction files of every sequence, predicts again the ones that were deleted when it is
+# about to run (see before the hybrid step).
 NEEDS_LOGITS=0
-if [[ "$DECODER" == "hybrid" && "$ALLOW_MISSING_PREDICTIONS" != "1" \
-    && ! -f "$OUTPUT_DIR/${SPECIES_ID}_GeneCAD_final.gff" \
-    && ! -f "$OUTPUT_DIR/intermediate/${SPECIES_ID}_GeneCAD_hybrid.gff" ]]; then
-    NEEDS_LOGITS=1
-fi
 export NEEDS_LOGITS
 
+extract_needed_sequences() {
 EXTRACT_MANIFEST_COUNT=$(OUTPUT_DIR="$OUTPUT_DIR" $PYTHON - "$EXTRACT_MANIFEST" "$CHROM_IDS_FILE" <<'PYEOF'
 import json
 import os
@@ -586,6 +582,8 @@ if [[ "$EXTRACT_MANIFEST_COUNT" -gt 0 ]]; then
 else
     echo "All chromosomes already have sequences.zarr — nothing to extract."
 fi
+}
+extract_needed_sequences
 echo ""
 
 # =================================================================
@@ -1145,6 +1143,17 @@ if [[ "$DECODER" == "hybrid" ]]; then
     if [[ -f "$HYBRID_GFF" ]]; then
         echo "Skipping hybrid decoding — ${SPECIES_ID}_GeneCAD_hybrid.gff already exists"
     else
+        if [[ "$ALLOW_MISSING_PREDICTIONS" != "1" ]]; then
+            # Hybrid decoding reads the prediction files of every sequence. Predict again
+            # the ones that were deleted (this does nothing when all of them exist).
+            NEEDS_LOGITS=1
+            export NEEDS_LOGITS
+            extract_needed_sequences
+            run_prediction_workers || {
+                echo "ERROR: Could not predict the sequences whose prediction files are missing."
+                exit 1
+            }
+        fi
         HYBRID_ARGS=()
         if [[ "$KEEP_PARTIAL" == "1" ]]; then
             HYBRID_ARGS+=(--keep-partial)

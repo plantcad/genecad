@@ -148,6 +148,12 @@ genecad predict \
   -m plant #choose model: plant or animal
 ```
 
+> [!TIP]
+> Large genomes leave a lot of intermediate data: about 50 MB of prediction files per Mb of
+> genome, so several hundred GB for a 10 Gb genome. If the disk may fill up, add
+> `--clean-intermediates`. It is off by default and keeps all GFF files; see
+> [Advanced Usage - Prediction](#predict).
+
 #### Output
 
 The result is one GFF3 file at the top of the output directory:

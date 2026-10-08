@@ -431,11 +431,18 @@ run_prediction_workers
 
     # The FASTA extraction manifest must use the same file-based transport.
     text = (Path(__file__).resolve().parents[2] / "predict.sh").read_text()
-    extraction = text[
-        text.index('EXTRACT_MANIFEST="$BATCH_SIZE_STATE_DIR/') : text.index(
-            '\nif [[ "$EXTRACT_MANIFEST_COUNT"'
-        )
-    ]
+    extraction = (
+        text[
+            text.index('EXTRACT_MANIFEST="$BATCH_SIZE_STATE_DIR/') : text.index(
+                "extract_needed_sequences() {"
+            )
+        ]
+        + text[
+            text.index("EXTRACT_MANIFEST_COUNT=$(") : text.index(
+                '\nif [[ "$EXTRACT_MANIFEST_COUNT"'
+            )
+        ]
+    )
     result = subprocess.run(
         ["bash", "-c", 'CHROM_IDS=$(cat "$SOURCE_IDS")\n' + extraction],
         env=env,

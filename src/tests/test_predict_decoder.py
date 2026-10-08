@@ -92,8 +92,17 @@ def run_post_processing(tmp_path, decoder: str, keep_partial: str) -> list[list[
         "EXON_LENGTH_STRICTNESS": "16",
         "ALLOW_U12_INTRONS": "0",
     }
+    # Steps that are not under test here: skip-checks and predicting deleted files again.
+    stubs = (
+        "refresh_stage() { :; }\nrecord_stage() { :; }\n"
+        "extract_needed_sequences() { :; }\nrun_prediction_workers() { :; }\n"
+    )
+    env["ALLOW_MISSING_PREDICTIONS"] = "0"
     result = subprocess.run(
-        ["bash", "-c", post_processing()], env=env, text=True, capture_output=True
+        ["bash", "-c", stubs + post_processing()],
+        env=env,
+        text=True,
+        capture_output=True,
     )
     assert result.returncode == 0, result.stdout + result.stderr
     return [line.split() for line in log.read_text().splitlines()]
@@ -268,7 +277,13 @@ def test_intermediates_go_to_their_own_folder_and_the_final_gff_is_named_at_the_
     start = PREDICT_SH.index('echo "[6/8] Merging per-chromosome GFFs')
     log = tmp_path / "calls.log"
     fake = tmp_path / "python"
-    fake.write_text(f'#!/bin/bash\necho "$*" >> {log}\n')
+    fake.write_text(
+        f'#!/bin/bash\necho "$*" >> {log}\n'
+        "while [[ $# -gt 0 ]]; do\n"
+        '  if [[ "$1" == --output-gff ]]; then mkdir -p "$(dirname "$2")"; : > "$2"; fi\n'
+        "  shift\n"
+        "done\n"
+    )
     fake.chmod(0o755)
     out = tmp_path / "out"
     env = {
@@ -291,8 +306,13 @@ def test_intermediates_go_to_their_own_folder_and_the_final_gff_is_named_at_the_
         "EXON_LENGTH_STRICTNESS": "16",
         "ALLOW_U12_INTRONS": "0",
     }
+    stubs = (
+        "refresh_stage() { :; }\nrecord_stage() { :; }\n"
+        "extract_needed_sequences() { :; }\nrun_prediction_workers() { :; }\n"
+    )
+    env["ALLOW_MISSING_PREDICTIONS"] = "0"
     result = subprocess.run(
-        ["bash", "-c", "RECALL_GFFS=()\n" + PREDICT_SH[start:]],
+        ["bash", "-c", stubs + "RECALL_GFFS=()\n" + PREDICT_SH[start:]],
         env=env,
         text=True,
         capture_output=True,
@@ -466,14 +486,20 @@ def test_allow_missing_predictions_option_is_passed_to_hybrid_decoding():
     assert "HYBRID_ARGS+=(--allow-missing-predictions)" in PREDICT_SH
 
 
-def test_finished_sequences_without_prediction_files_are_predicted_again():
+def test_deleted_prediction_files_are_predicted_again_just_before_hybrid_decoding():
     """Hybrid decoding reads the logits, so deleting them must not leave the run broken."""
     assert PREDICT_SH.count('os.environ.get("NEEDS_LOGITS") != "1"') == 2
-    start = PREDICT_SH.index("NEEDS_LOGITS=0")
-    block = PREDICT_SH[start : PREDICT_SH.index("export NEEDS_LOGITS")]
-    assert '"$DECODER" == "hybrid"' in block
-    assert '"$ALLOW_MISSING_PREDICTIONS" != "1"' in block
-    assert "_GeneCAD_final.gff" in block and "_GeneCAD_hybrid.gff" in block
+    assert "extract_needed_sequences() {" in PREDICT_SH
+    hybrid = PREDICT_SH[PREDICT_SH.index('refresh_stage "$HYBRID_GFF"') :]
+    hybrid = hybrid[: hybrid.index("HYBRID_ARGS=()")]
+    assert '"$ALLOW_MISSING_PREDICTIONS" != "1"' in hybrid
+    assert "NEEDS_LOGITS=1" in hybrid
+    assert hybrid.index("extract_needed_sequences") < hybrid.index(
+        "run_prediction_workers"
+    )
+    assert (
+        "NEEDS_LOGITS=0" in PREDICT_SH[: PREDICT_SH.index("extract_needed_sequences()")]
+    )
 
 
 def make_chromosome_files(root: Path, chrom: str, filtered: bool = True) -> None:
