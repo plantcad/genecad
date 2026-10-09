@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 import numpy.typing as npt
 from numba import njit
-from typing import Iterator, Literal, cast as cast_type
+from typing import Iterable, Iterator, Literal, cast as cast_type
 import logging
 import itertools
 
@@ -642,23 +642,26 @@ def create_sequence_windows(
                 within the context of the entire sequence; e.g. `sequence[slice(*global_window)]` is
                 equivalent to `chunk[slice(*local_window)]`
     """
-    sequence_length = len(sequence)  # pyrefly: ignore[bad-argument-type]
+    sequence = np.asarray(sequence)
+    sequence_length = len(sequence)
     bounds = (0, sequence_length)
     pad = (window_size - sequence_length % window_size) % window_size
-    pad_width = [(0, pad)] + [
-        (0, 0) for _ in range(sequence.ndim - 1)
-    ]  # pad the first dimension only
-    padded_sequence = np.pad(
-        sequence, pad_width=pad_width, mode="constant", constant_values=pad_value
-    )
-    windows = create_index_windows(len(padded_sequence), window_size, stride)
+    # Windows that reach past the end are padded one at a time: padding the whole
+    # sequence would copy it.
+    windows = create_index_windows(sequence_length + pad, window_size, stride)
     global_bounds, local_bounds = windows.T[:2], windows.T[2:]
     local_bounds = np.clip(local_bounds, *bounds)
     for start, stop, v_start, v_stop in zip(*global_bounds, *local_bounds):
         assert stop - start == window_size, (
             f"Window size mismatch: {stop - start} != {window_size}"
         )
-        chunk = padded_sequence[start:stop]
+        if stop <= sequence_length:
+            chunk = sequence[start:stop]
+        else:
+            chunk = np.full(
+                (window_size, *sequence.shape[1:]), pad_value, dtype=sequence.dtype
+            )
+            chunk[: max(0, sequence_length - start)] = sequence[start:]
         assert len(chunk) == window_size, (
             f"Chunk size mismatch: {len(chunk)} != {window_size}"
         )
@@ -963,32 +966,28 @@ def transition_matrix_stationary_distribution(
     return dist
 
 
-def _validate_decode_inputs(
-    emission_probs: npt.ArrayLike,
+def _validate_model_inputs(
     transition_matrix: npt.ArrayLike,
     initial_probs: npt.ArrayLike | None,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Validate inputs for decoding algorithms and compute initial probabilities if needed.
+    N: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Validate the transition matrix and initial probabilities of an N-state model.
 
     Parameters
     ----------
-    emission_probs : npt.ArrayLike
-        Matrix of shape (T, N) where T is sequence length and N is number of states.
     transition_matrix : npt.ArrayLike
         Matrix of shape (N, N) where element (i, j) represents P(state j | state i).
     initial_probs : npt.ArrayLike | None
         Vector of length N representing initial state probabilities.
+    N : int
+        Number of states.
 
     Returns
     -------
-    tuple[np.ndarray, np.ndarray, np.ndarray]
-        Validated and potentially modified (emission_probs, transition_matrix, initial_probs)
+    tuple[np.ndarray, np.ndarray]
+        Validated and potentially modified (transition_matrix, initial_probs)
     """
-    # Ensure arrays are float type
-    emission_probs = np.asarray(emission_probs, dtype=float)
     transition_matrix = np.asarray(transition_matrix, dtype=float)
-
-    _, N = emission_probs.shape
 
     # Validate inputs
     if transition_matrix.shape != (N, N):
@@ -1022,51 +1021,98 @@ def _validate_decode_inputs(
     if not np.isclose(initial_probs.sum(), 1.0):
         raise ValueError(f"Initial probabilities must sum to 1; {initial_probs=}")
 
+    return transition_matrix, initial_probs
+
+
+def _validate_decode_inputs(
+    emission_probs: npt.ArrayLike,
+    transition_matrix: npt.ArrayLike,
+    initial_probs: npt.ArrayLike | None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Validate inputs for decoding algorithms and compute initial probabilities if needed.
+
+    Parameters
+    ----------
+    emission_probs : npt.ArrayLike
+        Matrix of shape (T, N) where T is sequence length and N is number of states.
+    transition_matrix : npt.ArrayLike
+        Matrix of shape (N, N) where element (i, j) represents P(state j | state i).
+    initial_probs : npt.ArrayLike | None
+        Vector of length N representing initial state probabilities.
+
+    Returns
+    -------
+    tuple[np.ndarray, np.ndarray, np.ndarray]
+        Validated and potentially modified (emission_probs, transition_matrix, initial_probs)
+    """
+    # Ensure arrays are float type
+    emission_probs = np.asarray(emission_probs, dtype=float)
+
+    _, N = emission_probs.shape
+    transition_matrix, initial_probs = _validate_model_inputs(
+        transition_matrix, initial_probs, N
+    )
     return emission_probs, transition_matrix, initial_probs
 
 
 @njit
-def _viterbi_decode(
-    log_emission: np.ndarray, log_transition: np.ndarray, log_initial: np.ndarray
-) -> np.ndarray:
-    """Numba-accelerated implementation of the Viterbi algorithm.
+def _viterbi_advance(
+    log_emission: np.ndarray,
+    log_transition: np.ndarray,
+    scores: np.ndarray,
+    backpointer: np.ndarray,
+    first: int,
+) -> None:
+    """Numba-accelerated Viterbi recursion over one block of positions.
 
     Parameters
     ----------
     log_emission : np.ndarray
-        Log emission probabilities of shape (T, N)
+        Log emission probabilities of shape (T, N) for the block
     log_transition : np.ndarray
         Log transition probabilities of shape (N, N)
-    log_initial : np.ndarray
-        Log initial state probabilities of shape (N,)
+    scores : np.ndarray
+        Vector of length N holding the best log probability of a path ending in each
+        state at the position before the block; overwritten with the values at the
+        last position of the block
+    backpointer : np.ndarray
+        Integer array of shape (T, N) that receives the most likely previous state
+    first : int
+        Index of the first row of the block to advance over
+    """
+    T, N = log_emission.shape
+    current = np.empty(N)
+    for t in range(first, T):
+        for j in range(N):
+            # Calculate probabilities for each possible previous state
+            probs = scores + log_transition[:, j]
+            # Find most likely previous state
+            backpointer[t, j] = np.argmax(probs)
+            # Store probability of most likely path to this state
+            current[j] = probs[backpointer[t, j]] + log_emission[t, j]
+        scores[:] = current
+
+
+@njit
+def _viterbi_backtrack(backpointer: np.ndarray, scores: np.ndarray) -> np.ndarray:
+    """Numba-accelerated backtracking through the Viterbi backpointers.
+
+    Parameters
+    ----------
+    backpointer : np.ndarray
+        Integer array of shape (T, N) with the most likely previous state
+    scores : np.ndarray
+        Vector of length N with the log probability of the best path ending in
+        each state at the last position
 
     Returns
     -------
     np.ndarray
         Vector of length T with most likely state indices at each position
     """
-    T, N = log_emission.shape
-
-    # Initialize Viterbi tables
-    viterbi_prob = np.zeros((T, N))
-    backpointer = np.zeros((T, N), dtype=np.int64)
-
-    # Base case
-    viterbi_prob[0] = log_initial + log_emission[0]
-
-    # Recursive case
-    for t in range(1, T):
-        for j in range(N):
-            # Calculate probabilities for each possible previous state
-            probs = viterbi_prob[t - 1] + log_transition[:, j]
-            # Find most likely previous state
-            backpointer[t, j] = np.argmax(probs)
-            # Store probability of most likely path to this state
-            viterbi_prob[t, j] = probs[backpointer[t, j]] + log_emission[t, j]
-
-    # Backtrack to find optimal path
+    T = backpointer.shape[0]
     path = np.zeros(T, dtype=np.int64)
-    path[T - 1] = np.argmax(viterbi_prob[T - 1])
+    path[T - 1] = np.argmax(scores)
 
     for t in range(T - 2, -1, -1):
         path[t] = backpointer[t + 1, path[t + 1]]
@@ -1233,25 +1279,113 @@ def viterbi_decode(
     npt.NDArray[np.int64]
         Vector of length T with most likely state indices at each position
     """
+    emission_probs = np.asarray(emission_probs, dtype=float)
+    if emission_probs.ndim != 2:
+        raise ValueError(
+            f"Emission probabilities must be a 2D array; got shape {emission_probs.shape}"
+        )
+    return viterbi_decode_blocks(
+        [emission_probs],
+        len(emission_probs),
+        transition_matrix,
+        initial_probs=initial_probs,
+        alpha=alpha,
+        epsilon=epsilon,
+    )
+
+
+def viterbi_decode_blocks(
+    emission_blocks: Iterable[npt.ArrayLike],
+    length: int,
+    transition_matrix: npt.ArrayLike,
+    initial_probs: npt.ArrayLike | None = None,
+    alpha: float | None = None,
+    epsilon: float | None = None,
+) -> npt.NDArray[np.int64]:
+    """Find most likely sequence of states for emissions supplied in consecutive blocks.
+
+    The path is the same as `viterbi_decode` returns for the concatenated blocks, so a
+    long sequence can be decoded without holding all of its emissions in memory. Only one
+    block is in memory at a time, plus one backpointer per position and state (a single
+    byte each for up to 256 states) and the returned path.
+
+    Parameters
+    ----------
+    emission_blocks : Iterable[npt.ArrayLike]
+        Matrices of shape (T_i, N) with the emission probabilities of consecutive
+        stretches of the sequence, in order. Each element (t, n) represents
+        P(observation at t | state n).
+    length : int
+        Total number of positions, the sum of T_i over all blocks.
+    transition_matrix : npt.ArrayLike
+        Matrix of shape (N, N) where element (i, j) represents P(state j | state i).
+        Rows must sum to 1.
+    initial_probs : npt.ArrayLike, optional
+        Vector of length N representing initial state probabilities.
+        If None, the stationary distribution of the transition matrix is used.
+    alpha : float, optional
+        Increase the likelihood of all transitions by this amount; must be between 0 and 1
+    epsilon : float, optional
+        Minimum probability for any state used to stabilize log probabilities;
+        must be between 0 and 1 and defaults to np.finfo(float).eps if not provided
+
+    Returns
+    -------
+    npt.NDArray[np.int64]
+        Vector of length T with most likely state indices at each position
+    """
     if alpha is not None:
         transition_matrix = regularize_transition_matrix(transition_matrix, alpha)
     if epsilon is None:
         epsilon = cast_type(float, np.finfo(float).eps)
     if not 0 <= epsilon <= 1:
         raise ValueError(f"Epsilon must be between 0 and 1; got {epsilon}")
+    if length < 1:
+        raise ValueError("Cannot decode an empty sequence")
 
-    # Validate and prepare inputs
-    emission_probs, transition_matrix, initial_probs = _validate_decode_inputs(
-        emission_probs, transition_matrix, initial_probs
+    N = np.shape(transition_matrix)[0]
+    transition_matrix, initial_probs = _validate_model_inputs(
+        transition_matrix, initial_probs, N
     )
 
     # Work in log space to avoid numerical underflow
-    log_emission = np.log(emission_probs + epsilon)
     log_transition = np.log(transition_matrix + epsilon)
     log_initial = np.log(initial_probs + epsilon)
 
-    # Run Viterbi algorithm including backtracking
-    return _viterbi_decode(log_emission, log_transition, log_initial)
+    backpointer = np.zeros((length, N), dtype=np.min_scalar_type(N - 1))
+    scores = np.zeros(N)
+    position = 0
+    for block in emission_blocks:
+        emission_probs = np.asarray(block, dtype=float)
+        if emission_probs.ndim != 2 or emission_probs.shape[1] != N:
+            raise ValueError(
+                f"Emission block shape {emission_probs.shape} doesn't match {N} states"
+            )
+        rows = len(emission_probs)
+        if position + rows > length:
+            raise ValueError(f"Emission blocks exceed the declared length {length}")
+        if rows == 0:
+            continue
+
+        log_emission = np.ascontiguousarray(np.log(emission_probs + epsilon))
+        first = 0
+        if position == 0:
+            scores[:] = log_initial + log_emission[0]
+            first = 1
+        _viterbi_advance(
+            log_emission,
+            log_transition,
+            scores,
+            backpointer[position : position + rows],
+            first,
+        )
+        position += rows
+
+    if position != length:
+        raise ValueError(
+            f"Emission blocks cover {position} positions but the length is {length}"
+        )
+    return _viterbi_backtrack(backpointer, scores)
 
 
 def brute_force_decode(

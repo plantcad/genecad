@@ -811,3 +811,78 @@ def test_returning_expanded_states_maps_back_to_features():
         "stop_end_a",
         "stop_end_g",
     )
+
+
+@pytest.mark.parametrize("compressed", [False, True])
+def test_load_chromosome_codes_reads_one_record(tmp_path, compressed):
+    import gzip
+
+    text = ">chr1 description\nACGT\nAC\n>chr2\nGGGG\n"
+    path = tmp_path / ("genome.fa.gz" if compressed else "genome.fa")
+    if compressed:
+        with gzip.open(path, "wt") as out:
+            out.write(text)
+    else:
+        path.write_text(text)
+
+    assert np.array_equal(
+        fh.load_chromosome_codes(str(path), "chr1"), fh.encode_sequence("ACGTAC")
+    )
+    assert np.array_equal(
+        fh.load_chromosome_codes(str(path), "chr2"), fh.encode_sequence("GGGG")
+    )
+    with pytest.raises(ValueError, match="not found"):
+        fh.load_chromosome_codes(str(path), "chr3")
+
+
+FASTA_RECORDS = (
+    ">chrB some description\nacgtNN\nAC\n"
+    ">chrA\nGGGGTTTT\nCC\n"
+    ">chrC\nTTAA\n"
+    ">chrA\nCCCC\n"  # a repeated name: only the first record counts
+    ">empty\n"
+    ">chrD\nACACAC\n"
+)
+
+
+def write_fasta(tmp_path, compressed):
+    import gzip
+
+    path = tmp_path / ("genome.fa.gz" if compressed else "genome.fa")
+    if compressed:
+        with gzip.open(path, "wt") as out:
+            out.write(FASTA_RECORDS)
+    else:
+        path.write_text(FASTA_RECORDS)
+    return str(path)
+
+
+@pytest.mark.parametrize("compressed", [False, True])
+def test_iter_chromosome_codes_matches_loading_each_chromosome(tmp_path, compressed):
+    path = write_fasta(tmp_path, compressed)
+    wanted = ["chrD", "chrA", "chrB", "chrC"]
+    records = list(fh.iter_chromosome_codes(path, wanted))
+
+    # In file order, not in the order asked for
+    assert [name for name, _ in records] == ["chrB", "chrA", "chrC", "chrD"]
+    for name, codes in records:
+        assert np.array_equal(codes, fh.load_chromosome_codes(path, name))
+
+
+@pytest.mark.parametrize("compressed", [False, True])
+def test_iter_chromosome_codes_skips_records_that_are_not_wanted(tmp_path, compressed):
+    path = write_fasta(tmp_path, compressed)
+    records = dict(fh.iter_chromosome_codes(path, ["chrC"]))
+    assert list(records) == ["chrC"]
+    assert list(fh.iter_chromosome_codes(path, [])) == []
+
+
+def test_iter_chromosome_codes_reports_sequences_that_are_missing(tmp_path):
+    path = write_fasta(tmp_path, False)
+    with pytest.raises(ValueError, match="'nope' not found"):
+        list(fh.iter_chromosome_codes(path, ["chrA", "nope"]))
+    # Like load_chromosome_codes, a record without bases is not a sequence
+    with pytest.raises(ValueError, match="'empty' not found"):
+        list(fh.iter_chromosome_codes(path, ["empty"]))
+    with pytest.raises(ValueError, match="not found"):
+        fh.load_chromosome_codes(path, "empty")

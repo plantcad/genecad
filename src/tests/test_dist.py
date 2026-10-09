@@ -91,3 +91,22 @@ def test_guarded_on_main_non_main_failure_does_not_block_the_others():
     assert results[0] == ("ok", None)
     assert results[1] == ("raised", "ValueError: boom from rank 1")
     assert results[2] == ("ok", None)
+
+
+def test_process_group_waits_a_day_for_slow_ranks(monkeypatch):
+    """Ranks wait at a barrier while the slowest one finishes a long chromosome."""
+    from datetime import timedelta
+
+    from src import dist as dist_module
+
+    calls = {}
+    monkeypatch.setenv("RANK", "0")
+    monkeypatch.setattr(dist_module.dist, "is_initialized", lambda: False)
+    monkeypatch.setattr(
+        dist_module.dist, "init_process_group", lambda **kw: calls.update(kw)
+    )
+
+    dist_module.init_process_group()
+
+    assert calls["backend"] == "gloo"
+    assert calls["timeout"] >= timedelta(hours=12)

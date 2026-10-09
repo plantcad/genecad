@@ -24,8 +24,8 @@ from transformers import AutoModel, AutoConfig, AutoTokenizer
 from src.dataset import open_datatree, set_dimension_chunks
 from src.prediction_checkpoint import (
     commit_segment,
-    file_hashes,
     fingerprint,
+    input_fingerprints,
     prepare_run,
     segments,
     finish_run,
@@ -46,6 +46,8 @@ from src.dist import (
 import torch._dynamo
 
 logger = logging.getLogger(__name__)
+# Bases per block when checking the coordinates of a strand
+COORDINATE_BLOCK = 1 << 24
 
 
 def prediction_model_digest(base_model, classifier, tokenizer) -> str:
@@ -548,9 +550,16 @@ def _create_predictions(
         sequence_coordinates = ds.sel(strand=strand).sequence.values
         assert sequence_coordinates.ndim == 1
         # While not strictly necessary, ensure that coordinates are autoincrementing,
-        # 0-based integers until there is a good reason to support any other coordinates
-        if not np.array_equal(
-            sequence_coordinates, np.arange(len(sequence_coordinates))
+        # 0-based integers until there is a good reason to support any other coordinates.
+        # Checked in blocks, so that no second whole-strand array is made.
+        if not all(
+            np.array_equal(
+                sequence_coordinates[start : start + COORDINATE_BLOCK],
+                np.arange(
+                    start, min(start + COORDINATE_BLOCK, len(sequence_coordinates))
+                ),
+            )
+            for start in range(0, len(sequence_coordinates), COORDINATE_BLOCK)
         ):
             raise ValueError("Sequence coordinates must be contiguous and zero-based")
 
@@ -625,6 +634,8 @@ def _create_predictions(
                 commit_segment(output_dir, result, strand, ids)
                 offset += len(current)
                 del result
+        # Release this strand before the next one is loaded.
+        del sequence_input_ids, sequence_coordinates, windows, batches
     logger.info(
         f"Finished assigned prediction windows in {output_dir} ({rank=}, batch={effective_batch_size})"
     )
@@ -890,8 +901,9 @@ def create_predictions(
                 try:
                     with guarded_on_main():
                         if is_main_process():
+                            content, raw = input_fingerprints(input_zarr)
                             identity = {
-                                "input": fingerprint(file_hashes(input_zarr)),
+                                "input": content,
                                 "model": model_digest,
                                 "species_id": species_id,
                                 "chromosome_id": chromosome_id,
@@ -900,8 +912,12 @@ def create_predictions(
                                 "dtype": dtype,
                                 "torch": torch.__version__,
                             }
+                            # Runs started by earlier versions hashed the input bytes.
                             prepare_run(
-                                final_output_dir, identity, ds.sizes["sequence"]
+                                final_output_dir,
+                                identity,
+                                ds.sizes["sequence"],
+                                accepted=({**identity, "input": raw},),
                             )
 
                     logger.info(
@@ -1119,7 +1135,7 @@ def main():
             batch_size=args.batch_size,
             warmup_batch_size=args.warmup_batch_size,
             dtype=args.dtype,
-            suppress_dynamo_errors=args.suppress_dynamo_errors,
+            suppress_dynamo_errors=not args.show_dynamo_errors,
         )
 
 

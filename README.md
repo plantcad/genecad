@@ -2,7 +2,7 @@
 
 # GeneCAD: Plant Genome Annotation with a DNA Foundation Model
 
-![](https://img.shields.io/badge/version-0.5.0-blue)
+![](https://img.shields.io/badge/version-0.6.0-blue)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![CI](https://github.com/plantcad/genecad/actions/workflows/ci.yaml/badge.svg)](https://github.com/plantcad/genecad/actions/workflows/ci.yaml)
 [![bioRxiv](https://img.shields.io/badge/bioRxiv-10.1101/2025.10.31.685877-b31b1b.svg)](https://doi.org/10.1101/2025.10.31.685877)
@@ -148,19 +148,21 @@ genecad predict \
   -m plant #choose model: plant or animal
 ```
 
+> [!TIP]
+> Large genomes leave a lot of intermediate data: about 50 MB of prediction files per Mb of
+> genome, so several hundred GB for a 10 Gb genome. If the disk may fill up, add
+> `--clean-intermediates`. It is off by default and keeps all GFF files; see
+> [Advanced Usage - Prediction](#predict).
+
 #### Output
 
-Output files and intermediate files are saved to the specified output directory.
-There are two main output files: both are in GFF3 format and can be used with other
-pieces of software such as **IGV**, **JBrowse2**, or **Apollo**.
+The result is one GFF3 file at the top of the output directory:
 
-`[species_name]_GeneCAD_raw.gff` contains the raw predictions from GeneCAD.
+`[species_name]_GeneCAD_final.gff`
 
-`[species_name]_GeneCAD_final.gff` contains the predictions after the ReelProtein filtering step.
-
-> [!TIP]
-> Use `*_final.gff` for most downstream purposes. The raw file is provided in case you want
-> to perform any custom filtering process, but is not recommended for use as-is.
+Use this file. It works with other software such as **IGV**, **JBrowse2** or **Apollo**.
+Everything else is an intermediate file, kept in `intermediate/` and in one folder per
+chromosome, for troubleshooting. See [Outputs](#outputs-1) for the full list.
 
 #### Evaluate prediction output
 
@@ -332,23 +334,48 @@ set of options.
 genecad predict [OPTIONS]
 ```
 
-* `--input-fasta` `-i` - Fasta sequence to be annotated. Gzipped files are supported.
+* `--input-fasta` `-i` - Fasta sequence to be annotated. Gzipped files are supported. Sequences without bases are skipped.
 * `--output-dir` `-o` - Output directory
 * `--species-name` `-s` - Name of species or sample. Output files use this as a prefix.
 * `--mode` `-m` - Mode, or set of models to use. Options: plant, animal. (Default plant)
 * `--top-n-contigs` `-n` - Predict only the `N` longest fasta sequences in the input. Must be an integer or "all". (Default: all)
 * `--min-transcript-length` `-l` - Minimum allowed transcript length. Shorter transcripts will be removed. (Default: 3)
-* `--cpu-workers` `-c` - CPU workers used during GFF export. (Default: 1)
-* `--batch-size` `-b` - Inference batch size for GPU (Default is auto-scaled to GPU VRAM)
+* `--cpu-workers` `-c` - CPU workers used during GFF export and hybrid decoding. (Default: 1)
+* `--max-parallel-chromosomes` - How many chromosomes are decoded and exported to GFF at the same time. This is
+not a number of CPUs. Frame-aware decoding needs about 0.35 GB of RAM per Mb of chromosome and plain or hybrid
+decoding about 0.05 GB (the predictions are read segment by segment), so several large chromosomes at once can run
+out of memory. `auto` runs as many as fit in the available RAM, at most one per CPU core (up to 16), so genomes with thousands
+of small scaffolds are no longer decoded one at a time. Set a number to override. Sequences shorter than 1 Mb are
+decoded in groups, one process per step for each group, because starting a step takes longer than decoding a small
+scaffold. (Default: auto)
+* `--batch-size` `-b` - Inference batch size for GPU (Default is auto-scaled to GPU VRAM, at most 35)
 * `--gpus` `-g` - Comma-separated list of GPU IDs to use, or "all" to use all available GPUs (Default: 0)
 * `--launcher` - Custom entrypoint command to launch predict.py (e.g. 'srun python').
 If set, overrides automatic DDP/SLURM detection. Can also be set via LAUNCHER environment variable.
 (Default: python)
 * `--model-checkpoint` - Overrides the GeneCAD head model set by `--mode`. Accepts a local path to a `.ckpt` file or a
 HuggingFace model repo ID. Note that this does **not** override the base PlantCAD model set by `--mode`
-* `--no-frame-aware` - Decode with the original 5-state Viterbi, which ignores the genome sequence. By default,
-decoding is frame-aware: the CDS is constrained to begin on ATG, end on a stop codon, stay in frame across introns,
-and contain no in-frame stop, so every predicted CDS translates cleanly.
+* `--decoder` - How per-base predictions become gene models: `hybrid`, `frame-aware` or `plain`. (Default: hybrid)
+  * `hybrid` decodes each chromosome with the original 5-state Viterbi, then uses frame-aware decoding only around genes
+  that need it (see [hybrid decoding](docs/hybrid_decode.md)): transcripts that ORF repair cannot fix are re-decoded
+  locally, and consecutive same-strand genes that one frame-aware transcript spans are merged. Frame-aware decoding
+  constrains the CDS to begin on ATG, end on a stop codon, stay in frame across introns and contain no in-frame stop.
+  * `frame-aware` decodes whole chromosomes frame-aware (the v0.5.0 default). It also creates new loci made of tiny ORFs
+  and splits long genes into several ORFs.
+  * `plain` uses the 5-state Viterbi only, which ignores the genome sequence.
+* `--no-frame-aware` - Deprecated, use `--decoder plain` instead.
+* `--merge-max-gap` - Largest gap (bp) between consecutive same-strand genes for which hybrid decoding tries a merge.
+(Default: 20000)
+* `--keep-partial` - Keep transcripts that cannot be made a valid ORF (flagged `partial=true`) instead of dropping them.
+* `--clean-intermediates` - Save disk space. The sequence and interval files of a chromosome are deleted once its
+predictions are decoded, and the prediction files (the largest, about 50 MB per Mb of sequence) are deleted once the
+final GFF is written. All GFF files are kept, so repeating the run afterwards does nothing. The prediction files are
+needed again only if the hybrid GFF in `intermediate/` is deleted (deleting the final GFF only repeats the refinement);
+they are then predicted again, which needs a GPU. They are needed throughout the run, so this lowers the disk use after
+the run, not the peak.
+* `--allow-missing-predictions` - Hybrid decoding needs the prediction files of every sequence. If they were deleted,
+the sequence is predicted again by default. With this option it is not: its partial genes stay as they are and it
+takes no part in merging.
 * `--min-intron-length` - Shortest intron frame-aware decoding may emit. Guards against short introns being invented
 to step over an in-frame stop codon. Lower it for compact genomes with genuinely short introns. (Default: 20)
 * `--min-coding-run-length` - Runs of coding sequence adjacent to an intron shorter than this are penalized, not
@@ -365,13 +392,22 @@ accordingly.
 * `--orf-max-shift` - Maximum distance (nt, in spliced transcript coordinates) that the start and stop codon may be
 moved when repairing CDS boundaries against the genome sequence. Repairs never alter exon structure and never leave
 the predicted exonic sequence; models that cannot be resolved this way are flagged `partial=true` rather than
-forced. Use 0 to disable repair. (Default: 300)
+forced, and are dropped unless `--keep-partial` is set. Use 0 to disable repair. (Default: 300)
 
 #### Pipeline Breakdown
 
 > [!TIP]
 > The `genecad predict` pipeline is modular and fully **resumable** - if the output from a given
-> step is present in the output directory, the pipeline will skip that step.
+> step is present in the output directory, the pipeline will skip that step. The merged GFF is
+> built again on every run and replaced only if it changed (for example after a chromosome was
+> processed again), and the ORF repair, hybrid and refinement steps are then redone from it. A
+> chromosome whose folder you delete is processed again. A finished step is also redone when an
+> option it uses changed: each chromosome is decoded again after a change of `--mode`,
+> `--min-transcript-length` or frame-aware decoding (`--decoder frame-aware` and its options), ORF
+> repair after a change of `--orf-max-shift`, `--keep-partial` or `--decoder`, and hybrid decoding
+> after a change of its options. Prediction files that fail verification, for example because
+> some of them were deleted, are predicted again (on a GPU). An output directory holds the results
+> of one FASTA file: for another genome, use another output directory.
 
 The individual components of the prediction pipeline are also accessible as python scripts.
 While this is not the main recommended method to run the GeneCAD pipeline, some users may
@@ -394,6 +430,8 @@ Refer to the `docs/` folder for full parameter lists for each step/script.
 5. [Filter GFFs](docs/filter_raw_gff.md) - `scripts/filter_raw_gff.py` - Removes fragmented or excessively short gene models.
 6. [Merge Chromosme GFFs](docs/merge_gff.md) - `scripts/merge_gff.py` - Merges per-chromosome GFF files into a single unified file.
 7. [Repair ORFs](docs/fix_orf.md) - `scripts/fix_orf.py` - Repairs CDS boundaries against the genome sequence so each transcript is a valid, translatable ORF.
+   1. [Hybrid decoding](docs/hybrid_decode.md) - `scripts/hybrid_decode.py` - With `--decoder hybrid` (the default), rescues transcripts
+   ORF repair could not fix and merges split genes by frame-aware decoding of local windows.
 8. [Refine with ReelProtein](docs/refine.md) - `scripts/refine.py` - **REQUIRES GPU** - Uses ReelProtein to evaluate  and filter gene models for likely
 protein functionality and merges gene fragments.
 
@@ -403,20 +441,34 @@ After running, the output directory contains:
 
 ```
 <OUTPUT_DIR>/
-├── <SPECIES_ID>_GeneCAD_raw.gff      ← all predicted gene models (pre-refinement)
-├── <SPECIES_ID>_GeneCAD_final.gff    ← final, protein-validated annotations
-└── <CHR_ID>/                         ← per-chromosome intermediates (for debugging)
-    ├── predictions_filtered_<CHR_ID>.gff
+├── <SPECIES_ID>_GeneCAD_final.gff    ← the final annotation: use this file
+├── intermediate/                     ← for troubleshooting
+│   ├── <SPECIES_ID>_GeneCAD_raw.gff        all chromosomes merged, before ORF repair
+│   ├── <SPECIES_ID>_GeneCAD_orf.gff        after ORF repair (step 7)
+│   ├── <SPECIES_ID>_GeneCAD_orf_report.tsv ORF repair result per transcript
+│   └── <SPECIES_ID>_GeneCAD_hybrid.gff     after hybrid decoding (--decoder hybrid only)
+└── <CHR_ID>/                         ← per-chromosome intermediates
+    ├── predictions_<CHR_ID>/               the model's per-base predictions
+    ├── sequences_<CHR_ID>.zarr
+    ├── intervals_<CHR_ID>.zarr
     ├── predictions_raw_<CHR_ID>.gff
-    ├── sequences_Chr01.zarr
-    ├── predictions_Chr01.zarr
-    └── intervals_Chr01.zarr
+    └── predictions_filtered_<CHR_ID>.gff
 ```
+
+| File | What it is | Use it? |
+|---|---|---|
+| `<SPECIES_ID>_GeneCAD_final.gff` | Final gene models. With the default settings every transcript has a complete ORF. | **Yes** |
+| `intermediate/*_hybrid.gff` | Input to the last step (ReelProtein refinement) | No |
+| `intermediate/*_orf.gff` | After ORF repair; may still contain `partial=true` transcripts | No |
+| `intermediate/*_raw.gff` | Before ORF repair | No |
 
 > [!TIP]
 > GeneCAD intermediate files are typically several times larger than the input FASTA file
-> and can easily be 10s-100s Gb in total. We recommend deleting the intermediate .zarr files
-> after validating your final output GFFs.
+> and can easily be 10s-100s Gb in total. Use `--clean-intermediates` to delete the .zarr files
+> as the run proceeds, or delete them yourself after checking the final GFF. Keep the
+> `predictions_<CHR_ID>/` folders if you may want to re-run the CPU steps later (for example
+> with another `--decoder`): with them, a re-run skips the GPU prediction. If they are gone or
+> damaged and a step that needs them is run again, the chromosomes are predicted again (on a GPU).
 
 ### Evaluate
 

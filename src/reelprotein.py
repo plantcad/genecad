@@ -29,6 +29,8 @@ device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 def parse_gff3(gff_file):
     genes = defaultdict(list)
     transcript_to_gene = {}
+    # The first gene read with each ID on each sequence: features are added to it
+    first_gene = {}
     with open(gff_file) as fh:
         for raw in fh:
             line = raw.strip()
@@ -42,18 +44,19 @@ def parse_gff3(gff_file):
             attrs = dict(kv.split("=", 1) for kv in attr.split(";") if "=" in kv)
 
             if feature == "gene":
-                genes[chrom].append(
-                    {
-                        "id": attrs.get("ID"),
-                        "start": start,
-                        "end": end,
-                        "strand": strand,
-                        "cds": [],
-                        "utr5": [],
-                        "utr3": [],
-                        "feature_types": set(),
-                    }
-                )
+                gene = {
+                    "id": attrs.get("ID"),
+                    "start": start,
+                    "end": end,
+                    "strand": strand,
+                    "cds": [],
+                    "utr5": [],
+                    "utr3": [],
+                    "feature_types": set(),
+                }
+                genes[chrom].append(gene)
+                if gene["id"]:
+                    first_gene.setdefault((chrom, gene["id"]), gene)
             elif feature == "mRNA":
                 tx_id = attrs.get("ID")
                 parent_gene = attrs.get("Parent")
@@ -65,22 +68,21 @@ def parse_gff3(gff_file):
                 if parent_gene is None:
                     # Fallback for IDs like gene1.t1 where gene ID can be inferred.
                     parent_gene = parent.rsplit(".", 1)[0] if "." in parent else parent
-                for g in genes[chrom]:
-                    if g["id"] and g["id"] == parent_gene:
-                        g["feature_types"].add(feature)
-                        if feature == "CDS":
-                            try:
-                                phase_int = int(phase)
-                            except ValueError:
-                                phase_int = 0
-                            g["cds"].append(
-                                {"start": start, "end": end, "phase": phase_int}
-                            )
-                        elif feature == "five_prime_UTR":
-                            g["utr5"].append({"start": start, "end": end})
-                        elif feature == "three_prime_UTR":
-                            g["utr3"].append({"start": start, "end": end})
-                        break
+                g = first_gene.get((chrom, parent_gene))
+                if g is not None:
+                    g["feature_types"].add(feature)
+                    if feature == "CDS":
+                        try:
+                            phase_int = int(phase)
+                        except ValueError:
+                            phase_int = 0
+                        g["cds"].append(
+                            {"start": start, "end": end, "phase": phase_int}
+                        )
+                    elif feature == "five_prime_UTR":
+                        g["utr5"].append({"start": start, "end": end})
+                    elif feature == "three_prime_UTR":
+                        g["utr3"].append({"start": start, "end": end})
 
     # Deterministic ordering
     for chrom in genes:
@@ -408,6 +410,47 @@ def extract_candidate_proteins(genes, genome_fasta):
 # =============================================================================
 
 
+def _embed_batch(model, tok, device, pdb_ids, seqs, lens):
+    """Mean-pooled ProtT5 embeddings for one batch.
+
+    If the GPU runs out of memory (another job may be using it), the batch is split
+    in half and retried, so no protein is skipped. A single protein that still does
+    not fit is logged and left out.
+    """
+    enc = tok(seqs, add_special_tokens=True, padding="longest")
+    out = None
+    try:
+        input_ids = torch.tensor(enc["input_ids"]).to(device)
+        attention_mask = torch.tensor(enc["attention_mask"]).to(device)
+        with torch.no_grad():
+            out = model(input_ids, attention_mask=attention_mask)
+    except torch.cuda.OutOfMemoryError:
+        pass
+    if out is None:
+        # Retry outside the except block: inside it, the traceback still holds the
+        # failed forward pass and its memory.
+        input_ids = attention_mask = None
+        torch.cuda.empty_cache()
+        if len(pdb_ids) == 1:
+            logger.error(
+                f"[Step 2] Protein {pdb_ids[0]} ({lens[0]} aa) does not fit in GPU "
+                "memory and has no score."
+            )
+            return []
+        mid = len(pdb_ids) // 2
+        logger.warning(
+            f"[Step 2] Out of GPU memory on a batch of {len(pdb_ids)} proteins; "
+            "retrying as two smaller batches."
+        )
+        return _embed_batch(
+            model, tok, device, pdb_ids[:mid], seqs[:mid], lens[:mid]
+        ) + _embed_batch(model, tok, device, pdb_ids[mid:], seqs[mid:], lens[mid:])
+    return [
+        (pid, out.last_hidden_state[i, :n].mean(dim=0).detach().cpu().numpy().squeeze())
+        for i, (pid, n) in enumerate(zip(pdb_ids, lens))
+    ]
+
+
 def _embed_worker(args: tuple) -> list:
     """Embed a chunk of protein sequences on a single GPU.
 
@@ -473,28 +516,9 @@ def _embed_worker(args: tuple) -> list:
             pdb_ids, batch_seqs, batch_lens = zip(*batch)
             batch = []
 
-            enc = _tok(list(batch_seqs), add_special_tokens=True, padding="longest")
-            input_ids = torch.tensor(enc["input_ids"]).to(_device)
-            attention_mask = torch.tensor(enc["attention_mask"]).to(_device)
-
-            try:
-                with torch.no_grad():
-                    out = _model(input_ids, attention_mask=attention_mask)
-            except RuntimeError as exc:
-                _log.error(f"[GPU {gpu_id}] RuntimeError during embedding: {exc}")
-                pbar.update(len(pdb_ids))
-                continue
-
-            for bi, pid in enumerate(pdb_ids):
-                slen = batch_lens[bi]
-                emb = (
-                    out.last_hidden_state[bi, :slen]
-                    .mean(dim=0)
-                    .detach()
-                    .cpu()
-                    .numpy()
-                    .squeeze()
-                )
+            for pid, emb in _embed_batch(
+                _model, _tok, _device, list(pdb_ids), list(batch_seqs), list(batch_lens)
+            ):
                 results.append([pid] + emb.tolist())
 
             pbar.update(len(pdb_ids))

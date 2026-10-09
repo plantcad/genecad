@@ -4,6 +4,8 @@ import argparse
 import pathlib
 import logging
 
+import pandas as pd
+
 # Ensure we can import from src
 current_dir = pathlib.Path(__file__).resolve().parent
 project_root = current_dir.parent
@@ -50,7 +52,15 @@ def run_reelprotein(
     protein_candidates = reelprotein.extract_candidate_proteins(genes_data, input_fasta)
 
     if not protein_candidates:
-        logger.warning("No protein candidates found. Exiting.")
+        # Write the genes as they would be written when no candidate is accepted,
+        # so that the pipeline always has a final GFF.
+        logger.warning("No protein candidates found; writing the genes unrefined.")
+        reelprotein.generate_final_gff(
+            pd.DataFrame({"ProteinID": [], "Predicted_Label": []}),
+            input_gff,
+            output_gff,
+            keep_unmerged=(not filter_unmerged),
+        )
         return
 
     # 2. Generate Embeddings
