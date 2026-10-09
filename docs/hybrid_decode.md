@@ -37,7 +37,8 @@ python hybrid_decode.py \
 * `--input-gff` - GFF3 after `fix_orf.py --keep-partial`, from 5-state decoding
 * `--input-fasta` - Genome FASTA file used for prediction
 * `--predictions-root` - Directory holding `<CHR_ID>/predictions_<CHR_ID>/` for each sequence, as written by
-`predict.sh`. Sequences without predictions are written back unchanged.
+`predict.sh`. A sequence without prediction files stops the run with an error, unless
+`--allow-missing-predictions` is given.
 * `--output-gff` - Output GFF3 file
 * `--domain` - `plant` or `animal`; selects the feature transition matrix. Default plant.
 * `--flank` - Bases added on each side of a decoding window. Default 1000.
@@ -45,8 +46,14 @@ python hybrid_decode.py \
 * `--min-cds` - A rescued or merged transcript needs more than this many nt of CDS. Default 33.
 * `--keep-partial` - Keep partial genes that cannot be rescued (flagged) instead of dropping them.
 * `--workers` - Sequences processed in parallel. Default 1.
+* `--allow-missing-predictions` - Write sequences whose prediction files are missing or damaged back unchanged,
+instead of stopping.
 * `--min-intron-length`, `--min-coding-run-length`, `--exon-length-strictness`, `--allow-u12-introns` - Frame-aware
 decoding settings, as for `detect_intervals.py`.
+
+If prediction files fail verification (for example because some of them were deleted), the script removes their
+completion marker (`_SUCCESS.json`) and exits with status 3, unless `--allow-missing-predictions` is given.
+`predict.sh` then predicts the damaged parts again and runs this step once more.
 
 ### Validation
 

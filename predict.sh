@@ -57,8 +57,8 @@ Options:
                                                 prediction files of all chromosomes once the final GFF
                                                 is written. The GFF files are kept, so a run that is
                                                 repeated afterwards is not redone. Prediction files
-                                                are needed again only if the hybrid or final GFF is
-                                                deleted; they are then predicted again.
+                                                are needed again only if the hybrid GFF in
+                                                intermediate/ is deleted; they are then predicted again.
     --allow-missing-predictions
                                                 Hybrid decoding needs the prediction files of every
                                                 sequence. If they were deleted (for example to save disk
@@ -411,6 +411,51 @@ mkdir -p "$OUTPUT_DIR"
 BATCH_SIZE_STATE_DIR="$OUTPUT_DIR/.state"
 mkdir -p "$BATCH_SIZE_STATE_DIR"
 
+# An output directory holds the results of one FASTA file: chromosomes of another genome
+# with the same names would silently reuse its results. The file is recorded by path,
+# size and modification time, and by the SHA-256 of its content (decompressed), which is
+# computed only when one of those changed: the same sequences moved, touched or
+# compressed are still accepted.
+INPUT_FILE="$INPUT_FILE" OUTPUT_DIR="$OUTPUT_DIR" \
+    $PYTHON - "$BATCH_SIZE_STATE_DIR/input_fasta.json" <<'PYEOF' || exit 1
+import gzip
+import hashlib
+import json
+import os
+import sys
+from pathlib import Path
+
+record = Path(sys.argv[1])
+fasta = Path(os.environ["INPUT_FILE"])
+stat = fasta.stat()
+current = {
+    "path": str(fasta.resolve()),
+    "size": stat.st_size,
+    "mtime_ns": stat.st_mtime_ns,
+}
+previous = json.loads(record.read_text()) if record.is_file() else None
+if previous and all(previous.get(key) == value for key, value in current.items()):
+    sys.exit(0)
+digest = hashlib.sha256()
+with (gzip.open if fasta.name.endswith(".gz") else open)(fasta, "rb") as handle:
+    for block in iter(lambda: handle.read(1 << 22), b""):
+        digest.update(block)
+current["sha256"] = digest.hexdigest()
+output = Path(os.environ["OUTPUT_DIR"])
+has_results = any(path.name != ".state" for path in output.iterdir())
+if previous and previous.get("sha256") != current["sha256"] and has_results:
+    print(
+        f"ERROR: {output} has the results of another FASTA file ({previous['path']}, "
+        f"{previous['size']} bytes). Use a new output directory for {fasta}, or delete "
+        f"{output} to start over.",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+temporary = record.with_name(record.name + ".tmp")
+temporary.write_text(json.dumps(current) + "\n")
+temporary.replace(record)
+PYEOF
+
 # =================================================================
 # Step 1: Discover chromosomes from FASTA headers
 # =================================================================
@@ -418,19 +463,39 @@ echo "================================================================="
 echo "Discovering chromosomes from FASTA file..."
 echo "================================================================="
 
+# Sequences without bases have no genes and cannot be predicted, so they are left
+# out. Each FASTA header is printed with 1 if its sequence has bases, else 0.
+list_sequences() {
+    awk '
+        /^>/ {
+            if (started) print seen "\t" id;
+            sub(/^>/, "");
+            id = $1;
+            seen = 0;
+            started = 1;
+            next;
+        }
+        !seen && NF { seen = 1 }
+        END { if (started) print seen "\t" id }
+    '
+}
+
+EMPTY_IDS=""
 if [[ "$TOP_N_CONTIGS" == "all" ]]; then
     if [[ "$INPUT_FILE" == *.gz ]]; then
-        CHROM_IDS=$(zcat "$INPUT_FILE" | grep "^>" | sed 's/^>//' | awk '{print $1}')
+        SEQUENCE_LIST=$(zcat "$INPUT_FILE" | list_sequences)
     else
-        CHROM_IDS=$(grep "^>" "$INPUT_FILE" | sed 's/^>//' | awk '{print $1}')
+        SEQUENCE_LIST=$(list_sequences < "$INPUT_FILE")
     fi
+    CHROM_IDS=$(awk -F '\t' '$1 == 1 { print $2 }' <<< "$SEQUENCE_LIST")
+    EMPTY_IDS=$(awk -F '\t' '$1 == 0 { print $2 }' <<< "$SEQUENCE_LIST")
 else
     TOP_IDS=""
     if [[ "$INPUT_FILE" == *.gz ]]; then
         TOP_IDS=$(
             zcat "$INPUT_FILE" | awk '
                 /^>/ {
-                    if (id != "") print len "\t" id;
+                    if (id != "" && len > 0) print len "\t" id;
                     id = $0;
                     sub(/^>/, "", id);
                     split(id, parts, /[ \t]/);
@@ -443,7 +508,7 @@ else
                     len += length($0);
                 }
                 END {
-                    if (id != "") print len "\t" id;
+                    if (id != "" && len > 0) print len "\t" id;
                 }
             ' | sort -nr -k1,1 | head -n "$TOP_N_CONTIGS" | awk '{print $2}'
         )
@@ -464,7 +529,7 @@ else
         TOP_IDS=$(
             awk '
                 /^>/ {
-                    if (id != "") print len "\t" id;
+                    if (id != "" && len > 0) print len "\t" id;
                     id = $0;
                     sub(/^>/, "", id);
                     split(id, parts, /[ \t]/);
@@ -477,7 +542,7 @@ else
                     len += length($0);
                 }
                 END {
-                    if (id != "") print len "\t" id;
+                    if (id != "" && len > 0) print len "\t" id;
                 }
             ' "$INPUT_FILE" | sort -nr -k1,1 | head -n "$TOP_N_CONTIGS" | awk '{print $2}'
         )
@@ -497,6 +562,10 @@ else
     fi
 fi
 
+EMPTY_COUNT=$(echo "$EMPTY_IDS" | sed '/^$/d' | wc -l)
+if [[ "$EMPTY_COUNT" -gt 0 ]]; then
+    echo "WARNING: Skipping $EMPTY_COUNT sequence(s) without bases: $(echo "$EMPTY_IDS" | head -n 5 | paste -sd ' ')$([[ "$EMPTY_COUNT" -gt 5 ]] && echo " ...")"
+fi
 CHROM_COUNT=$(echo "$CHROM_IDS" | sed '/^$/d' | wc -l)
 if [[ "$CHROM_COUNT" -eq 0 ]]; then
     echo "Error: No sequences found in FASTA after applying filters."
@@ -583,6 +652,70 @@ else
     echo "All chromosomes already have sequences.zarr — nothing to extract."
 fi
 }
+
+# The options each sequence's GFF depends on. A sequence decoded with other options is
+# decoded again: its interval, raw and filtered files are removed here, so that the
+# steps below rebuild them (and predict it again if its prediction files are gone).
+DECODE_SETTINGS="mode=$MODE frame_aware=$FRAME_AWARE min_transcript_length=$MIN_TRANSCRIPT_LENGTH"
+if [[ "$FRAME_AWARE" == "1" ]]; then
+    DECODE_SETTINGS+=" min_intron_length=$MIN_INTRON_LENGTH min_coding_run_length=$MIN_CODING_RUN_LENGTH"
+    DECODE_SETTINGS+=" exon_length_strictness=$EXON_LENGTH_STRICTNESS allow_u12_introns=$ALLOW_U12_INTRONS"
+fi
+export DECODE_SETTINGS
+OUTPUT_DIR="$OUTPUT_DIR" $PYTHON - "$CHROM_IDS_FILE" <<'PYEOF'
+import os
+import shutil
+import sys
+from pathlib import Path
+
+current = os.environ["DECODE_SETTINGS"]
+output = Path(os.environ["OUTPUT_DIR"])
+redone, adopted = [], []
+for chrom in Path(sys.argv[1]).read_text().split():
+    directory = output / chrom
+    filtered = directory / f"predictions_filtered_{chrom}.gff"
+    record = directory / "decoding_settings.txt"
+    if not filtered.is_file():
+        continue
+    if not record.is_file():
+        # Decoded by an earlier version, which kept no record: assume these options.
+        temporary = record.with_name(record.name + ".tmp")
+        temporary.write_text(current + "\n")
+        temporary.replace(record)
+        adopted.append(chrom)
+        continue
+    previous = record.read_text().strip()
+    if previous == current:
+        continue
+    old = dict(item.split("=", 1) for item in previous.split())
+    new = dict(item.split("=", 1) for item in current.split())
+    keys = list(new) + [k for k in old if k not in new]
+    key = next(k for k in keys if old.get(k) != new.get(k))
+    redone.append(f"{chrom} ({key} {old.get(key, '-')} -> {new.get(key, '-')})")
+    for path in (
+        filtered,
+        directory / f"predictions_raw_{chrom}.gff",
+        directory / f"intervals_{chrom}.zarr",
+        record,
+    ):
+        if path.is_dir():
+            shutil.rmtree(path)
+        elif path.exists():
+            path.unlink()
+if redone:
+    print(
+        f"Decoding options changed for {len(redone)} sequence(s), e.g. {redone[0]}: "
+        "they are decoded again."
+    )
+if adopted:
+    print(
+        f"{len(adopted)} sequence(s), e.g. {adopted[0]}, were decoded by an earlier "
+        "version, which did not record its options; they are kept and taken to match "
+        "the current options. To decode them again, delete their "
+        "predictions_filtered_<ID>.gff."
+    )
+PYEOF
+
 extract_needed_sequences
 echo ""
 
@@ -691,8 +824,100 @@ process_chromosome() {
             --output-gff "$FILTERED_GENECAD_GFF" || return $?
     fi
 
+    printf '%s\n' "$DECODE_SETTINGS" > "$CHR_OUTPUT_DIR/decoding_settings.txt.tmp"
+    mv -f "$CHR_OUTPUT_DIR/decoding_settings.txt.tmp" "$CHR_OUTPUT_DIR/decoding_settings.txt"
+
     if [[ "$CLEAN_INTERMEDIATES" == "1" ]]; then
         clean_decoded_chromosome "$CHR_ID"
+    fi
+    echo "${LOG_PREFIX} Done!"
+}
+
+# process_chromosome_group GPU_ID ID...: steps 3-5 of process_chromosome for
+# short sequences whose predictions are complete. Each step runs once for all the
+# sequences that need it, since starting the three steps takes longer than decoding
+# a short scaffold. If a step fails, the sequences it did not finish are processed one
+# at a time, so that the error is reported for its own sequence and the others finish.
+process_chromosome_group() {
+    local GPU_ID="$1"
+    shift
+    local LOG_PREFIX="[$1 and $(( $# - 1 )) more@GPU${GPU_ID}]"
+    local manifests="" status=0 failed=0 id
+    echo "${LOG_PREFIX} Decoding $# short sequences together"
+    manifests=$(mktemp -d "$BATCH_SIZE_STATE_DIR/decode_group.XXXXXX") || status=$?
+    [[ $status -eq 0 ]] && OUTPUT_DIR="$OUTPUT_DIR" $PYTHON - "$manifests" "$@" <<'PYEOF' || status=$?
+import json
+import os
+import sys
+from pathlib import Path
+
+output = Path(os.environ["OUTPUT_DIR"])
+steps = {"intervals": [], "raw": [], "filtered": []}
+for chrom in sys.argv[2:]:
+    directory = output / chrom
+    entry = {
+        "chromosome_id": chrom,
+        "predictions_dir": str(directory / f"predictions_{chrom}"),
+        "intervals_zarr": str(directory / f"intervals_{chrom}.zarr"),
+        "raw_gff": str(directory / f"predictions_raw_{chrom}.gff"),
+        "filtered_gff": str(directory / f"predictions_filtered_{chrom}.gff"),
+    }
+    # The same checks as process_chromosome makes before each step.
+    if not os.path.exists(entry["intervals_zarr"]):
+        steps["intervals"].append(entry)
+    if not os.path.isfile(entry["raw_gff"]):
+        steps["raw"].append(entry)
+    if not os.path.isfile(entry["filtered_gff"]):
+        steps["filtered"].append(entry)
+for step, entries in steps.items():
+    if entries:
+        (Path(sys.argv[1]) / f"{step}.json").write_text(json.dumps(entries))
+PYEOF
+    if [[ $status -eq 0 && -f "$manifests/intervals.json" ]]; then
+        echo "${LOG_PREFIX} [3/8] Detecting intervals (Viterbi decoding)..."
+        $PYTHON "$SCRIPT_DIR/scripts/detect_intervals.py" \
+            --manifest "$manifests/intervals.json" \
+            --domain "$MODE" \
+            "${FRAME_AWARE_ARGS[@]}" || status=$?
+    fi
+    if [[ $status -eq 0 && -f "$manifests/raw.json" ]]; then
+        echo "${LOG_PREFIX} [4/8] Exporting raw GFF..."
+        local export_tqdm_args=()
+        if [[ -n "$GPU_ID" ]]; then
+            export_tqdm_args=(--tqdm-position "$GPU_ID")
+        fi
+        $PYTHON "$SCRIPT_DIR/scripts/export_gff.py" \
+            --manifest "$manifests/raw.json" \
+            --min-transcript-length "$MIN_TRANSCRIPT_LENGTH" \
+            --cpu-workers "$CPU_WORKERS" \
+            "${export_tqdm_args[@]}" || status=$?
+    fi
+    if [[ $status -eq 0 && -f "$manifests/filtered.json" ]]; then
+        echo "${LOG_PREFIX} [5/8] Filtering features..."
+        $PYTHON "$SCRIPT_DIR/scripts/filter_raw_gff.py" \
+            --manifest "$manifests/filtered.json" || status=$?
+    fi
+    [[ -n "$manifests" ]] && rm -rf "$manifests"
+
+    # A sequence with a filtered GFF now was decoded here, with these options.
+    for id in "$@"; do
+        [[ -f "$OUTPUT_DIR/$id/predictions_filtered_$id.gff" ]] || continue
+        printf '%s\n' "$DECODE_SETTINGS" > "$OUTPUT_DIR/$id/decoding_settings.txt.tmp"
+        mv -f "$OUTPUT_DIR/$id/decoding_settings.txt.tmp" "$OUTPUT_DIR/$id/decoding_settings.txt"
+        if [[ "$CLEAN_INTERMEDIATES" == "1" ]]; then
+            clean_decoded_chromosome "$id"
+        fi
+    done
+    if [[ $status -ne 0 ]]; then
+        echo "${LOG_PREFIX} A step failed (exit status $status); decoding the unfinished sequences one at a time."
+        for id in "$@"; do
+            [[ -f "$OUTPUT_DIR/$id/predictions_filtered_$id.gff" ]] && continue
+            if ! process_chromosome "$id" "" "$GPU_ID"; then
+                echo "$id" >> "$DECODE_FAILURES"
+                failed=1
+            fi
+        done
+        return "$failed"
     fi
     echo "${LOG_PREFIX} Done!"
 }
@@ -1010,18 +1235,105 @@ if ! run_prediction_workers; then
     exit 1
 fi
 
+# Short sequences are decoded in groups (process_chromosome_group): one line of
+# decode_jobs.txt is one chromosome, or a group's IDs separated by spaces. Short
+# sequences are spread over at least as many groups as run at once, and a group
+# holds about GROUP_SEQUENCE_BP bases, longest first into the group with the fewest.
+SHORT_SEQUENCE_BP=1000000
+GROUP_SEQUENCE_BP=20000000
+DECODE_JOBS_FILE="$BATCH_SIZE_STATE_DIR/decode_jobs.txt"
+OUTPUT_DIR="$OUTPUT_DIR" SHORT_SEQUENCE_BP="$SHORT_SEQUENCE_BP" \
+    GROUP_SEQUENCE_BP="$GROUP_SEQUENCE_BP" PARALLEL_CHROMOSOMES="$PARALLEL_CHROMOSOMES" \
+    $PYTHON - "$CHROM_IDS_FILE" > "$DECODE_JOBS_FILE" <<'PYEOF' || exit $?
+import heapq
+import json
+import math
+import os
+import sys
+from pathlib import Path
+
+output = Path(os.environ["OUTPUT_DIR"])
+with open(sys.argv[1], newline="") as handle:
+    ids = handle.read().split("\n")
+if ids[-1] == "":
+    ids.pop()
+jobs, short = [], []
+for chrom in ids:
+    directory = output / chrom
+    predictions = directory / f"predictions_{chrom}"
+    length = None
+    if (
+        chrom
+        and not (directory / f"predictions_filtered_{chrom}.gff").is_file()
+        and (predictions / "_SUCCESS.json").is_file()
+        and (directory / f"sequences_{chrom}.zarr").exists()
+    ):
+        try:
+            length = int(json.loads((predictions / "run.json").read_text())["length"])
+        except (OSError, ValueError, KeyError, TypeError):
+            length = None
+    if length is not None and length < int(os.environ["SHORT_SEQUENCE_BP"]):
+        short.append((chrom, length))
+    else:
+        jobs.append([chrom])
+count = min(
+    len(short),
+    max(
+        int(os.environ["PARALLEL_CHROMOSOMES"]),
+        math.ceil(sum(n for _, n in short) / int(os.environ["GROUP_SEQUENCE_BP"])),
+    ),
+)
+groups = [[] for _ in range(count)]
+heap = [(0, i) for i in range(count)]
+for position, (chrom, n) in sorted(enumerate(short), key=lambda item: -item[1][1]):
+    load, i = heapq.heappop(heap)
+    groups[i].append((position, chrom))
+    heapq.heappush(heap, (load + n, i))
+# Groups start in the order of their first sequence in the FASTA file.
+jobs += [[chrom for _, chrom in group] for group in sorted(sorted(g) for g in groups)]
+for job in jobs:
+    print(" ".join(job))
+PYEOF
+DECODE_JOBS=()
+while IFS= read -r job; do
+    DECODE_JOBS+=("$job")
+done < "$DECODE_JOBS_FILE"
+
+# Sequences that failed, one per line; a group adds each of its own.
+DECODE_FAILURES="$BATCH_SIZE_STATE_DIR/decode_failures.txt"
+: > "$DECODE_FAILURES"
+
+# start_decode_job JOB BATCH GPU_ID: one line of decode_jobs.txt.
+start_decode_job() {
+    local members
+    read -ra members <<< "$1"
+    if [[ ${#members[@]} -gt 1 ]]; then
+        process_chromosome_group "$3" "${members[@]}"
+    else
+        process_chromosome "$1" "$2" "$3"
+    fi
+}
+
+# record_decode_failure JOB: a group has already listed its failed sequences.
+record_decode_failure() {
+    [[ "$1" == *" "* ]] || echo "$1" >> "$DECODE_FAILURES"
+}
+
 FAILED=0
 
 if [[ "$PREDICT_MODE" == "ddp" || "$PREDICT_MODE" == "ddp_slurm" ]]; then
     # Predictions are finished; run the CPU stages for each chromosome.
-    for CHR_ID in "${CHR_ARRAY[@]}"; do
-        process_chromosome "$CHR_ID" "$DDP_BATCH" "" || FAILED=$(( FAILED + 1 ))
+    for JOB in "${DECODE_JOBS[@]}"; do
+        if ! start_decode_job "$JOB" "$DDP_BATCH" ""; then
+            FAILED=$(( FAILED + 1 ))
+            record_decode_failure "$JOB"
+        fi
     done
 else
     # Per-GPU parallel — round-robin, at most PARALLEL_CHROMOSOMES concurrent jobs
-    declare -a PIDS=()
+    declare -a PIDS=() PID_JOBS=()
     chr_idx=0
-    for CHR_ID in "${CHR_ARRAY[@]}"; do
+    for JOB in "${DECODE_JOBS[@]}"; do
         gpu_id="${GPU_ARRAY[$(( chr_idx % NUM_GPUS ))]}"
         bs="${GPU_BATCH_SIZES[$gpu_id]}"
 
@@ -1029,22 +1341,29 @@ else
         if [[ ${#PIDS[@]} -ge $PARALLEL_CHROMOSOMES ]]; then
             if ! wait "${PIDS[0]}"; then
                 FAILED=$(( FAILED + 1 ))
+                record_decode_failure "${PID_JOBS[0]}"
             fi
             PIDS=("${PIDS[@]:1}")
+            PID_JOBS=("${PID_JOBS[@]:1}")
         fi
 
-        process_chromosome "$CHR_ID" "$bs" "$gpu_id" &
+        start_decode_job "$JOB" "$bs" "$gpu_id" &
         PIDS+=($!)
+        PID_JOBS+=("$JOB")
         chr_idx=$(( chr_idx + 1 ))
     done
-    for pid in "${PIDS[@]}"; do
-        if ! wait "$pid"; then
+    for i in "${!PIDS[@]}"; do
+        if ! wait "${PIDS[$i]}"; then
             FAILED=$(( FAILED + 1 ))
+            record_decode_failure "${PID_JOBS[$i]}"
         fi
     done
 fi
 
 if [[ $FAILED -gt 0 ]]; then
+    # A failed group counts once in FAILED, but each of its failed sequences is listed.
+    FAILED_SEQUENCES=$(sort -u "$DECODE_FAILURES" | wc -l)
+    (( FAILED_SEQUENCES > FAILED )) && FAILED=$FAILED_SEQUENCES
     echo "ERROR: $FAILED chromosome(s) failed. See output above for details."
     exit 1
 fi
@@ -1111,19 +1430,22 @@ echo "================================================================="
 echo "[7/8] Repairing CDS boundaries against the genome sequence..."
 echo "================================================================="
 
-[[ "$ORF_MAX_SHIFT" -eq 0 ]] || refresh_stage "$ORF_GFF" "$RAW_GFF"
+# Hybrid decoding needs the partial transcripts to rescue them, and drops
+# the unrescued ones itself.
+KEEP_PARTIAL_ARGS=()
+if [[ "$KEEP_PARTIAL" == "1" || "$DECODER" == "hybrid" ]]; then
+    KEEP_PARTIAL_ARGS=(--keep-partial)
+fi
+# A stage is redone when one of the options it depends on changed.
+ORF_SETTINGS=(--setting "max_shift=$ORF_MAX_SHIFT" --setting "keep_partial=${#KEEP_PARTIAL_ARGS[@]}")
+[[ "$ORF_MAX_SHIFT" -eq 0 ]] || refresh_stage "$ORF_GFF" "$RAW_GFF" "${ORF_SETTINGS[@]}"
 if [[ "$ORF_MAX_SHIFT" -eq 0 ]]; then
     echo "Skipping ORF repair — disabled via --orf-max-shift 0"
     ORF_GFF="$RAW_GFF"
 elif [[ -f "$ORF_GFF" ]]; then
     echo "Skipping ORF repair — ${SPECIES_ID}_GeneCAD_orf.gff already exists"
+    record_stage "$ORF_GFF" "$RAW_GFF" "${ORF_SETTINGS[@]}"
 else
-    # Hybrid decoding needs the partial transcripts to rescue them, and drops
-    # the unrescued ones itself.
-    KEEP_PARTIAL_ARGS=()
-    if [[ "$KEEP_PARTIAL" == "1" || "$DECODER" == "hybrid" ]]; then
-        KEEP_PARTIAL_ARGS=(--keep-partial)
-    fi
     $PYTHON "$SCRIPT_DIR/scripts/fix_orf.py" \
         --input-gff "$RAW_GFF" \
         --input-fasta "$INPUT_FILE" \
@@ -1131,7 +1453,7 @@ else
         --max-shift "$ORF_MAX_SHIFT" \
         --report "$INTERMEDIATE_DIR/${SPECIES_ID}_GeneCAD_orf_report.tsv" \
         "${KEEP_PARTIAL_ARGS[@]}"
-    record_stage "$ORF_GFF" "$RAW_GFF"
+    record_stage "$ORF_GFF" "$RAW_GFF" "${ORF_SETTINGS[@]}"
 fi
 
 REFINE_INPUT_GFF="$ORF_GFF"
@@ -1139,13 +1461,23 @@ if [[ "$DECODER" == "hybrid" ]]; then
     HYBRID_GFF="$INTERMEDIATE_DIR/${SPECIES_ID}_GeneCAD_hybrid.gff"
     echo ""
     echo "[7/8] Hybrid decoding: rescuing partial and merging split genes..."
-    refresh_stage "$HYBRID_GFF" "$ORF_GFF"
+    HYBRID_SETTINGS=(
+        --setting "mode=$MODE" --setting "max_gap=$MERGE_MAX_GAP"
+        --setting "keep_partial=$KEEP_PARTIAL"
+        --setting "min_intron_length=$MIN_INTRON_LENGTH"
+        --setting "min_coding_run_length=$MIN_CODING_RUN_LENGTH"
+        --setting "exon_length_strictness=$EXON_LENGTH_STRICTNESS"
+        --setting "allow_u12_introns=$ALLOW_U12_INTRONS"
+        --setting "allow_missing_predictions=$ALLOW_MISSING_PREDICTIONS"
+    )
+    refresh_stage "$HYBRID_GFF" "$ORF_GFF" "${HYBRID_SETTINGS[@]}"
     if [[ -f "$HYBRID_GFF" ]]; then
         echo "Skipping hybrid decoding — ${SPECIES_ID}_GeneCAD_hybrid.gff already exists"
+        record_stage "$HYBRID_GFF" "$ORF_GFF" "${HYBRID_SETTINGS[@]}"
     else
-        if [[ "$ALLOW_MISSING_PREDICTIONS" != "1" ]]; then
-            # Hybrid decoding reads the prediction files of every sequence. Predict again
-            # the ones that were deleted (this does nothing when all of them exist).
+        # Hybrid decoding reads the prediction files of every sequence. Predict again
+        # the ones that were deleted (this does nothing when all of them exist).
+        predict_for_hybrid() {
             NEEDS_LOGITS=1
             export NEEDS_LOGITS
             extract_needed_sequences
@@ -1153,6 +1485,9 @@ if [[ "$DECODER" == "hybrid" ]]; then
                 echo "ERROR: Could not predict the sequences whose prediction files are missing."
                 exit 1
             }
+        }
+        if [[ "$ALLOW_MISSING_PREDICTIONS" != "1" ]]; then
+            predict_for_hybrid
         fi
         HYBRID_ARGS=()
         if [[ "$KEEP_PARTIAL" == "1" ]]; then
@@ -1164,19 +1499,35 @@ if [[ "$DECODER" == "hybrid" ]]; then
         if [[ "$ALLOW_U12_INTRONS" == "1" ]]; then
             HYBRID_ARGS+=(--allow-u12-introns)
         fi
-        $PYTHON "$SCRIPT_DIR/scripts/hybrid_decode.py" \
-            --input-gff "$ORF_GFF" \
-            --input-fasta "$INPUT_FILE" \
-            --predictions-root "$OUTPUT_DIR" \
-            --output-gff "$HYBRID_GFF" \
-            --domain "$MODE" \
-            --max-gap "$MERGE_MAX_GAP" \
-            --workers "$CPU_WORKERS" \
-            --min-intron-length "$MIN_INTRON_LENGTH" \
-            --min-coding-run-length "$MIN_CODING_RUN_LENGTH" \
-            --exon-length-strictness "$EXON_LENGTH_STRICTNESS" \
-            "${HYBRID_ARGS[@]}"
-        record_stage "$HYBRID_GFF" "$ORF_GFF"
+        run_hybrid() {
+            $PYTHON "$SCRIPT_DIR/scripts/hybrid_decode.py" \
+                --input-gff "$ORF_GFF" \
+                --input-fasta "$INPUT_FILE" \
+                --predictions-root "$OUTPUT_DIR" \
+                --output-gff "$HYBRID_GFF" \
+                --domain "$MODE" \
+                --max-gap "$MERGE_MAX_GAP" \
+                --workers "$CPU_WORKERS" \
+                --min-intron-length "$MIN_INTRON_LENGTH" \
+                --min-coding-run-length "$MIN_CODING_RUN_LENGTH" \
+                --exon-length-strictness "$EXON_LENGTH_STRICTNESS" \
+                "${HYBRID_ARGS[@]}"
+        }
+        hybrid_status=0
+        run_hybrid || hybrid_status=$?
+        # Status 3: some prediction files failed verification. hybrid_decode.py removed
+        # their completion markers, so the damaged windows are predicted again.
+        if [[ "$hybrid_status" -eq 3 && "$ALLOW_MISSING_PREDICTIONS" != "1" ]]; then
+            echo "Predicting the damaged prediction files again..."
+            predict_for_hybrid
+            hybrid_status=0
+            run_hybrid || hybrid_status=$?
+        fi
+        if [[ "$hybrid_status" -ne 0 ]]; then
+            echo "ERROR: Hybrid decoding failed (exit status $hybrid_status)."
+            exit "$hybrid_status"
+        fi
+        record_stage "$HYBRID_GFF" "$ORF_GFF" "${HYBRID_SETTINGS[@]}"
     fi
     REFINE_INPUT_GFF="$HYBRID_GFF"
 fi
@@ -1211,6 +1562,6 @@ echo ""
 echo "Final annotation (use this file):"
 echo "  $FINAL_GFF"
 echo ""
-echo "Intermediate files, for troubleshooting only:"
+echo "Intermediate files, for troubleshooting (a rerun reuses them, so keep them while you may rerun):"
 echo "  $INTERMEDIATE_DIR/"
 echo "================================================================="

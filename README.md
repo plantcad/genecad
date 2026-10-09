@@ -334,7 +334,7 @@ set of options.
 genecad predict [OPTIONS]
 ```
 
-* `--input-fasta` `-i` - Fasta sequence to be annotated. Gzipped files are supported.
+* `--input-fasta` `-i` - Fasta sequence to be annotated. Gzipped files are supported. Sequences without bases are skipped.
 * `--output-dir` `-o` - Output directory
 * `--species-name` `-s` - Name of species or sample. Output files use this as a prefix.
 * `--mode` `-m` - Mode, or set of models to use. Options: plant, animal. (Default plant)
@@ -345,8 +345,9 @@ genecad predict [OPTIONS]
 not a number of CPUs. Frame-aware decoding needs about 0.35 GB of RAM per Mb of chromosome and plain or hybrid
 decoding about 0.05 GB (the predictions are read segment by segment), so several large chromosomes at once can run
 out of memory. `auto` runs as many as fit in the available RAM, at most one per CPU core (up to 16), so genomes with thousands
-of small scaffolds are no longer decoded one at a time. Set a number to override.
-(Default: auto)
+of small scaffolds are no longer decoded one at a time. Set a number to override. Sequences shorter than 1 Mb are
+decoded in groups, one process per step for each group, because starting a step takes longer than decoding a small
+scaffold. (Default: auto)
 * `--batch-size` `-b` - Inference batch size for GPU (Default is auto-scaled to GPU VRAM, at most 35)
 * `--gpus` `-g` - Comma-separated list of GPU IDs to use, or "all" to use all available GPUs (Default: 0)
 * `--launcher` - Custom entrypoint command to launch predict.py (e.g. 'srun python').
@@ -369,8 +370,9 @@ HuggingFace model repo ID. Note that this does **not** override the base PlantCA
 * `--clean-intermediates` - Save disk space. The sequence and interval files of a chromosome are deleted once its
 predictions are decoded, and the prediction files (the largest, about 50 MB per Mb of sequence) are deleted once the
 final GFF is written. All GFF files are kept, so repeating the run afterwards does nothing. The prediction files are
-needed again only if the hybrid or final GFF is deleted; they are then predicted again, which needs a GPU. They are
-needed throughout the run, so this lowers the disk use after the run, not the peak.
+needed again only if the hybrid GFF in `intermediate/` is deleted (deleting the final GFF only repeats the refinement);
+they are then predicted again, which needs a GPU. They are needed throughout the run, so this lowers the disk use after
+the run, not the peak.
 * `--allow-missing-predictions` - Hybrid decoding needs the prediction files of every sequence. If they were deleted,
 the sequence is predicted again by default. With this option it is not: its partial genes stay as they are and it
 takes no part in merging.
@@ -399,9 +401,13 @@ forced, and are dropped unless `--keep-partial` is set. Use 0 to disable repair.
 > step is present in the output directory, the pipeline will skip that step. The merged GFF is
 > built again on every run and replaced only if it changed (for example after a chromosome was
 > processed again), and the ORF repair, hybrid and refinement steps are then redone from it. A
-> chromosome whose folder you delete is processed again. Changing a parameter does **not** redo
-> a finished step: delete that step's output file in `intermediate/` (or the final GFF) to apply
-> a new `--orf-max-shift`, `--merge-max-gap` or similar.
+> chromosome whose folder you delete is processed again. A finished step is also redone when an
+> option it uses changed: each chromosome is decoded again after a change of `--mode`,
+> `--min-transcript-length` or frame-aware decoding (`--decoder frame-aware` and its options), ORF
+> repair after a change of `--orf-max-shift`, `--keep-partial` or `--decoder`, and hybrid decoding
+> after a change of its options. Prediction files that fail verification, for example because
+> some of them were deleted, are predicted again (on a GPU). An output directory holds the results
+> of one FASTA file: for another genome, use another output directory.
 
 The individual components of the prediction pipeline are also accessible as python scripts.
 While this is not the main recommended method to run the GeneCAD pipeline, some users may
@@ -461,8 +467,8 @@ After running, the output directory contains:
 > and can easily be 10s-100s Gb in total. Use `--clean-intermediates` to delete the .zarr files
 > as the run proceeds, or delete them yourself after checking the final GFF. Keep the
 > `predictions_<CHR_ID>/` folders if you may want to re-run the CPU steps later (for example
-> with another `--decoder`): with them, a re-run skips the GPU prediction. If they are gone and
-> a step that needs them is run again, the chromosomes are predicted again (on a GPU).
+> with another `--decoder`): with them, a re-run skips the GPU prediction. If they are gone or
+> damaged and a step that needs them is run again, the chromosomes are predicted again (on a GPU).
 
 ### Evaluate
 

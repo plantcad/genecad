@@ -29,6 +29,8 @@ device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 def parse_gff3(gff_file):
     genes = defaultdict(list)
     transcript_to_gene = {}
+    # The first gene read with each ID on each sequence: features are added to it
+    first_gene = {}
     with open(gff_file) as fh:
         for raw in fh:
             line = raw.strip()
@@ -42,18 +44,19 @@ def parse_gff3(gff_file):
             attrs = dict(kv.split("=", 1) for kv in attr.split(";") if "=" in kv)
 
             if feature == "gene":
-                genes[chrom].append(
-                    {
-                        "id": attrs.get("ID"),
-                        "start": start,
-                        "end": end,
-                        "strand": strand,
-                        "cds": [],
-                        "utr5": [],
-                        "utr3": [],
-                        "feature_types": set(),
-                    }
-                )
+                gene = {
+                    "id": attrs.get("ID"),
+                    "start": start,
+                    "end": end,
+                    "strand": strand,
+                    "cds": [],
+                    "utr5": [],
+                    "utr3": [],
+                    "feature_types": set(),
+                }
+                genes[chrom].append(gene)
+                if gene["id"]:
+                    first_gene.setdefault((chrom, gene["id"]), gene)
             elif feature == "mRNA":
                 tx_id = attrs.get("ID")
                 parent_gene = attrs.get("Parent")
@@ -65,22 +68,21 @@ def parse_gff3(gff_file):
                 if parent_gene is None:
                     # Fallback for IDs like gene1.t1 where gene ID can be inferred.
                     parent_gene = parent.rsplit(".", 1)[0] if "." in parent else parent
-                for g in genes[chrom]:
-                    if g["id"] and g["id"] == parent_gene:
-                        g["feature_types"].add(feature)
-                        if feature == "CDS":
-                            try:
-                                phase_int = int(phase)
-                            except ValueError:
-                                phase_int = 0
-                            g["cds"].append(
-                                {"start": start, "end": end, "phase": phase_int}
-                            )
-                        elif feature == "five_prime_UTR":
-                            g["utr5"].append({"start": start, "end": end})
-                        elif feature == "three_prime_UTR":
-                            g["utr3"].append({"start": start, "end": end})
-                        break
+                g = first_gene.get((chrom, parent_gene))
+                if g is not None:
+                    g["feature_types"].add(feature)
+                    if feature == "CDS":
+                        try:
+                            phase_int = int(phase)
+                        except ValueError:
+                            phase_int = 0
+                        g["cds"].append(
+                            {"start": start, "end": end, "phase": phase_int}
+                        )
+                    elif feature == "five_prime_UTR":
+                        g["utr5"].append({"start": start, "end": end})
+                    elif feature == "three_prime_UTR":
+                        g["utr3"].append({"start": start, "end": end})
 
     # Deterministic ordering
     for chrom in genes:

@@ -392,3 +392,66 @@ def test_embed_batch_leaves_out_a_protein_that_never_fits_and_keeps_the_rest(
     )
 
     assert [pid for pid, _ in result] == ["a", "c"]
+
+
+def test_refine_writes_the_genes_when_there_are_no_candidates(tmp_path, monkeypatch):
+    """Without protein candidates, refinement still writes the final GFF."""
+    import importlib.util
+    import pathlib
+
+    path = pathlib.Path(__file__).resolve().parents[2] / "scripts" / "refine.py"
+    spec = importlib.util.spec_from_file_location("refine_script", path)
+    assert spec is not None and spec.loader is not None
+    refine = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(refine)
+
+    gff_path = tmp_path / "input.gff3"
+    gff_path.write_text(
+        "\n".join(
+            [
+                "##gff-version 3",
+                "chr1\tsrc\tgene\t50\t60\t.\t+\t.\tID=gene3",
+                "chr1\tsrc\tmRNA\t50\t60\t.\t+\t.\tID=gene3.t1;Parent=gene3",
+                "chr1\tsrc\tCDS\t50\t60\t.\t+\t0\tID=cds3;Parent=gene3.t1",
+                "chr1\tsrc\tgene\t1\t9\t.\t+\t.\tID=gene1",
+                "chr1\tsrc\tmRNA\t1\t9\t.\t+\t.\tID=gene1.t1;Parent=gene1",
+                "chr1\tsrc\tCDS\t1\t9\t.\t+\t0\tID=cds1;Parent=gene1.t1",
+            ]
+        )
+        + "\n"
+    )
+    monkeypatch.setattr(
+        reelprotein, "extract_candidate_proteins", lambda genes, fasta: {}
+    )
+
+    def no_embeddings(*args, **kwargs):
+        raise AssertionError("no candidates to embed")
+
+    monkeypatch.setattr(reelprotein, "generate_embeddings", no_embeddings)
+
+    for filter_unmerged in (False, True):
+        output_path = tmp_path / f"output.{filter_unmerged}.gff3"
+        expected_path = tmp_path / f"expected.{filter_unmerged}.gff3"
+        refine.run_reelprotein(
+            input_gff=str(gff_path),
+            input_fasta=str(tmp_path / "unused.fa"),
+            output_gff=str(output_path),
+            model_source="unused",
+            filter_unmerged=filter_unmerged,
+            gpus=[0],
+        )
+        # The same output as when no candidate is accepted.
+        reelprotein.generate_final_gff(
+            pd.DataFrame({"ProteinID": ["chr1~gene1~+"], "Predicted_Label": [0]}),
+            gff_path,
+            expected_path,
+            keep_unmerged=not filter_unmerged,
+        )
+        assert output_path.read_text() == expected_path.read_text()
+
+    assert output_path.read_text() == ""
+    unfiltered = (tmp_path / "output.False.gff3").read_text().splitlines()
+    assert [line.split("\t")[8] for line in unfiltered if "\tgene\t" in line] == [
+        "ID=gene1",
+        "ID=gene3",
+    ]

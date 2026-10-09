@@ -28,6 +28,7 @@ SUCCESS = "_SUCCESS.json"
 VERSION = 1
 HASH_WORKERS_ENV = "GENECAD_HASH_WORKERS"
 MAX_HASH_WORKERS = 64
+ZARR_METADATA = {".zmetadata", ".zattrs", ".zarray", ".zgroup", "zarr.json"}
 
 
 class PredictionResumeError(ValueError):
@@ -137,6 +138,36 @@ def fingerprint(value: object) -> str:
     return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
 
 
+def _metadata_digest(path: Path, digest: str) -> str:
+    """Digest of a Zarr JSON metadata file's content, or `digest` if it is not JSON."""
+    try:
+        with path.open() as handle:
+            value = json.load(handle)
+    except (UnicodeDecodeError, ValueError):
+        return digest
+    return fingerprint(value)
+
+
+def input_fingerprints(path: str | Path) -> tuple[str, str]:
+    """Fingerprints of an input Zarr store: (content, bytes).
+
+    The content fingerprint hashes Zarr's JSON metadata files by their parsed
+    content. Writing the same sequences again lists the metadata keys in another
+    order, which changes the bytes of `.zmetadata` but not its content. The bytes
+    fingerprint hashes every file as is; runs started before the content
+    fingerprint existed recorded that one.
+    """
+    root = Path(path)
+    hashes = file_hashes(root)
+    content = {
+        name: _metadata_digest(root / name, digest)
+        if Path(name).name in ZARR_METADATA
+        else digest
+        for name, digest in hashes.items()
+    }
+    return fingerprint(content), fingerprint(hashes)
+
+
 def write_json(path: Path, value: object) -> None:
     with atomic_output_path(path) as temporary:
         with open(temporary, "w") as handle:
@@ -151,10 +182,19 @@ def read_json(path: Path) -> dict:
     return value
 
 
-def prepare_run(output_dir: str, identity: dict, length: int) -> None:
+def _segment_output(path: Path) -> bool:
+    return path.name.startswith("segment.") or path.name in (SUCCESS, SUCCESS + ".tmp")
+
+
+def prepare_run(
+    output_dir: str, identity: dict, length: int, accepted: tuple[dict, ...] = ()
+) -> None:
     """Check run identity and remove invalid segments before starting workers.
 
+    A run recorded with `identity` or one of the `accepted` identities is resumed.
     Called by rank zero. Incompatible runs raise without deleting outputs.
+    Segments left without a run.json cannot be checked against any identity and
+    are removed.
     """
     root = Path(output_dir)
     root.mkdir(parents=True, exist_ok=True)
@@ -162,16 +202,33 @@ def prepare_run(output_dir: str, identity: dict, length: int) -> None:
     if length <= 0:
         raise ValueError("Cannot predict an empty chromosome")
     if (root / RUN).exists():
-        if read_json(root / RUN) != expected:
+        if read_json(root / RUN) not in [
+            expected,
+            *({**expected, "identity": other} for other in accepted),
+        ]:
             raise PredictionResumeError(
-                f"Prediction inputs/model/settings changed in {root}; "
-                "use a new output directory to avoid mixing results"
+                f"Prediction inputs/model/settings changed in {root}; delete it to "
+                "predict this sequence again, or use a new output directory"
             )
     else:
-        if any(p.name != RUN + ".tmp" for p in root.iterdir()):
+        leftovers = [p for p in root.iterdir() if p.name != RUN + ".tmp"]
+        if not all(_segment_output(p) for p in leftovers):
             raise PredictionResumeError(
                 f"Unverified legacy predictions in {root}; use a new output directory"
             )
+        if leftovers:
+            logger.warning(
+                "Removing %d prediction files without %s in %s; "
+                "their windows are predicted again",
+                len(leftovers),
+                RUN,
+                root,
+            )
+        for path in leftovers:
+            if path.is_dir() and not path.is_symlink():
+                shutil.rmtree(path)
+            else:
+                path.unlink()
         write_json(root / RUN, expected)
     (root / SUCCESS).unlink(missing_ok=True)
     records = segments(root, verify=True, repair=True)

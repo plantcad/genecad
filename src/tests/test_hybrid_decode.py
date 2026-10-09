@@ -694,3 +694,137 @@ def test_cli_stops_when_predictions_are_missing_unless_allowed(
     assert stopped.value.code == 2
     assert "--allow-missing-predictions" in capsys.readouterr().err
     assert not (tmp_path / "out.gff").exists()
+
+
+def damage_predictions(directory, how):
+    stores = sorted(directory.glob("segment.positive.*.zarr"))
+    if how == "store_file":
+        next(p for p in sorted(stores[1].rglob("*")) if p.is_file()).unlink()
+    elif how == "receipt":
+        stores[1].with_suffix(".json").unlink()
+    elif how == "store":
+        import shutil
+
+        shutil.rmtree(stores[1])
+    elif how == "run":
+        (directory / "run.json").unlink()
+
+
+def repredict(directory, logits, segment_length):
+    """What the predict step does without a completion marker: check every segment,
+    discard the damaged ones and predict their windows again."""
+    from src import prediction_checkpoint as checkpoint
+    from src.tests import segment_test_support as support
+
+    length = len(logits["positive"])
+    checkpoint.prepare_run(str(directory), {"model": "test"}, length)
+    kept = {
+        (r["strand"], r["window_start"])
+        for r in checkpoint.segments(directory, verify=True)
+    }
+    import xarray as xr
+
+    for strand in support.STRANDS:
+        for window_id, start in enumerate(range(0, length, segment_length)):
+            if (strand, window_id) in kept:
+                continue
+            stop = min(start + segment_length, length)
+            block = logits[strand][start:stop]
+            result = xr.Dataset(
+                {
+                    "token_logits": (
+                        ["sequence", "token"],
+                        np.zeros((stop - start, 2), dtype=np.float32),
+                    ),
+                    "token_predictions": (["sequence"], np.zeros(stop - start, int)),
+                    "feature_logits": (["sequence", "feature"], block),
+                    "feature_predictions": (["sequence"], block.argmax(axis=1)),
+                },
+                coords={
+                    "sequence": np.arange(start, stop),
+                    "feature": support.FEATURES,
+                },
+            )
+            checkpoint.commit_segment(str(directory), result, strand, [window_id])
+    checkpoint.finish_run(str(directory))
+
+
+@pytest.mark.parametrize("how", ["store_file", "receipt", "store", "run"])
+@pytest.mark.parametrize("workers", [1, 2])
+def test_cli_marks_damaged_predictions_for_prediction_again(
+    tmp_path, monkeypatch, how, workers
+):
+    sequence, labels = build_locus()
+    chroms = ["chr1", "chr2"]
+    (tmp_path / "genome.fa").write_text(
+        "".join(f">{name}\n{sequence}\n" for name in chroms)
+    )
+    (tmp_path / "in.gff").write_text(partial_gene_gff(chroms))
+    logits = {
+        "positive": np.log(emissions(labels)).astype(np.float32),
+        "negative": np.log(emissions(np.full(len(labels), IG))).astype(np.float32),
+    }
+    for name in chroms:
+        write_segments(tmp_path / name / f"predictions_{name}", logits, 1000, name)
+    script = load_script()
+    expected = run_hybrid(script, monkeypatch, tmp_path, tmp_path / "ok.gff", workers)
+
+    damaged = tmp_path / "chr2" / "predictions_chr2"
+    damage_predictions(damaged, how)
+    output = tmp_path / "out.gff"
+    with pytest.raises(SystemExit) as stopped:
+        run_hybrid(script, monkeypatch, tmp_path, output, workers)
+    assert stopped.value.code == script.DAMAGED_PREDICTIONS_EXIT
+    assert not output.exists()
+    assert not (damaged / "_SUCCESS.json").exists()
+    assert (tmp_path / "chr1" / "predictions_chr1" / "_SUCCESS.json").exists()
+
+    repredict(damaged, logits, 1000)
+    assert run_hybrid(script, monkeypatch, tmp_path, output, workers) == expected
+
+
+def test_cli_leaves_damaged_sequences_unchanged_when_allowed(tmp_path, monkeypatch):
+    sequence, labels = build_locus()
+    (tmp_path / "genome.fa").write_text(f">chr1\n{sequence}\n")
+    (tmp_path / "in.gff").write_text(partial_gene_gff(["chr1"]))
+    logits = {
+        "positive": np.log(emissions(labels)).astype(np.float32),
+        "negative": np.log(emissions(np.full(len(labels), IG))).astype(np.float32),
+    }
+    directory = tmp_path / "chr1" / "predictions_chr1"
+    write_segments(directory, logits, 1000, "chr1")
+    damage_predictions(directory, "store_file")
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "hybrid_decode.py",
+            "--input-gff",
+            str(tmp_path / "in.gff"),
+            "--input-fasta",
+            str(tmp_path / "genome.fa"),
+            "--predictions-root",
+            str(tmp_path),
+            "--output-gff",
+            str(tmp_path / "out.gff"),
+            "--allow-missing-predictions",
+            "--keep-partial",
+        ],
+    )
+    load_script().main()
+    _, by_seqid = hd.read_genes(str(tmp_path / "out.gff"))
+    (gene,) = by_seqid["chr1"]
+    assert gene.partial
+    assert not (directory / "_SUCCESS.json").exists()
+
+
+def test_cli_treats_an_empty_predictions_folder_as_missing(
+    tmp_path, monkeypatch, capsys
+):
+    sequence, labels = build_locus()
+    (tmp_path / "genome.fa").write_text(f">chr1\n{sequence}\n")
+    (tmp_path / "in.gff").write_text(partial_gene_gff(["chr1"]))
+    (tmp_path / "chr1" / "predictions_chr1").mkdir(parents=True)
+    with pytest.raises(SystemExit) as stopped:
+        run_hybrid(load_script(), monkeypatch, tmp_path, tmp_path / "out.gff", 1)
+    assert stopped.value.code == 2
+    assert "have no predictions" in capsys.readouterr().err

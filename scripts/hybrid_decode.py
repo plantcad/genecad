@@ -19,6 +19,7 @@ where predictions for sequence <chrom> are in OUTPUT_DIR/<chrom>/predictions_<ch
 from __future__ import annotations
 
 import argparse
+import glob
 import logging
 import multiprocessing
 import os
@@ -27,6 +28,7 @@ from collections import Counter
 from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait
 
 from src import hybrid_decode as hd
+from src.prediction_checkpoint import RUN, SUCCESS
 from src.frame_crf import (
     DEFAULT_EXON_LENGTH_STRICTNESS,
     DEFAULT_MIN_CODING_RUN_LENGTH,
@@ -37,8 +39,15 @@ from src.frame_crf import (
 logger = logging.getLogger(__name__)
 
 
+# Exit status when prediction files fail verification; predict.sh then predicts the
+# damaged sequences again and reruns this step.
+DAMAGED_PREDICTIONS_EXIT = 3
+
+
 def decode_sequences(jobs, input_fasta, options, workers):
-    """Run `process_sequence` for each job, returning its result by sequence name.
+    """Run `process_sequence` for each job, returning its result by sequence name,
+    and the `DamagedPredictions` of the sequences whose prediction files failed
+    verification.
 
     The FASTA is read once, in file order, and each sequence is handed to a worker
     together with its bases. Letting every worker find its own sequence would read the
@@ -47,17 +56,25 @@ def decode_sequences(jobs, input_fasta, options, workers):
     """
     wanted = {seqid: (genes, pdir) for seqid, genes, pdir in jobs}
     results = {}
+    damaged = []
     if workers <= 1:
         for seqid, codes in iter_chromosome_codes(input_fasta, wanted):
             genes, pdir = wanted[seqid]
-            results[seqid] = hd.process_sequence(
-                seqid, genes, input_fasta, pdir, *options, codes=codes
-            )
-        return results
+            try:
+                results[seqid] = hd.process_sequence(
+                    seqid, genes, input_fasta, pdir, *options, codes=codes
+                )
+            except hd.DamagedPredictions as error:
+                damaged.append(error)
+        return results, damaged
 
     def collect(done):
         for future in done:
-            seqid, genes, stats = future.result()
+            try:
+                seqid, genes, stats = future.result()
+            except hd.DamagedPredictions as error:
+                damaged.append(error)
+                continue
             results[seqid] = (seqid, genes, stats)
 
     # spawn, not fork: the parent is already multi-threaded (torch, numba).
@@ -81,7 +98,15 @@ def decode_sequences(jobs, input_fasta, options, workers):
                 done, pending = wait(pending, return_when=FIRST_COMPLETED)
                 collect(done)
         collect(wait(pending).done)
-    return results
+    return results, damaged
+
+
+def has_predictions(predictions_dir: str) -> bool:
+    """Whether a directory holds prediction files: segments or legacy rank stores."""
+    return any(
+        glob.glob(os.path.join(glob.escape(predictions_dir), pattern))
+        for pattern in (RUN, SUCCESS, "segment.*", "predictions.*.zarr")
+    )
 
 
 def main() -> None:
@@ -111,7 +136,7 @@ def main() -> None:
     parser.add_argument(
         "--allow-missing-predictions",
         action="store_true",
-        help="Leave sequences whose prediction files are missing unchanged "
+        help="Leave sequences whose prediction files are missing or damaged unchanged "
         "instead of stopping with an error",
     )
     parser.add_argument("--domain", choices=["plant", "animal"], default="plant")
@@ -162,7 +187,7 @@ def main() -> None:
         predictions_dir = os.path.join(
             args.predictions_root, seqid, f"predictions_{seqid}"
         )
-        if os.path.isdir(predictions_dir):
+        if has_predictions(predictions_dir):
             jobs.append((seqid, genes, predictions_dir))
         else:
             missing.append(seqid)
@@ -193,9 +218,30 @@ def main() -> None:
         args.keep_partial,
         graph_options,
     )
-    results = decode_sequences(jobs, args.input_fasta, options, args.workers)
+    results, damaged = decode_sequences(jobs, args.input_fasta, options, args.workers)
+    # Without its completion marker, the predict step checks every segment of a
+    # sequence, discards the damaged ones and predicts their windows again.
+    for error in damaged:
+        logger.error(f"Prediction files failed verification: {error}")
+        marker = os.path.join(error.predictions_dir, SUCCESS)
+        if os.path.exists(marker):
+            os.remove(marker)
+    if damaged:
+        message = (
+            f"The prediction files of {len(damaged)} sequence(s) are damaged and their "
+            "completion markers were removed."
+        )
+        if not args.allow_missing_predictions:
+            logger.error(
+                message + " Run predict.sh again to predict the damaged parts again "
+                "(it does so by itself when it runs this step)."
+            )
+            sys.exit(DAMAGED_PREDICTIONS_EXIT)
+        logger.warning(message + " These sequences were left unchanged.")
     totals: Counter = Counter()
     for seqid, _, _ in jobs:
+        if seqid not in results:
+            continue
         _, genes, stats = results[seqid]
         by_seqid[seqid] = genes
         totals.update(stats)

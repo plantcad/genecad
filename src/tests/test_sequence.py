@@ -732,6 +732,46 @@ def test_create_sequence_windows():
         np.testing.assert_array_equal(outputs, inputs)
 
 
+def padded_sequence_windows(sequence, window_size, stride, pad_value=0):
+    """The implementation that padded a copy of the whole sequence."""
+    from src.sequence import create_index_windows
+
+    length = len(sequence)
+    pad = (window_size - length % window_size) % window_size
+    padded = np.pad(
+        sequence,
+        [(0, pad)] + [(0, 0)] * (sequence.ndim - 1),
+        mode="constant",
+        constant_values=pad_value,
+    )
+    windows = create_index_windows(len(padded), window_size, stride)
+    for start, stop, v_start, v_stop in zip(
+        *windows.T[:2], *np.clip(windows.T[2:], 0, length)
+    ):
+        if v_start != v_stop:
+            yield padded[start:stop], (v_start - start, v_stop - start), (v_start, v_stop)
+
+
+@pytest.mark.parametrize("length", [2, 8, 9, 16, 30, 31, 33, 100, 128])
+@pytest.mark.parametrize("pad_value", [0, 7])
+@pytest.mark.parametrize("trailing", [(), (3,)])
+def test_sequence_windows_match_padding_the_whole_sequence(length, pad_value, trailing):
+    sequence = np.arange(length * int(np.prod(trailing))).reshape(length, *trailing) + 1
+    expected = list(padded_sequence_windows(sequence, 16, 8, pad_value))
+    actual = list(create_sequence_windows(sequence, 16, 8, pad_value))
+    assert len(actual) == len(expected)
+    for (chunk, local, glob), (want, want_local, want_glob) in zip(actual, expected):
+        assert chunk.dtype == want.dtype
+        np.testing.assert_array_equal(chunk, want)
+        assert (tuple(map(int, local)), tuple(map(int, glob))) == (
+            tuple(map(int, want_local)),
+            tuple(map(int, want_glob)),
+        )
+        # Windows inside the sequence are views: nothing is copied.
+        if int(glob[0]) + 16 - int(local[0]) <= length:
+            assert np.shares_memory(chunk, sequence)
+
+
 def test_viterbi_decode():
     """Test viterbi_decode with various examples comparing to known optimal paths."""
 

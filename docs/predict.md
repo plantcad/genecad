@@ -75,9 +75,14 @@ results may differ slightly with different batching or hardware.
 
 The run identity includes the input store's content, loaded model weights and
 configuration, tokenizer vocabulary, species/chromosome, window size, stride,
-dtype, and PyTorch version. A mismatch stops the run without deleting its outputs;
-use a new output directory for changed inputs or models. A rank-zero filesystem
-lock limits each chromosome output directory to one writer job.
+dtype, and PyTorch version. The store's Zarr metadata files are compared by their
+JSON content, not their bytes, so extracting the same FASTA again gives the same
+identity (identities recorded by earlier versions are still accepted). A mismatch
+stops the run without deleting its outputs; delete the prediction directory to
+predict the sequence again, or use a new output directory. Segments left in a
+directory without `run.json` are removed with a warning and predicted again; other
+leftover files there stop the run. A rank-zero filesystem lock limits each
+chromosome output directory to one writer job.
 
 After all ranks finish, the worker checks file hashes and complete coverage of
 both strands before writing `_SUCCESS.json`. Downstream readers require this
@@ -94,11 +99,16 @@ The result is the same for any number of threads. Every process that verifies
 predictions starts its own pool, so decoding several chromosomes in parallel
 multiplies the number of concurrent reads.
 
-Windows are generated in batches, but the current
-sequence and padded strand remain in RAM, so long chromosomes can still require
-substantial memory. Checksums and segment files add I/O. Other pipeline stages
-retain their atomic output writes and stage-level resume checks. The shell skips
-scaffolds whose final filtered GFF already exists.
+Windows are generated in batches as views of the strand (only the last window is
+padded), and one strand is held in RAM at a time: its token ids and coordinates,
+about 16 bytes per base (measured), so a 1.5 Gb chromosome needs about 24 GB per
+GPU worker. Checksums and segment files add I/O. Other pipeline stages retain their
+atomic output writes and stage-level resume checks. The shell skips scaffolds whose
+final filtered GFF already exists.
+
+When hybrid decoding finds prediction files that fail verification, it removes
+their `_SUCCESS.json`; `predict.sh` then runs this step again, which checks every
+segment, discards the damaged ones and predicts their windows again.
 
 ### Next Step
 

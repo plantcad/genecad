@@ -114,3 +114,50 @@ def test_manifest_only_writes_requested_chromosomes(
     ds = open_datatree(str(tmp_path / "chr2.zarr"))["sp1"]["chr2"]
     seq = ds["sequence_tokens"].sel(strand="positive").values
     assert b"".join(seq).decode() == CHROM_SEQS["chr2"]
+
+
+TOKEN_MAP = {**{b: i for i, b in enumerate("ACGTNacgt", 2)}, "[PAD]": 0, "é": 20}
+
+
+def test_byte_tokenizer_matches_a_lookup_per_base() -> None:
+    bases = np.frombuffer(bytes(range(256)) * 3, dtype="S1")
+    encoded = {k.encode("utf-8"): v for k, v in TOKEN_MAP.items()}
+    expected = np.array([encoded.get(b, -1) for b in bases], dtype=np.int64)
+    tokenizer = extract_fasta.ByteTokenizer(TOKEN_MAP)
+    np.testing.assert_array_equal(tokenizer(bases), expected)
+    out = np.empty(len(bases), dtype=np.int64)
+    assert tokenizer(bases, out=out) is out
+    np.testing.assert_array_equal(out, expected)
+
+
+def test_records_without_bases_are_extracted(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An empty record gives empty arrays and does not stop the other records."""
+    path = tmp_path / "empty.fasta"
+    path.write_text(">chr1\nACGTNacgt\n>empty\n>chr3\nGATTACA\n")
+    monkeypatch.setattr(
+        extract_fasta,
+        "_load_tokenizer",
+        lambda tokenizer_path: extract_fasta.ByteTokenizer(TOKEN_MAP),
+    )
+    entries = [
+        {"chromosome_id": c, "output_zarr": str(tmp_path / f"{c}.zarr")}
+        for c in ("chr1", "empty", "chr3")
+    ]
+    extract_fasta.extract_fasta_manifest(
+        species_id="sp1",
+        fasta_file=str(path),
+        entries=entries,
+        tokenizer_path="fake",
+    )
+    lengths = {}
+    for c in ("chr1", "empty", "chr3"):
+        ds = open_datatree(str(tmp_path / f"{c}.zarr"))["sp1"][c]
+        lengths[c] = ds.sizes["sequence"]
+        assert ds["sequence_input_ids"].shape == (2, lengths[c])
+    assert lengths == {"chr1": 9, "empty": 0, "chr3": 7}
+    ds = open_datatree(str(tmp_path / "chr3.zarr"))["sp1"]["chr3"]
+    np.testing.assert_array_equal(
+        ds["sequence_input_ids"].sel(strand="positive").values, [4, 2, 5, 5, 2, 3, 2]
+    )

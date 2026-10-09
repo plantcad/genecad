@@ -243,20 +243,37 @@ def test_max_parallel_chromosomes_option():
     assert run("--cpu-stage-parallel", "2").returncode != 0
 
 
-def test_chromosomes_decoded_at_once_never_exceed_the_limit(tmp_path):
-    """Four GPUs but a limit of two: at most two process_chromosome calls overlap."""
-    start = PREDICT_SH.index("    declare -a PIDS=()")
-    end = PREDICT_SH.index("\nif [[ $FAILED -gt 0 ]]", start)
-    loop = PREDICT_SH[start:end].rsplit("\nfi", 1)[0]
+def decode_loop(tmp_path, jobs, mode="single", fail=()):
+    """Run the decoding loop with process_chromosome(_group) replaced by functions that
+    log when they start and end, and fail for the IDs in fail."""
+    start = PREDICT_SH.index("# Sequences that failed, one per line")
+    end = PREDICT_SH.index("\nRECALL_GFFS=()", start)
     log = tmp_path / "log"
     script = (
-        f'process_chromosome() {{ echo "+ $1" >> {log}; sleep 0.3; echo "- $1" >> {log}; }}\n'
-        "GPU_ARRAY=(0 1 2 3); NUM_GPUS=4; PARALLEL_CHROMOSOMES=2; FAILED=0\n"
+        f'job() {{ echo "+ $1" >> {log}; sleep 0.3; echo "- $1" >> {log}; }}\n'
+        f'fails() {{ [[ " {" ".join(fail)} " == *" $1 "* ]]; }}\n'
+        'process_chromosome() { job "$1"; ! fails "$1"; }\n'
+        "process_chromosome_group() {\n"
+        '    shift; job "$*"; local id status=0\n'
+        '    for id in "$@"; do\n'
+        '        if fails "$id"; then echo "$id" >> "$DECODE_FAILURES"; status=1; fi\n'
+        "    done\n"
+        '    return "$status"\n'
+        "}\n"
+        f"BATCH_SIZE_STATE_DIR={tmp_path}; PREDICT_MODE={mode}; DDP_BATCH=8\n"
+        "GPU_ARRAY=(0 1 2 3); NUM_GPUS=4; PARALLEL_CHROMOSOMES=2\n"
         "declare -A GPU_BATCH_SIZES=([0]=8 [1]=8 [2]=8 [3]=8)\n"
-        "CHR_ARRAY=(c1 c2 c3 c4 c5 c6)\n" + loop
+        "DECODE_JOBS=(" + " ".join(f"'{j}'" for j in jobs) + ")\n"
+        "set -e\n" + PREDICT_SH[start:end]
     )
     result = subprocess.run(["bash", "-c", script], text=True, capture_output=True)
-    assert result.returncode == 0, result.stderr
+    return result, log
+
+
+def test_chromosomes_decoded_at_once_never_exceed_the_limit(tmp_path):
+    """Four GPUs but a limit of two: at most two process_chromosome calls overlap."""
+    result, log = decode_loop(tmp_path, ["c1", "c2", "c3", "c4", "c5", "c6"])
+    assert result.returncode == 0, result.stdout + result.stderr
 
     running = peak = 0
     for line in log.read_text().splitlines():
@@ -264,6 +281,28 @@ def test_chromosomes_decoded_at_once_never_exceed_the_limit(tmp_path):
         peak = max(peak, running)
     assert peak == 2
     assert sum(line.startswith("-") for line in log.read_text().splitlines()) == 6
+
+
+@pytest.mark.parametrize("mode", ["single", "ddp"])
+def test_failed_sequences_are_counted_one_by_one_also_in_groups(tmp_path, mode):
+    jobs = ["big1", "a b c", "big2", "d e"]
+    result, log = decode_loop(tmp_path, jobs, mode, fail=("big2", "a", "c", "e"))
+    assert result.returncode == 1
+    assert "ERROR: 4 chromosome(s) failed." in result.stdout
+    started = [line[2:] for line in log.read_text().splitlines() if line[0] == "+"]
+    assert sorted(started) == sorted(jobs)
+    assert sorted((tmp_path / "decode_failures.txt").read_text().split()) == [
+        "a",
+        "big2",
+        "c",
+        "e",
+    ]
+
+
+def test_no_failure_message_when_every_job_succeeds(tmp_path):
+    result, _ = decode_loop(tmp_path, ["big1", "a b c"], "ddp")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "ERROR" not in result.stdout
 
 
 # -------------------------------------------------------------------------------------------------
@@ -578,3 +617,296 @@ def test_clean_intermediates_is_off_by_default_and_exported():
     assert '--clean-intermediates) CLEAN_INTERMEDIATES="1"' in PREDICT_SH
     assert "export -f process_chromosome clean_decoded_chromosome" in PREDICT_SH
     assert "export CLEAN_INTERMEDIATES OUTPUT_DIR" in PREDICT_SH
+
+
+def decode_settings_check() -> str:
+    start = PREDICT_SH.index('DECODE_SETTINGS="mode=')
+    end = PREDICT_SH.index("extract_needed_sequences\necho")
+    return PREDICT_SH[start:end]
+
+
+def check_decode_settings(tmp_path, chroms, **options):
+    import sys
+
+    ids = tmp_path / "ids.txt"
+    ids.write_text("\n".join(chroms) + "\n")
+    env = {
+        "PATH": os.environ["PATH"],
+        "PYTHON": sys.executable,
+        "OUTPUT_DIR": str(tmp_path / "out"),
+        "CHROM_IDS_FILE": str(ids),
+        "MODE": "plant",
+        "FRAME_AWARE": "0",
+        "MIN_TRANSCRIPT_LENGTH": "3",
+        "MIN_INTRON_LENGTH": "20",
+        "MIN_CODING_RUN_LENGTH": "9",
+        "EXON_LENGTH_STRICTNESS": "16",
+        "ALLOW_U12_INTRONS": "0",
+        **options,
+    }
+    result = subprocess.run(
+        ["bash", "-c", decode_settings_check()], env=env, text=True, capture_output=True
+    )
+    assert result.returncode == 0, result.stderr
+    return result.stdout
+
+
+def decoded_files(root, chrom):
+    folder = root / chrom
+    return sorted(
+        p.name
+        for p in folder.iterdir()
+        if p.name.startswith(("predictions_raw", "predictions_filtered", "intervals"))
+    )
+
+
+def test_sequences_decoded_with_other_options_are_decoded_again(tmp_path):
+    out = tmp_path / "out"
+    make_chromosome_files(out, "chr1")
+    make_chromosome_files(out, "chr2")
+    make_chromosome_files(out, "chr3", filtered=False)
+    everything = decoded_files(out, "chr1")
+
+    # Decoded by an earlier version: the current options are recorded, nothing removed.
+    message = check_decode_settings(tmp_path, ["chr1", "chr2", "chr3"])
+    assert "2 sequence(s), e.g. chr1, were decoded by an earlier version" in message
+    assert "delete their predictions_filtered_<ID>.gff" in message
+    record = (out / "chr1" / "decoding_settings.txt").read_text()
+    assert record == "mode=plant frame_aware=0 min_transcript_length=3\n"
+    assert not (out / "chr3" / "decoding_settings.txt").exists()
+    assert check_decode_settings(tmp_path, ["chr1", "chr2"]) == ""
+    assert decoded_files(out, "chr1") == everything
+
+    message = check_decode_settings(tmp_path, ["chr1"], FRAME_AWARE="1")
+    assert "1 sequence(s), e.g. chr1 (frame_aware 0 -> 1)" in message
+    assert decoded_files(out, "chr1") == []
+    assert not (out / "chr1" / "decoding_settings.txt").exists()
+    # Predictions and sequences are kept; other sequences are untouched.
+    assert (out / "chr1" / "predictions_chr1" / "_SUCCESS.json").exists()
+    assert (out / "chr1" / "sequences_chr1.zarr").exists()
+    assert decoded_files(out, "chr2") == [n.replace("chr1", "chr2") for n in everything]
+
+    message = check_decode_settings(tmp_path, ["chr2"], MIN_TRANSCRIPT_LENGTH="30")
+    assert "chr2 (min_transcript_length 3 -> 30)" in message
+
+
+def test_frame_aware_options_matter_only_to_frame_aware_decoding(tmp_path):
+    out = tmp_path / "out"
+    make_chromosome_files(out, "chr1")
+    check_decode_settings(tmp_path, ["chr1"])
+    assert check_decode_settings(tmp_path, ["chr1"], MIN_INTRON_LENGTH="60") == ""
+    check_decode_settings(tmp_path, ["chr1"], FRAME_AWARE="1")
+    make_chromosome_files(out, "chr1")
+    (out / "chr1" / "decoding_settings.txt").write_text(
+        "mode=plant frame_aware=1 min_transcript_length=3 min_intron_length=20 "
+        "min_coding_run_length=9 exon_length_strictness=16 allow_u12_introns=0\n"
+    )
+    message = check_decode_settings(
+        tmp_path, ["chr1"], FRAME_AWARE="1", MIN_INTRON_LENGTH="60"
+    )
+    assert "chr1 (min_intron_length 20 -> 60)" in message
+
+
+def test_a_decoded_sequence_records_its_options():
+    body = shell_function("process_chromosome")
+    record = body.index('"$CHR_OUTPUT_DIR/decoding_settings.txt"')
+    assert (
+        body.index("filter_raw_gff.py")
+        < record
+        < body.index('echo "${LOG_PREFIX} Done!"')
+    )
+    assert "export DECODE_SETTINGS" in PREDICT_SH
+
+
+def run_post_processing_logged(tmp_path, decoder, keep_partial, hybrid_exits=()):
+    """Steps 7-8 with a fake Python whose hybrid_decode.py exits with the given
+    statuses in turn; stage helpers and re-prediction are logged."""
+    log = tmp_path / "calls.log"
+    count = tmp_path / "hybrid_calls"
+    count.write_text("0")
+    statuses = " ".join(str(s) for s in hybrid_exits)
+    fake = tmp_path / "python"
+    fake.write_text(
+        "#!/bin/bash\n"
+        f'echo "$*" >> {log}\n'
+        'if [[ "$1" == */hybrid_decode.py ]]; then\n'
+        f"  n=$(cat {count}); echo $((n + 1)) > {count}\n"
+        f"  statuses=({statuses})\n"
+        '  exit "${statuses[$n]:-0}"\n'
+        "fi\n"
+    )
+    fake.chmod(0o755)
+    out = tmp_path / "out"
+    env = {
+        "PATH": "/usr/bin:/bin",
+        "PYTHON": str(fake),
+        "SCRIPT_DIR": "/genecad",
+        "INPUT_FILE": "genome.fa",
+        "OUTPUT_DIR": str(out),
+        "SPECIES_ID": "Sp",
+        "MODE": "plant",
+        "INTERMEDIATE_DIR": f"{out}/intermediate",
+        "RAW_GFF": f"{out}/intermediate/Sp_GeneCAD_raw.gff",
+        "ORF_GFF": f"{out}/intermediate/Sp_GeneCAD_orf.gff",
+        "FINAL_GFF": f"{out}/Sp_GeneCAD_final.gff",
+        "ORF_MAX_SHIFT": "300",
+        "GPU_LIST_STR": "0",
+        "CPU_WORKERS": "4",
+        "DECODER": decoder,
+        "KEEP_PARTIAL": keep_partial,
+        "MERGE_MAX_GAP": "20000",
+        "MIN_INTRON_LENGTH": "20",
+        "MIN_CODING_RUN_LENGTH": "9",
+        "EXON_LENGTH_STRICTNESS": "16",
+        "ALLOW_U12_INTRONS": "0",
+        "ALLOW_MISSING_PREDICTIONS": "0",
+    }
+    stubs = (
+        f'refresh_stage() {{ echo "refresh $*" >> {log}; }}\n'
+        f'record_stage() {{ echo "record $*" >> {log}; }}\n'
+        f'extract_needed_sequences() {{ echo "extract" >> {log}; }}\n'
+        f'run_prediction_workers() {{ echo "predict" >> {log}; }}\n'
+    )
+    result = subprocess.run(
+        ["bash", "-c", stubs + post_processing()],
+        env=env,
+        text=True,
+        capture_output=True,
+    )
+    lines = log.read_text().splitlines() if log.exists() else []
+    return result, [line.split() for line in lines]
+
+
+def names(calls):
+    return [c[0].rsplit("/", 1)[-1] for c in calls]
+
+
+def test_damaged_predictions_are_predicted_again_and_hybrid_decoding_rerun(tmp_path):
+    result, calls = run_post_processing_logged(tmp_path, "hybrid", "0", [3])
+    assert result.returncode == 0, result.stdout + result.stderr
+    steps = [n for n in names(calls) if n not in ("refresh", "record")]
+    assert steps == [
+        "fix_orf.py",
+        "extract",
+        "predict",
+        "hybrid_decode.py",
+        "extract",
+        "predict",
+        "hybrid_decode.py",
+        "refine.py",
+    ]
+    hybrid_records = [
+        c for c in calls if c[0] == "record" and "Sp_GeneCAD_hybrid.gff" in c[1]
+    ]
+    assert len(hybrid_records) == 1
+
+
+@pytest.mark.parametrize("statuses", [[3, 3], [1], [2]])
+def test_hybrid_decoding_that_still_fails_stops_the_run(tmp_path, statuses):
+    result, calls = run_post_processing_logged(tmp_path, "hybrid", "0", statuses)
+    assert result.returncode == statuses[-1]
+    assert "refine.py" not in names(calls)
+    assert not any(c[0] == "record" and "Sp_GeneCAD_hybrid.gff" in c[1] for c in calls)
+    assert names(calls).count("hybrid_decode.py") == len(statuses)
+
+
+def stage_settings(calls, stage, output):
+    (call,) = [c for c in calls if c[0] == stage and c[1].endswith(output)]
+    return [call[i + 1] for i, a in enumerate(call) if a == "--setting"]
+
+
+@pytest.mark.parametrize(
+    "decoder,keep_partial,orf_keep",
+    [("hybrid", "0", "1"), ("plain", "0", "0"), ("plain", "1", "1")],
+)
+def test_orf_and_hybrid_stages_are_redone_when_their_options_change(
+    tmp_path, decoder, keep_partial, orf_keep
+):
+    result, calls = run_post_processing_logged(tmp_path, decoder, keep_partial)
+    assert result.returncode == 0, result.stderr
+    orf = ["max_shift=300", f"keep_partial={orf_keep}"]
+    assert stage_settings(calls, "refresh", "Sp_GeneCAD_orf.gff") == orf
+    assert stage_settings(calls, "record", "Sp_GeneCAD_orf.gff") == orf
+    if decoder == "hybrid":
+        hybrid = stage_settings(calls, "refresh", "Sp_GeneCAD_hybrid.gff")
+        assert hybrid == stage_settings(calls, "record", "Sp_GeneCAD_hybrid.gff")
+        assert "max_gap=20000" in hybrid and "mode=plant" in hybrid
+        assert f"keep_partial={keep_partial}" in hybrid
+
+
+def check_input_fasta(tmp_path, fasta):
+    """Run predict.sh's check that the output directory belongs to this FASTA file."""
+    import sys
+
+    start = PREDICT_SH.index(
+        "# An output directory holds the results of one FASTA file"
+    )
+    end = PREDICT_SH.index("# Step 1: Discover chromosomes from FASTA headers", start)
+    output = tmp_path / "out"
+    state = output / ".state"
+    state.mkdir(parents=True, exist_ok=True)
+    script = PREDICT_SH[start:end].rsplit("\n# ===", 1)[0]
+    return subprocess.run(
+        ["bash", "-c", script],
+        env={
+            **os.environ,
+            "INPUT_FILE": str(fasta),
+            "OUTPUT_DIR": str(output),
+            "BATCH_SIZE_STATE_DIR": str(state),
+            "PYTHON": sys.executable,
+        },
+        text=True,
+        capture_output=True,
+    )
+
+
+def test_an_output_directory_belongs_to_one_fasta_file(tmp_path):
+    import json
+
+    fasta = tmp_path / "genome.fa"
+    fasta.write_text(">chr1\nACGT\n")
+    assert check_input_fasta(tmp_path, fasta).returncode == 0
+    record = tmp_path / "out" / ".state" / "input_fasta.json"
+    first = json.loads(record.read_text())
+    (tmp_path / "out" / "chr1").mkdir()
+
+    # The same bases at another path, or touched: accepted.
+    moved = tmp_path / "moved.fa"
+    moved.write_text(">chr1\nACGT\n")
+    result = check_input_fasta(tmp_path, moved)
+    assert result.returncode == 0, result.stderr
+    assert json.loads(record.read_text())["sha256"] == first["sha256"]
+    assert json.loads(record.read_text())["path"] == str(moved.resolve())
+
+    # The same file compressed: accepted.
+    import gzip
+
+    packed = tmp_path / "genome.fa.gz"
+    packed.write_bytes(gzip.compress(b">chr1\nACGT\n"))
+    result = check_input_fasta(tmp_path, packed)
+    assert result.returncode == 0, result.stderr
+    assert json.loads(record.read_text())["sha256"] == first["sha256"]
+    moved.touch()
+    assert check_input_fasta(tmp_path, moved).returncode == 0
+
+    # Another genome with the same chromosome names: stopped, nothing changed.
+    other = tmp_path / "other.fa"
+    other.write_text(">chr1\nTTTT\n")
+    result = check_input_fasta(tmp_path, other)
+    assert result.returncode == 1
+    assert "has the results of another FASTA file" in result.stderr
+    assert str(moved.resolve()) in result.stderr
+    assert json.loads(record.read_text())["path"] == str(moved.resolve())
+
+
+def test_another_fasta_is_accepted_while_there_are_no_results(tmp_path):
+    import json
+
+    first, second = tmp_path / "a.fa", tmp_path / "b.fa"
+    first.write_text(">chr1\nACGT\n")
+    second.write_text(">chr1\nTTTT\n")
+    assert check_input_fasta(tmp_path, first).returncode == 0
+    result = check_input_fasta(tmp_path, second)
+    assert result.returncode == 0, result.stderr
+    record = json.loads((tmp_path / "out" / ".state" / "input_fasta.json").read_text())
+    assert record["path"] == str(second.resolve())

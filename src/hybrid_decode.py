@@ -53,6 +53,19 @@ EXONIC_TYPES = frozenset(FEATURE_NAME.values())
 Feature = tuple[str, int, int]  # (type, 1-based start, 1-based inclusive end)
 
 
+class DamagedPredictions(Exception):
+    """The prediction files of a sequence fail verification; predicting the sequence
+    again repairs them."""
+
+    def __init__(self, predictions_dir: str, reason: str):
+        super().__init__(predictions_dir, reason)
+        self.predictions_dir = predictions_dir
+        self.reason = reason
+
+    def __str__(self) -> str:
+        return f"{self.predictions_dir}: {self.reason}"
+
+
 @dataclass
 class Gene:
     """One gene, described by its first transcript's exonic features.
@@ -340,7 +353,12 @@ def process_sequence(
     if codes is None:
         codes = load_chromosome_codes(input_fasta, seqid)
     names = GeneClassifierConfig().token_entity_names_with_background()
-    segments = open_segments(predictions_dir)
+    try:
+        segments = open_segments(predictions_dir)
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        raise DamagedPredictions(
+            predictions_dir, f"{type(error).__name__}: {error}"
+        ) from error
     if segments is None:
         # Legacy rank stores cannot be read piecewise
         ds = merge_prediction_datasets(

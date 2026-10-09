@@ -642,23 +642,26 @@ def create_sequence_windows(
                 within the context of the entire sequence; e.g. `sequence[slice(*global_window)]` is
                 equivalent to `chunk[slice(*local_window)]`
     """
-    sequence_length = len(sequence)  # pyrefly: ignore[bad-argument-type]
+    sequence = np.asarray(sequence)
+    sequence_length = len(sequence)
     bounds = (0, sequence_length)
     pad = (window_size - sequence_length % window_size) % window_size
-    pad_width = [(0, pad)] + [
-        (0, 0) for _ in range(sequence.ndim - 1)
-    ]  # pad the first dimension only
-    padded_sequence = np.pad(
-        sequence, pad_width=pad_width, mode="constant", constant_values=pad_value
-    )
-    windows = create_index_windows(len(padded_sequence), window_size, stride)
+    # Windows that reach past the end are padded one at a time: padding the whole
+    # sequence would copy it.
+    windows = create_index_windows(sequence_length + pad, window_size, stride)
     global_bounds, local_bounds = windows.T[:2], windows.T[2:]
     local_bounds = np.clip(local_bounds, *bounds)
     for start, stop, v_start, v_stop in zip(*global_bounds, *local_bounds):
         assert stop - start == window_size, (
             f"Window size mismatch: {stop - start} != {window_size}"
         )
-        chunk = padded_sequence[start:stop]
+        if stop <= sequence_length:
+            chunk = sequence[start:stop]
+        else:
+            chunk = np.full(
+                (window_size, *sequence.shape[1:]), pad_value, dtype=sequence.dtype
+            )
+            chunk[: max(0, sequence_length - start)] = sequence[start:]
         assert len(chunk) == window_size, (
             f"Chunk size mismatch: {len(chunk)} != {window_size}"
         )

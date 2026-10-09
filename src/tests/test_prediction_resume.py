@@ -341,3 +341,106 @@ def test_visualization_commands_match_current_parsers(tmp_path, monkeypatch):
         monkeypatch.setattr(sys, "argv", command[1:])
         module.main()
     assert calls == ["extract", "predict", "detect"]
+
+
+def test_runs_recorded_with_an_accepted_identity_are_resumed(tmp_path, monkeypatch):
+    prepare(tmp_path, input="bytes")
+    with pytest.raises(RuntimeError, match="simulated OOM"):
+        infer(tmp_path, monkeypatch, fail_after=2)
+    run = (tmp_path / checkpoint.RUN).read_text()
+    saved = checkpoint.segments(tmp_path, verify=True)
+    checkpoint.prepare_run(
+        str(tmp_path),
+        {"model": "test", "input": "content"},
+        47,
+        accepted=({"model": "test", "input": "bytes"},),
+    )
+    # run.json is kept: the receipts refer to it.
+    assert (tmp_path / checkpoint.RUN).read_text() == run
+    assert checkpoint.segments(tmp_path, verify=True) == saved
+    with pytest.raises(ValueError, match="changed"):
+        checkpoint.prepare_run(
+            str(tmp_path),
+            {"model": "test", "input": "other"},
+            47,
+            accepted=({"model": "test", "input": "content"},),
+        )
+
+
+@pytest.mark.parametrize("left", ["segments", "complete"])
+def test_segments_without_run_json_are_predicted_again(tmp_path, monkeypatch, left):
+    prepare(tmp_path)
+    expected = None
+    if left == "complete":
+        total = infer(tmp_path, monkeypatch)
+        checkpoint.finish_run(str(tmp_path))
+        expected = merge_prediction_datasets(str(tmp_path)).load()
+    else:
+        with pytest.raises(RuntimeError, match="simulated OOM"):
+            infer(tmp_path, monkeypatch, fail_after=2)
+    (tmp_path / checkpoint.RUN).unlink()
+    prepare(tmp_path)
+    assert sorted(p.name for p in tmp_path.iterdir()) == [checkpoint.RUN]
+    windows = infer(tmp_path, monkeypatch)
+    checkpoint.finish_run(str(tmp_path))
+    if expected is not None:
+        assert windows == total
+        xr.testing.assert_equal(
+            merge_prediction_datasets(str(tmp_path)).load(), expected
+        )
+
+
+def test_unknown_files_without_run_json_are_kept(tmp_path, monkeypatch):
+    prepare(tmp_path)
+    infer(tmp_path, monkeypatch)
+    (tmp_path / checkpoint.RUN).unlink()
+    (tmp_path / "predictions.0.zarr").mkdir()
+    before = checkpoint.file_hashes(tmp_path)
+    with pytest.raises(ValueError, match="legacy"):
+        prepare(tmp_path)
+    assert checkpoint.file_hashes(tmp_path) == before
+
+
+def write_sequences(path, sequence, attrs=None):
+    ds = xr.Dataset(
+        {
+            "sequence_input_ids": (
+                ["strand", "sequence"],
+                np.stack([sequence, sequence[::-1]]),
+            ),
+            "sequence_masks": (
+                ["strand", "sequence"],
+                np.ones((2, len(sequence)), dtype=bool),
+            ),
+        },
+        coords={
+            "strand": ["positive", "negative"],
+            "sequence": np.arange(len(sequence)),
+        },
+        attrs=attrs or {},
+    )
+    ds.to_zarr(str(path), group="sp/chr", zarr_format=2, consolidated=True, mode="w")
+
+
+def test_input_fingerprint_ignores_metadata_key_order(tmp_path):
+    sequence = np.arange(1000) % 4
+    write_sequences(tmp_path / "a.zarr", sequence, {"x": 1, "y": 2})
+    write_sequences(tmp_path / "b.zarr", sequence, {"x": 1, "y": 2})
+    metadata = tmp_path / "b.zarr" / "sp" / "chr" / ".zmetadata"
+    value = json.loads(metadata.read_text())
+    value["metadata"] = dict(reversed(list(value["metadata"].items())))
+    metadata.write_text(json.dumps(value, indent=1))
+    content_a, bytes_a = checkpoint.input_fingerprints(tmp_path / "a.zarr")
+    content_b, bytes_b = checkpoint.input_fingerprints(tmp_path / "b.zarr")
+    assert bytes_a != bytes_b
+    assert content_a == content_b
+    assert bytes_a == checkpoint.fingerprint(
+        checkpoint.file_hashes(tmp_path / "a.zarr")
+    )
+
+    changed = sequence.copy()
+    changed[500] = (changed[500] + 1) % 4
+    write_sequences(tmp_path / "c.zarr", changed, {"x": 1, "y": 2})
+    write_sequences(tmp_path / "d.zarr", sequence, {"x": 1, "y": 3})
+    assert checkpoint.input_fingerprints(tmp_path / "c.zarr")[0] != content_a
+    assert checkpoint.input_fingerprints(tmp_path / "d.zarr")[0] != content_a
