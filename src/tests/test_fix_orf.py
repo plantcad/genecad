@@ -293,6 +293,79 @@ def test_ambiguous_bases_are_not_repaired(tmp_path):
     assert stats["issue:ambiguous_bases"] == 1
 
 
+@pytest.mark.parametrize("strand,correct", [("+", PLUS_CORRECT), ("-", MINUS_CORRECT)])
+@pytest.mark.parametrize("keep_partial", [False, True])
+def test_iupac_cds_without_n_is_partial_and_kept_only_when_requested(
+    tmp_path, strand, correct, keep_partial
+):
+    gff = tmp_path / "in.gff"
+    fasta = tmp_path / "genome.fa"
+    out = tmp_path / "out.gff"
+    gff.write_text(build_gff(correct, strand))
+    chromosome = build_chromosome(strand)
+    position = 125 if strand == "+" else 245
+    chromosome = chromosome[:position] + "RRR" + chromosome[position + 3 :]
+    fasta.write_text(">chr1\n" + chromosome + "\n")
+
+    stats = fix_orf.fix_orf(
+        str(gff),
+        str(fasta),
+        str(out),
+        max_shift=300,
+        min_protein_length=10,
+        require_canonical=True,
+        report_path=None,
+        keep_partial=keep_partial,
+    )
+
+    assert stats["complete"] == stats["repaired"] == 0
+    assert stats["partial"] == stats["issue:ambiguous_bases"] == 1
+    _, records = fix_orf.read_gff(str(out))
+    if keep_partial:
+        assert mrna_attributes(records)["orf_status"] == "partial"
+        assert mrna_attributes(records)["partial"] == "true"
+        assert exonic(records) == sorted(correct)
+    else:
+        assert records == []
+
+
+@pytest.mark.parametrize("ambiguous", list("NRYSWKMBDHV"))
+def test_complete_orf_validation_rejects_iupac_bases(ambiguous):
+    coding = "ATG" + "GCT" * 10 + ambiguous * 3 + "TAA"
+    assert not fix_orf.is_complete_orf(coding, 0, len(coding), 10)
+
+
+@pytest.mark.parametrize("strand,correct", [("+", PLUS_CORRECT), ("-", MINUS_CORRECT)])
+@pytest.mark.parametrize("position", [105, 175, 275])
+@pytest.mark.parametrize("ambiguous", ["NNN", "RRR"])
+def test_valid_cds_is_preserved_with_unknown_utr_or_intron_bases(
+    tmp_path, strand, correct, position, ambiguous
+):
+    gff = tmp_path / "in.gff"
+    fasta = tmp_path / "genome.fa"
+    out = tmp_path / "out.gff"
+    gff.write_text(build_gff(correct, strand))
+    chromosome = build_chromosome(strand)
+    chromosome = chromosome[:position] + ambiguous + chromosome[position + 3 :]
+    fasta.write_text(">chr1\n" + chromosome + "\n")
+
+    stats = fix_orf.fix_orf(
+        str(gff),
+        str(fasta),
+        str(out),
+        max_shift=300,
+        min_protein_length=10,
+        require_canonical=True,
+        report_path=None,
+    )
+
+    assert stats["complete"] == 1
+    assert stats["partial"] == stats["repaired"] == 0
+    _, records = fix_orf.read_gff(str(out))
+    assert mrna_attributes(records)["orf_status"] == "complete"
+    assert exonic(records) == sorted(correct)
+
+
 def test_sequences_absent_from_the_fasta_are_passed_through(tmp_path):
     gff = tmp_path / "in.gff"
     fasta = tmp_path / "genome.fa"
@@ -685,6 +758,55 @@ def test_weak_start_with_a_better_candidate_is_repaired(tiny_kozak_pwm, tmp_path
     attributes = mrna_attributes(records)
     assert attributes["orf_status"] == "repaired"
     assert attributes["orf_issue"] == "weak_start_kozak"
+
+
+@pytest.mark.parametrize("ambiguous", ["NNN", "RRR"])
+def test_weak_start_cannot_extend_a_valid_cds_across_unknown_utr_bases(
+    tmp_path, ambiguous
+):
+    chars = list("C" * 117)
+    chars[4:19] = list("GCAGCCATGGCGGCG")  # strong upstream Kozak context
+    chars[31:34] = list(ambiguous)  # outside either start's Kozak window
+    chars[55:61] = list("TTTTTT")  # weak original Kozak context
+    chars[61:97] = list("ATG" + "TTT" * 10 + "TAA")
+    spliced = "".join(chars)
+    fasta = tmp_path / "genome.fa"
+    fasta.write_text(">chr1\n" + spliced[:67] + WEAK_START_INTRON + spliced[67:] + "\n")
+    blocks = [
+        (1, 61, "five_prime_UTR", "."),
+        (62, 67, "CDS", "0"),
+        (108, 137, "CDS", "0"),
+        (138, 157, "three_prime_UTR", "."),
+    ]
+    gff = tmp_path / "in.gff"
+    lines = [
+        "##gff-version 3",
+        "chr1\ttest\tgene\t1\t157\t.\t+\t.\tID=g1",
+        "chr1\ttest\tmRNA\t1\t157\t.\t+\t.\tID=g1.t1;Parent=g1",
+    ]
+    for start, end, feature, phase in blocks:
+        lines.append(
+            f"chr1\ttest\t{feature}\t{start}\t{end}\t.\t+\t{phase}\tParent=g1.t1"
+        )
+    gff.write_text("\n".join(lines) + "\n")
+    out = tmp_path / "out.gff"
+
+    stats = fix_orf.fix_orf(
+        str(gff),
+        str(fasta),
+        str(out),
+        max_shift=300,
+        min_protein_length=10,
+        require_canonical=True,
+        report_path=None,
+        fix_weak_starts=True,
+    )
+
+    assert stats["complete"] == 1
+    assert stats["repaired"] == stats["partial"] == 0
+    _, records = fix_orf.read_gff(str(out))
+    assert mrna_attributes(records)["orf_status"] == "complete"
+    assert exonic(records) == blocks
 
 
 def test_weak_start_noncanonical_intron_blocks_switch_by_default(

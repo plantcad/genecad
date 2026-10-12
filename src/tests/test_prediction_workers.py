@@ -219,6 +219,77 @@ def test_sequence_resources_released_between_scaffolds(tmp_path, monkeypatch):
     assert all(ref() is None for ref in refs)
 
 
+@pytest.mark.parametrize(
+    "completed_strands",
+    [(), ("positive",), ("negative",), ("positive", "negative")],
+)
+def test_strand_tokens_released_before_loading_the_next_strand(
+    monkeypatch, completed_strands
+):
+    from types import SimpleNamespace
+
+    token_refs = []
+    predicted_strands = []
+
+    class InputIds:
+        def __init__(self, strand):
+            self.strand = strand
+
+        @property
+        def values(self):
+            # Match a lazy sequence store: each strand is allocated when read,
+            # and the store itself keeps no reference to the loaded token array.
+            assert all(ref() is None for ref in token_refs), (
+                "The previous strand is still held while loading the next one"
+            )
+            values = np.zeros(32, dtype=np.int64)
+            token_refs.append(weakref.ref(values))
+            return values
+
+    class LazyDataset:
+        strand = SimpleNamespace(values=np.array(["positive", "negative"]))
+
+        def sel(self, strand):
+            return SimpleNamespace(
+                sequence_input_ids=InputIds(strand),
+                sequence=SimpleNamespace(values=np.arange(32)),
+            )
+
+    completed = [
+        {"strand": strand, "window_start": 0, "window_stop": 8}
+        for strand in completed_strands
+    ]
+
+    def predict_batch(*args):
+        predicted_strands.append(args[6])
+        return object()
+
+    monkeypatch.setattr(predict, "process_group", lambda: (0, 1))
+    monkeypatch.setattr(predict, "barrier", lambda: None)
+    monkeypatch.setattr(predict, "segments", lambda *args, **kwargs: completed)
+    monkeypatch.setattr(predict, "_predict_window_batch", predict_batch)
+    monkeypatch.setattr(predict, "commit_segment", lambda *args: None)
+    predict._create_predictions(
+        ds=LazyDataset(),
+        base_model=None,
+        classifier=None,
+        tokenizer=SimpleNamespace(unk_token_id=0),
+        species_id="sp",
+        chromosome_id="chr",
+        model_checkpoint="test",
+        model_path="test",
+        output_dir="unused",
+        batch_size=4,
+        window_size=8,
+        stride=4,
+        device="cpu",
+        tqdm_position=0,
+    )
+    assert len(token_refs) == 2
+    assert all(ref() is None for ref in token_refs)
+    assert set(predicted_strands) == {"positive", "negative"} - set(completed_strands)
+
+
 def test_oom_after_committed_batch_preserves_that_batch(tmp_path, monkeypatch):
     baseline, expected = make_manifest(tmp_path / "baseline", count=1)
     resumed, actual = make_manifest(tmp_path / "worker", count=1)

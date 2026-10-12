@@ -24,6 +24,14 @@ midpoints of both, it replaces the pair (keeping the first gene's ID, with `hybr
 
 Genes that are not changed are written back unchanged.
 
+Before accepting a rescued or merged gene, its CDS exons are spliced in transcription
+order and checked against the genome. The CDS must contain only A/C/G/T, start on ATG,
+end on TAA/TAG/TGA, have a length divisible by three and contain no internal in-frame
+stop. Unknown bases in introns or UTRs do not prevent rescue. A candidate whose CDS
+crosses an assembly gap is rejected; an unrescued original transcript is dropped or
+kept with its existing partial flags when `--keep-partial` is set. Distinct rescued
+genes also cannot overlap another accepted gene on the same strand.
+
 ```
 python hybrid_decode.py \
 --input-gff genecad_orf.gff \

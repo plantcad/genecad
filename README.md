@@ -72,7 +72,7 @@ be run on Macs. Linux (x86-64) operating systems are strongly recommended.
 | Requirement  | Minimum             | Recommended   | Notes                                                                  |
 |--------------|---------------------|---------------|------------------------------------------------------------------------|
 | OS           | Linux (x86-64)      | —             | macOS is not supported (no CUDA)                                       |
-| GPU          | NVIDIA ≥ 16 GB VRAM | A100 / H100   | e.g. RTX 3090/4090 for development                                     |
+| GPU          | NVIDIA Ampere/Ada/Hopper, ≥ 16 GB VRAM | A100 / H100 | e.g. RTX 3090/4090 for development; the default FlashAttention 2 backend requires these architectures |
 | CUDA         | 12.4                | 12.8          | Must match PyTorch 2.7.1 build                                         |
 | Python       | 3.12                | 3.12          | Managed automatically by `uv`                                          |
 | Disk         | ~20 GB free         | —             | Model weights cached in `~/.cache/huggingface`                         |
@@ -349,7 +349,10 @@ of small scaffolds are no longer decoded one at a time. Set a number to override
 decoded in groups, one process per step for each group, because starting a step takes longer than decoding a small
 scaffold. (Default: auto)
 * `--batch-size` `-b` - Inference batch size for GPU (Default is auto-scaled to GPU VRAM, at most 35)
-* `--gpus` `-g` - Comma-separated list of GPU IDs to use, or "all" to use all available GPUs (Default: 0)
+* `--gpus` `-g` - Comma-separated GPU indexes, or "all" for all visible GPUs (Default: 0).
+When `CUDA_VISIBLE_DEVICES` is set by Slurm or a container, indexes refer to that list:
+with `CUDA_VISIBLE_DEVICES=2,3`, `--gpus 0` uses physical GPU 2 and `--gpus all` uses
+only GPUs 2 and 3. Prediction and protein refinement use the same selected devices.
 * `--launcher` - Custom entrypoint command to launch predict.py (e.g. 'srun python').
 If set, overrides automatic DDP/SLURM detection. Can also be set via LAUNCHER environment variable.
 (Default: python)
@@ -408,6 +411,14 @@ forced, and are dropped unless `--keep-partial` is set. Use 0 to disable repair.
 > after a change of its options. Prediction files that fail verification, for example because
 > some of them were deleted, are predicted again (on a GPU). An output directory holds the results
 > of one FASTA file: for another genome, use another output directory.
+
+The FASTA identity is kept in `.state/input_fasta.json`. Changing bases is detected even
+when file size and modification time are preserved. An older output directory without
+this identity cannot be verified safely; use a new output directory. Keep the `.state`
+directory when moving results between servers. Automatic CPU parallelism uses remaining
+cgroup memory (after current usage) and CPU quotas, including combined cgroup v1 mounts.
+Existing ORF and hybrid outputs are rebuilt when their recorded validation revision is
+older or unknown, so updating the validator also replaces previously accepted invalid CDS.
 
 The individual components of the prediction pipeline are also accessible as python scripts.
 While this is not the main recommended method to run the GeneCAD pipeline, some users may

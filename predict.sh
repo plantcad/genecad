@@ -298,24 +298,69 @@ fi
 # GPU Resolution
 # =================================================================
 
-if [[ "$GPUS_ARG" == "all" ]]; then
-    GPU_IDS_ALL=""
+# GPU numbers index the inherited visibility list, or the NVML devices when
+# unrestricted. UUIDs make unrestricted selection independent of CUDA ordering.
+# Preserve scheduler/container restrictions, including GPU and MIG UUIDs.
+AVAILABLE_GPU_TOKENS=()
+if [[ ${CUDA_VISIBLE_DEVICES+x} ]]; then
+    visible="${CUDA_VISIBLE_DEVICES//[[:space:]]/}"
+    if [[ -z "$visible" || "$visible" == "-1" || "$visible" == ,* || "$visible" == *, || "$visible" == *,,* ]]; then
+        echo "Error: CUDA_VISIBLE_DEVICES does not expose a valid GPU list." >&2
+        exit 1
+    fi
+    IFS=',' read -ra AVAILABLE_GPU_TOKENS <<< "$visible"
+    declare -A visible_seen=()
+    for token in "${AVAILABLE_GPU_TOKENS[@]}"; do
+        if ! [[ "$token" =~ ^[0-9]+$ || "$token" =~ ^GPU-[a-zA-Z0-9-]+$ || "$token" =~ ^MIG-[a-zA-Z0-9/-]+$ ]] || [[ ${visible_seen[$token]+yes} ]]; then
+            echo "Error: Invalid or duplicate device in CUDA_VISIBLE_DEVICES: $token" >&2
+            exit 1
+        fi
+        visible_seen[$token]=1
+    done
+else
     if command -v nvidia-smi &>/dev/null; then
         if nvidia-smi &>/dev/null; then
-            GPU_IDS_ALL=$(nvidia-smi --query-gpu=index --format=csv,noheader,nounits 2>/dev/null | tr -d ' ' | tr '\n' ',' | sed 's/,$//')
+            while IFS=',' read -r gpu_index token; do
+                gpu_index="${gpu_index//[[:space:]]/}"
+                token="${token//[[:space:]]/}"
+                if [[ "$gpu_index" =~ ^[0-9]+$ && "$token" =~ ^GPU-[a-zA-Z0-9-]+$ ]]; then
+                    AVAILABLE_GPU_TOKENS[$((10#$gpu_index))]="$token"
+                fi
+            done < <(nvidia-smi --query-gpu=index,uuid --format=csv,noheader,nounits 2>/dev/null)
         fi
     fi
-    if [[ -z "$GPU_IDS_ALL" ]]; then
-        echo "Warning: '--gpus all' requested but could not detect GPUs via nvidia-smi. Falling back to GPU 0."
-        GPU_LIST_STR="0"
-    else
-        GPU_LIST_STR="$GPU_IDS_ALL"
+    if [[ ${#AVAILABLE_GPU_TOKENS[@]} -eq 0 ]]; then
+        echo "Warning: GPU discovery unavailable; trying GPU 0."
+        AVAILABLE_GPU_TOKENS=(0)
     fi
-else
-    GPU_LIST_STR="$GPUS_ARG"
 fi
 
-IFS=',' read -ra GPU_ARRAY <<< "$GPU_LIST_STR"
+if [[ "$GPUS_ARG" == "all" ]]; then
+    GPU_ARRAY=("${!AVAILABLE_GPU_TOKENS[@]}")
+else
+    if ! [[ "$GPUS_ARG" =~ ^[0-9]+(,[0-9]+)*$ ]]; then
+        echo "Error: --gpus must be 'all' or comma-separated GPU indexes." >&2
+        exit 1
+    fi
+    IFS=',' read -ra GPU_ARRAY <<< "$GPUS_ARG"
+fi
+declare -A GPU_DEVICE_IDS=()
+SELECTED_GPU_TOKENS=()
+REFINE_GPU_ARRAY=()
+for position in "${!GPU_ARRAY[@]}"; do
+    gpu_id=$((10#${GPU_ARRAY[$position]}))
+    if [[ ! ${AVAILABLE_GPU_TOKENS[$gpu_id]+yes} || ${GPU_DEVICE_IDS[$gpu_id]+yes} ]]; then
+        echo "Error: GPU index $gpu_id is unavailable or selected more than once." >&2
+        exit 1
+    fi
+    GPU_ARRAY[$position]="$gpu_id"
+    GPU_DEVICE_IDS[$gpu_id]="${AVAILABLE_GPU_TOKENS[$gpu_id]}"
+    SELECTED_GPU_TOKENS+=("${AVAILABLE_GPU_TOKENS[$gpu_id]}")
+    REFINE_GPU_ARRAY+=("$position")
+done
+GPU_LIST_STR=$(IFS=,; echo "${GPU_ARRAY[*]}")
+GPU_DEVICE_LIST_STR=$(IFS=,; echo "${SELECTED_GPU_TOKENS[*]}")
+REFINE_GPU_LIST_STR=$(IFS=,; echo "${REFINE_GPU_ARRAY[*]}")
 NUM_GPUS=${#GPU_ARRAY[@]}
 
 echo "Using GPU(s): ${GPU_ARRAY[*]}  (${NUM_GPUS} total)"
@@ -335,7 +380,7 @@ echo "================================================================="
 # Per-GPU batch size detection
 # =================================================================
 resolve_batch_size_for_gpu() {
-    local gpu_id="$1"
+    local gpu_id="${GPU_DEVICE_IDS[$1]:-$1}"
     if [[ "$BATCH_SIZE_ARG" != "auto" ]]; then
         echo "$BATCH_SIZE_ARG"
         return
@@ -372,7 +417,7 @@ for gpu_id in "${GPU_ARRAY[@]}"; do
     GPU_BATCH_SIZES[$gpu_id]=$bs
     if [[ "$BATCH_SIZE_ARG" == "auto" ]]; then
         if command -v nvidia-smi &>/dev/null && nvidia-smi &>/dev/null; then
-            GPU_MEM_MB_FOR_LOG=$(nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits --id="$gpu_id" 2>/dev/null | head -1 | tr -d ' ')
+            GPU_MEM_MB_FOR_LOG=$(nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits --id="${GPU_DEVICE_IDS[$gpu_id]}" 2>/dev/null | head -1 | tr -d ' ')
             echo "  GPU ${gpu_id}: batch size ${bs} (detected ${GPU_MEM_MB_FOR_LOG} MiB free VRAM)"
         else
             echo "  GPU ${gpu_id}: batch size ${bs} (VRAM auto-detect unavailable, using safe default)"
@@ -432,8 +477,20 @@ current = {
     "path": str(fasta.resolve()),
     "size": stat.st_size,
     "mtime_ns": stat.st_mtime_ns,
+    "ctime_ns": stat.st_ctime_ns,
+    "device": stat.st_dev,
+    "inode": stat.st_ino,
 }
 previous = json.loads(record.read_text()) if record.is_file() else None
+output = Path(os.environ["OUTPUT_DIR"])
+has_results = any(path.name != ".state" for path in output.iterdir())
+if previous is None and has_results:
+    print(
+        f"ERROR: {output} contains results without an input FASTA identity; cannot verify "
+        f"that they belong to {fasta}. Use a new output directory. Existing results were kept.",
+        file=sys.stderr,
+    )
+    sys.exit(1)
 if previous and all(previous.get(key) == value for key, value in current.items()):
     sys.exit(0)
 digest = hashlib.sha256()
@@ -441,8 +498,6 @@ with (gzip.open if fasta.name.endswith(".gz") else open)(fasta, "rb") as handle:
     for block in iter(lambda: handle.read(1 << 22), b""):
         digest.update(block)
 current["sha256"] = digest.hexdigest()
-output = Path(os.environ["OUTPUT_DIR"])
-has_results = any(path.name != ".state" for path in output.iterdir())
 if previous and previous.get("sha256") != current["sha256"] and has_results:
     print(
         f"ERROR: {output} has the results of another FASTA file ({previous['path']}, "
@@ -656,6 +711,8 @@ fi
 # The options each sequence's GFF depends on. A sequence decoded with other options is
 # decoded again: its interval, raw and filtered files are removed here, so that the
 # steps below rebuild them (and predict it again if its prediction files are gone).
+# Record the options before work starts, so an interrupted CPU stage can be resumed
+# only with the same options. Partial outputs with no record must be rebuilt.
 DECODE_SETTINGS="mode=$MODE frame_aware=$FRAME_AWARE min_transcript_length=$MIN_TRANSCRIPT_LENGTH"
 if [[ "$FRAME_AWARE" == "1" ]]; then
     DECODE_SETTINGS+=" min_intron_length=$MIN_INTRON_LENGTH min_coding_run_length=$MIN_CODING_RUN_LENGTH"
@@ -675,33 +732,40 @@ for chrom in Path(sys.argv[1]).read_text().split():
     directory = output / chrom
     filtered = directory / f"predictions_filtered_{chrom}.gff"
     record = directory / "decoding_settings.txt"
-    if not filtered.is_file():
-        continue
-    if not record.is_file():
-        # Decoded by an earlier version, which kept no record: assume these options.
-        temporary = record.with_name(record.name + ".tmp")
-        temporary.write_text(current + "\n")
-        temporary.replace(record)
-        adopted.append(chrom)
-        continue
-    previous = record.read_text().strip()
-    if previous == current:
-        continue
-    old = dict(item.split("=", 1) for item in previous.split())
-    new = dict(item.split("=", 1) for item in current.split())
-    keys = list(new) + [k for k in old if k not in new]
-    key = next(k for k in keys if old.get(k) != new.get(k))
-    redone.append(f"{chrom} ({key} {old.get(key, '-')} -> {new.get(key, '-')})")
-    for path in (
+    outputs = (
         filtered,
         directory / f"predictions_raw_{chrom}.gff",
         directory / f"intervals_{chrom}.zarr",
-        record,
-    ):
-        if path.is_dir():
-            shutil.rmtree(path)
-        elif path.exists():
-            path.unlink()
+    )
+    has_outputs = any(path.exists() for path in outputs)
+    rebuild = False
+    if record.is_file():
+        previous = record.read_text().strip()
+        if previous == current:
+            continue
+        if has_outputs:
+            old = dict(item.split("=", 1) for item in previous.split())
+            new = dict(item.split("=", 1) for item in current.split())
+            keys = list(new) + [k for k in old if k not in new]
+            key = next(k for k in keys if old.get(k) != new.get(k))
+            redone.append(f"{chrom} ({key} {old.get(key, '-')} -> {new.get(key, '-')})")
+            rebuild = True
+    elif filtered.is_file():
+        # Decoded by an earlier version, which kept no record: assume these options.
+        adopted.append(chrom)
+    elif has_outputs:
+        redone.append(f"{chrom} (decoding options unknown)")
+        rebuild = True
+    if rebuild:
+        for path in outputs:
+            if path.is_dir():
+                shutil.rmtree(path)
+            elif path.exists():
+                path.unlink()
+    directory.mkdir(parents=True, exist_ok=True)
+    temporary = record.with_name(record.name + ".tmp")
+    temporary.write_text(current + "\n")
+    temporary.replace(record)
 if redone:
     print(
         f"Decoding options changed for {len(redone)} sequence(s), e.g. {redone[0]}: "
@@ -937,9 +1001,9 @@ run_prediction_manifest() {
     )
     echo "[worker $key] Loading model once for scaffold manifest $manifest"
     if [[ "$PREDICT_MODE" == "single" ]]; then
-        CUDA_VISIBLE_DEVICES="$key" $PY_LAUNCHER "${args[@]}" --tqdm-position "$key"
+        CUDA_VISIBLE_DEVICES="${GPU_DEVICE_IDS[$key]:-$key}" $PY_LAUNCHER "${args[@]}" --tqdm-position "$key"
     elif [[ "$PREDICT_MODE" == "ddp" ]]; then
-        CUDA_VISIBLE_DEVICES="$GPU_LIST_STR" $PY_LAUNCHER "${args[@]}"
+        CUDA_VISIBLE_DEVICES="${GPU_DEVICE_LIST_STR:-$GPU_LIST_STR}" $PY_LAUNCHER "${args[@]}"
     else
         $PY_LAUNCHER "${args[@]}"
     fi
@@ -1070,20 +1134,31 @@ largest_sequence_bp() {
         { n += length($0) } END { if (n > max) max = n; print max + 0 }'
 }
 
-# The smallest value of a cgroup limit found in this process's cgroup and its parents.
+# The smallest remaining memory or CPU quota in this cgroup and its parents.
 # Works with cgroup v2 (memory.max, cpu.max) and v1 (memory.limit_in_bytes, cpu.cfs_*).
 # Prints nothing when no limit is set. CGROUP_ROOT and CGROUP_FILE exist for the tests.
 cgroup_limit() {
     local what="$1"   # memory (kB) or cpu (cores, rounded up)
     local root="${CGROUP_ROOT:-/sys/fs/cgroup}" file="${CGROUP_FILE:-/proc/self/cgroup}"
-    local dir rel value period best=""
+    local dir rel v1_rel value used period best="" controller=memory
+    [[ "$what" == "cpu" ]] && controller=cpu
+    # Hybrid hosts can list both unified and v1 hierarchies. An explicit v1
+    # membership identifies the tree that governs this particular controller.
+    v1_rel=$(awk -F: -v c="$controller" '$2 ~ "(^|,)" c "(,|$)" { print $3; exit }' "$file" 2>/dev/null || true)
     rel=$(awk -F: '$1 == "0" { print $3; exit }' "$file" 2>/dev/null || true)
-    if [[ -f "$root/cgroup.controllers" || -n "$rel" ]]; then   # cgroup v2
+    if [[ -z "$v1_rel" && ( -f "$root/cgroup.controllers" || -n "$rel" ) ]]; then   # cgroup v2
         dir="$root$rel"
         while [[ "$dir" == "$root"* ]]; do
             if [[ "$what" == "memory" ]]; then
                 value=$(cat "$dir/memory.max" 2>/dev/null || true)
-                [[ "$value" =~ ^[0-9]+$ ]] && value=$(( value / 1024 )) || value=""
+                if [[ "$value" =~ ^[0-9]+$ ]]; then
+                    used=$(cat "$dir/memory.current" 2>/dev/null || true)
+                    # Unknown usage cannot justify allocating the whole limit again.
+                    [[ "$used" =~ ^[0-9]+$ ]] && (( used < value )) \
+                        && value=$(( (value - used) / 1024 )) || value=0
+                else
+                    value=""
+                fi
             else
                 value="" period=""
                 if [[ -r "$dir/cpu.max" ]]; then read -r value period < "$dir/cpu.max" || true; fi
@@ -1094,15 +1169,29 @@ cgroup_limit() {
             [[ "$dir" == "$root" ]] && break
             dir="${dir%/*}"
         done
-    else   # cgroup v1: each controller has its own tree
-        local controller=memory
-        [[ "$what" == "cpu" ]] && controller=cpu
-        rel=$(awk -F: -v c="$controller" '$2 ~ "(^|,)" c "(,|$)" { print $3; exit }' "$file" 2>/dev/null || true)
-        dir="$root/$controller$rel"
-        while [[ "$dir" == "$root/$controller"* ]]; do
+    else   # cgroup v1: controllers may share a tree (e.g. cpu,cpuacct)
+        local tree candidate
+        rel="$v1_rel"
+        tree="$root/$controller"
+        if [[ ! -d "$tree" ]]; then
+            for candidate in "$root"/*; do
+                if [[ -d "$candidate" && ",${candidate##*/}," == *",$controller,"* ]]; then
+                    tree="$candidate"
+                    break
+                fi
+            done
+        fi
+        dir="$tree$rel"
+        while [[ "$dir" == "$tree"* ]]; do
             if [[ "$what" == "memory" ]]; then
                 value=$(cat "$dir/memory.limit_in_bytes" 2>/dev/null || true)
-                [[ "$value" =~ ^[0-9]+$ ]] && value=$(( value / 1024 )) || value=""
+                if [[ "$value" =~ ^[0-9]+$ ]]; then
+                    used=$(cat "$dir/memory.usage_in_bytes" 2>/dev/null || true)
+                    [[ "$used" =~ ^[0-9]+$ ]] && (( used < value )) \
+                        && value=$(( (value - used) / 1024 )) || value=0
+                else
+                    value=""
+                fi
             else
                 value=$(cat "$dir/cpu.cfs_quota_us" 2>/dev/null || true)
                 period=$(cat "$dir/cpu.cfs_period_us" 2>/dev/null || true)
@@ -1110,7 +1199,7 @@ cgroup_limit() {
                     && value=$(( (value + period - 1) / period )) || value=""
             fi
             [[ -n "$value" ]] && { [[ -z "$best" || "$value" -lt "$best" ]] && best="$value"; }
-            [[ "$dir" == "$root/$controller" ]] && break
+            [[ "$dir" == "$tree" ]] && break
             dir="${dir%/*}"
         done
     fi
@@ -1130,7 +1219,7 @@ available_cores() {
     echo "$cores"
 }
 
-# Memory this job may use, in kB: MemAvailable, capped by the cgroup and Slurm limits.
+# Memory this job may use, in kB: MemAvailable, capped by cgroup headroom and Slurm limits.
 # Prints 0 when it cannot be read, which makes auto parallelism fall back to one at a time.
 available_memory_kb() {
     local kb limit
@@ -1437,7 +1526,7 @@ if [[ "$KEEP_PARTIAL" == "1" || "$DECODER" == "hybrid" ]]; then
     KEEP_PARTIAL_ARGS=(--keep-partial)
 fi
 # A stage is redone when one of the options it depends on changed.
-ORF_SETTINGS=(--setting "max_shift=$ORF_MAX_SHIFT" --setting "keep_partial=${#KEEP_PARTIAL_ARGS[@]}")
+ORF_SETTINGS=(--setting "max_shift=$ORF_MAX_SHIFT" --setting "keep_partial=${#KEEP_PARTIAL_ARGS[@]}" --setting "orf_validation=2")
 [[ "$ORF_MAX_SHIFT" -eq 0 ]] || refresh_stage "$ORF_GFF" "$RAW_GFF" "${ORF_SETTINGS[@]}"
 if [[ "$ORF_MAX_SHIFT" -eq 0 ]]; then
     echo "Skipping ORF repair — disabled via --orf-max-shift 0"
@@ -1462,6 +1551,7 @@ if [[ "$DECODER" == "hybrid" ]]; then
     echo ""
     echo "[7/8] Hybrid decoding: rescuing partial and merging split genes..."
     HYBRID_SETTINGS=(
+        --setting "hybrid_revision=2"
         --setting "mode=$MODE" --setting "max_gap=$MERGE_MAX_GAP"
         --setting "keep_partial=$KEEP_PARTIAL"
         --setting "min_intron_length=$MIN_INTRON_LENGTH"
@@ -1541,11 +1631,11 @@ refresh_stage "$FINAL_GFF" "$REFINE_INPUT_GFF"
 if [[ -f "$FINAL_GFF" ]]; then
     echo "Skipping refinement — ${SPECIES_ID}_GeneCAD_final.gff already exists"
 else
-    $PYTHON "$SCRIPT_DIR/scripts/refine.py" \
+    CUDA_VISIBLE_DEVICES="${GPU_DEVICE_LIST_STR:-$GPU_LIST_STR}" $PYTHON "$SCRIPT_DIR/scripts/refine.py" \
         --input-gff "$REFINE_INPUT_GFF" \
         --input-fasta "$INPUT_FILE" \
         --output-gff "$FINAL_GFF" \
-        --gpus "$GPU_LIST_STR"
+        --gpus "${REFINE_GPU_LIST_STR:-$GPU_LIST_STR}"
     record_stage "$FINAL_GFF" "$REFINE_INPUT_GFF"
 fi
 rm -f "$FINAL_GFF.stale" "$RAW_GFF.stale" "$ORF_GFF.stale" "${HYBRID_GFF:-$RAW_GFF}.stale"

@@ -634,7 +634,10 @@ def _create_predictions(
                 commit_segment(output_dir, result, strand, ids)
                 offset += len(current)
                 del result
-        # Release this strand before the next one is loaded.
+        # Batch windows are views, so the last batch would otherwise retain the
+        # whole token array while the next strand is loaded. These assignments
+        # also work when every window of this strand was already completed.
+        window_batch = current = None
         del sequence_input_ids, sequence_coordinates, windows, batches
     logger.info(
         f"Finished assigned prediction windows in {output_dir} ({rank=}, batch={effective_batch_size})"

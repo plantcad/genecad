@@ -81,11 +81,12 @@ def emissions(labels, confidence=0.9):
     return probs
 
 
-def make_decoder(strand, labels):
+def make_decoder(strand, labels, sequence=None):
     """A LocalDecoder over the synthetic chromosome, with the gene on `strand`.
 
     Logits for the other strand are all-intergenic."""
-    sequence, _ = build_locus()
+    if sequence is None:
+        sequence, _ = build_locus()
     if strand == "-":
         sequence = sequence.translate(str.maketrans("ACGT", "TGCA"))[::-1]
         labels = labels[::-1].copy()
@@ -251,6 +252,48 @@ def test_a_rescued_gene_with_too_little_cds_is_dropped():
     assert stats["rescue: tiny, dropped"] == 1
 
 
+@pytest.mark.parametrize("strand", ["+", "-"])
+@pytest.mark.parametrize("keep_partial", [False, True])
+@pytest.mark.parametrize("unknown", ["NNN", "RNY"])
+def test_rescue_never_marks_a_cds_with_unknown_bases_complete(
+    strand, keep_partial, unknown
+):
+    sequence, labels = build_locus()
+    sequence = sequence[:2215] + unknown + sequence[2218:]
+    decoder = make_decoder(strand, labels, sequence)
+    feats = PLUS_GENE if strand == "+" else MINUS_GENE
+    partial = gene(strand, feats, "gap", partial=True)
+
+    genes, stats = hd.rescue(
+        [partial], decoder, LENGTH, flank=1000, min_cds=33, keep_partial=keep_partial
+    )
+
+    assert genes == ([partial] if keep_partial else [])
+    assert stats["partial genes rescued"] == 0
+
+
+@pytest.mark.parametrize("strand", ["+", "-"])
+@pytest.mark.parametrize("position", [100, 2100, 2300, 2550])
+def test_rescue_accepts_unknown_bases_outside_the_cds(strand, position):
+    sequence, labels = build_locus()
+    sequence = sequence[:position] + "NNN" + sequence[position + 3 :]
+    decoder = make_decoder(strand, labels, sequence)
+    feats = PLUS_GENE if strand == "+" else MINUS_GENE
+
+    genes, stats = hd.rescue(
+        [gene(strand, feats, "valid", partial=True)],
+        decoder,
+        LENGTH,
+        flank=1000,
+        min_cds=33,
+    )
+
+    assert len(genes) == 1
+    assert genes[0].feats == feats
+    assert not genes[0].partial
+    assert stats["partial genes rescued"] == 1
+
+
 # -------------------------------------------------------------------------------------------------
 # merge
 # -------------------------------------------------------------------------------------------------
@@ -320,6 +363,81 @@ def test_merge_never_joins_genes_on_opposite_strands():
     )
     assert stats["pairs tried"] == 0
     assert sorted(g.gene_id for g in genes) == ["gA", "gM"]
+
+
+@pytest.mark.parametrize("strand", ["+", "-"])
+def test_merge_keeps_the_original_genes_if_the_merged_cds_has_unknown_bases(strand):
+    sequence, _ = build_locus()
+    sequence = sequence[:2215] + "NNN" + sequence[2218:]
+    labels, first, second = split_halves(strand)
+    decoder = make_decoder(strand, labels, sequence)
+
+    genes, stats = hd.merge(
+        [first, second], decoder, LENGTH, flank=1000, max_gap=20_000, min_cds=33
+    )
+
+    assert genes == [first, second]
+    assert stats["pairs merged"] == 0
+
+
+@pytest.mark.parametrize("strand", ["+", "-"])
+def test_rescues_of_adjacent_partials_cannot_create_overlapping_genes(strand):
+    sequence = list((_BACKGROUND * 2)[:5500])
+    coding = list("ATG" + "GCT" * 531 + "TAA")
+    coding[300:303] = "ATG"  # an alternative, in-frame start in the second window
+    sequence[2000:3599] = coding
+    labels = np.full(len(sequence), IG)
+    labels[1800:2000] = U5
+    labels[2000:3599] = CDS
+    labels[3599:3799] = U3
+    first_feats = [("CDS", 2002, 2600)]
+    second_feats = [("CDS", 3301, 3596)]
+    if strand == "-":
+        length = len(sequence)
+        sequence = list(
+            "".join(sequence).translate(str.maketrans("ACGT", "TGCA"))[::-1]
+        )
+        labels = labels[::-1].copy()
+        first_feats = [("CDS", length - 2600 + 1, length - 2002 + 1)]
+        second_feats = [("CDS", length - 3596 + 1, length - 3301 + 1)]
+    logits = np.log(emissions(labels))
+    decoder = hd.LocalDecoder(
+        lambda strand, lo, hi: logits[lo:hi],
+        fh.encode_sequence("".join(sequence)),
+        token_transition_probs(remove_incomplete_features=True, domain="plant").values,
+    )
+    first = gene(strand, first_feats, "left", partial=True)
+    second = gene(strand, second_feats, "right", partial=True)
+
+    genes, _ = hd.rescue(
+        [first, second], decoder, len(sequence), flank=1000, min_cds=33
+    )
+
+    assert len(genes) == 1
+    assert genes[0].gene_id == "left"
+
+
+@pytest.mark.parametrize("strand", ["+", "-"])
+@pytest.mark.parametrize("keep_partial", [False, True])
+def test_identical_rescues_do_not_restore_duplicate_partial_genes(strand, keep_partial):
+    _, labels = build_locus()
+    feats = PLUS_GENE if strand == "+" else MINUS_GENE
+    first = gene(strand, [feats[1]], "first", partial=True)
+    second = gene(strand, [feats[2]], "second", partial=True)
+
+    genes, stats = hd.rescue(
+        [first, second],
+        make_decoder(strand, labels),
+        LENGTH,
+        flank=1000,
+        min_cds=33,
+        keep_partial=keep_partial,
+    )
+
+    assert len(genes) == 1
+    assert genes[0].gene_id == "first"
+    assert not genes[0].partial
+    assert stats["partial genes rescued"] == 2
 
 
 # -------------------------------------------------------------------------------------------------
@@ -582,6 +700,64 @@ def run_hybrid(script, monkeypatch, tmp_path, output, workers):
     )
     script.main()
     return output.read_text()
+
+
+@pytest.mark.parametrize("workers", [1, 2])
+@pytest.mark.parametrize("keep_partial", [False, True])
+@pytest.mark.parametrize("unknown", ["NNN", "RRR"])
+def test_cli_preserves_or_drops_an_assembly_gap_after_real_orf_repair(
+    tmp_path, monkeypatch, workers, keep_partial, unknown
+):
+    from scripts import fix_orf
+
+    sequence, labels = build_locus()
+    sequence = sequence[:2215] + unknown + sequence[2218:]
+    fasta = tmp_path / "genome.fa"
+    fasta.write_text(f">chr1\n{sequence}\n")
+    raw = tmp_path / "raw.gff"
+    original = gene("+", PLUS_GENE, "gap")
+    hd.write_genes(str(raw), ["##gff-version 3"], {"chr1": [original]})
+    repaired = tmp_path / "in.gff"
+    fix_orf.fix_orf(
+        str(raw),
+        str(fasta),
+        str(repaired),
+        max_shift=300,
+        min_protein_length=10,
+        require_canonical=True,
+        report_path=None,
+        keep_partial=True,
+    )
+    _, before = hd.read_genes(str(repaired))
+    assert before["chr1"][0].partial
+    assert "ambiguous_bases" in repaired.read_text()
+    write_predictions(tmp_path, "chr1", labels)
+    output = tmp_path / "output.gff"
+    arguments = [
+        "hybrid_decode.py",
+        "--input-gff",
+        str(repaired),
+        "--input-fasta",
+        str(fasta),
+        "--predictions-root",
+        str(tmp_path),
+        "--output-gff",
+        str(output),
+        "--workers",
+        str(workers),
+    ]
+    if keep_partial:
+        arguments.append("--keep-partial")
+    monkeypatch.setattr("sys.argv", arguments)
+
+    load_script().main()
+
+    _, after = hd.read_genes(str(output))
+    if keep_partial:
+        assert after["chr1"][0].partial
+        assert output.read_text() == repaired.read_text()
+    else:
+        assert after == {}
 
 
 def test_cli_reads_a_fasta_with_many_sequences_once_and_repairs_them_all(

@@ -368,6 +368,8 @@ def is_complete_orf(seq: str, begin: int, stop: int, min_protein_length: int) ->
     length = stop - begin
     if length % 3 != 0 or length < 3 * (min_protein_length + 1):
         return False
+    if any(base not in "ACGT" for base in seq[begin:stop]):
+        return False
     if seq[begin : begin + 3] != START_CODON:
         return False
     if seq[stop - 3 : stop] not in STOP_CODONS:
@@ -522,7 +524,9 @@ def find_best_start_by_kozak(
             # later) in-frame stop than the original -- it is not a
             # different start for the same ORF, it is a different ORF.
             continue
-        if stop - begin < 3 * (min_protein_length + 1):
+        # An upstream start can extend the CDS across unknown UTR bases that
+        # were outside the original ORF and outside either Kozak window.
+        if not is_complete_orf(seq, begin, stop, min_protein_length):
             continue
         if abs(stop - cds_stop) > max_shift:
             continue
@@ -630,9 +634,7 @@ def repair_transcript(
 
     missing_start = seq[begin : begin + 3] != START_CODON
     missing_stop = seq[stop - 3 : stop] not in STOP_CODONS
-    ambiguous = "N" in seq[begin:stop]
-
-    if not ambiguous and is_complete_orf(seq, begin, stop, min_protein_length):
+    if is_complete_orf(seq, begin, stop, min_protein_length):
         if (
             fix_weak_starts
             and first_exon_length(transcript, begin, stop) < weak_start_threshold
@@ -675,7 +677,7 @@ def repair_transcript(
                 return Result("complete", issue="weak_kozak_support"), None
         return Result("complete"), None
 
-    if "N" in seq:
+    if any(base not in "ACGT" for base in seq):
         # An ORF cannot be verified across an assembly gap, and picking a start
         # or stop codon adjacent to one would be guesswork.
         return (

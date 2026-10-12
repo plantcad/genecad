@@ -99,15 +99,29 @@ def test_a_changed_setting_needs_a_rebuild(tmp_path):
     )
 
 
-def test_records_without_settings_are_up_to_date_for_any_setting(tmp_path):
-    """Records written by earlier versions hold no settings."""
+def test_records_without_settings_require_a_rebuild_when_settings_are_requested(
+    tmp_path,
+):
+    """Earlier records cannot prove which settings produced an output."""
     source, output = make(tmp_path)
     stage.record(str(output), [str(source)])
-    assert stage.check(str(output), [str(source)], {"max_gap": "1"}) is None
+    assert stage.check(str(output), [str(source)]) is None
+    assert (
+        stage.check(str(output), [str(source)], {"max_gap": "1"})
+        == "stage settings were not recorded"
+    )
     # Settings do not hide a changed input.
     stage.record(str(output), [str(source)], {"max_gap": "1"})
     source.write_text("b")
     assert "changed" in stage.check(str(output), [str(source)], {"max_gap": "1"})
+
+
+def test_unrecorded_outputs_require_a_rebuild_when_settings_are_requested(tmp_path):
+    source, output = make(tmp_path)
+    assert (
+        stage.check(str(output), [str(source)], {"orf_validation": "2"})
+        == "stage settings were not recorded"
+    )
 
 
 def test_command_line_settings(tmp_path):

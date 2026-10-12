@@ -442,6 +442,7 @@ def test_cgroup_v2_limit_is_found_in_a_parent_cgroup(tmp_path):
     root = tmp_path / "cg"
     write(root / "cgroup.controllers", "cpu memory")
     write(root / "job.slice" / "memory.max", str(8 * 1024**3))
+    write(root / "job.slice" / "memory.current", "0")
     write(root / "job.slice" / "step" / "memory.max", "max")
     write(root / "job.slice" / "cpu.max", "400000 100000")
     env = cgroup_env(tmp_path, "0::/job.slice/step\n")
@@ -466,6 +467,7 @@ def test_cgroup_v1_limits_are_read(tmp_path):
     write(
         root / "memory" / "docker" / "abc" / "memory.limit_in_bytes", str(2 * 1024**3)
     )
+    write(root / "memory" / "docker" / "abc" / "memory.usage_in_bytes", "0")
     write(root / "cpu" / "docker" / "abc" / "cpu.cfs_quota_us", "150000")
     write(root / "cpu" / "docker" / "abc" / "cpu.cfs_period_us", "100000")
     env = cgroup_env(
@@ -480,6 +482,7 @@ def test_cgroup_v1_limits_are_read(tmp_path):
 def test_cgroup_v1_unlimited_memory_is_a_huge_number_that_never_wins(tmp_path):
     root = tmp_path / "cg"
     write(root / "memory" / "memory.limit_in_bytes", "9223372036854771712")
+    write(root / "memory" / "memory.usage_in_bytes", "0")
     write(tmp_path / "meminfo", "MemAvailable:   64000000 kB\n")
     env = cgroup_env(tmp_path, "4:memory:/\n")
     env["MEMINFO_FILE"] = str(tmp_path / "meminfo")
@@ -491,6 +494,7 @@ def test_available_memory_uses_the_smallest_limit(tmp_path):
     root = tmp_path / "cg"
     write(root / "cgroup.controllers", "memory")
     write(root / "memory.max", str(16 * 1024**3))
+    write(root / "memory.current", "0")
     write(tmp_path / "meminfo", "MemAvailable:   64000000 kB\n")
     env = cgroup_env(tmp_path, "0::/\n")
     env["MEMINFO_FILE"] = str(tmp_path / "meminfo")
@@ -518,6 +522,118 @@ def test_available_cores_applies_a_cpu_quota(tmp_path):
     env["OMP_NUM_THREADS"] = "1"
     names = ["cgroup_limit", "available_cores"]
     assert run_functions("available_cores", names, env) == "2"
+
+
+@pytest.mark.parametrize("version", [1, 2])
+def test_available_memory_uses_remaining_cgroup_memory(tmp_path, version):
+    root = tmp_path / "cg"
+    if version == 2:
+        write(root / "cgroup.controllers", "memory")
+        directory = root / "job"
+        limit, usage = "memory.max", "memory.current"
+        proc = "0::/job\n"
+    else:
+        directory = root / "memory" / "job"
+        limit, usage = "memory.limit_in_bytes", "memory.usage_in_bytes"
+        proc = "4:memory:/job\n"
+    write(directory / limit, str(16 * 1024**3))
+    write(directory / usage, str(14 * 1024**3))
+    write(tmp_path / "meminfo", "MemAvailable:   64000000 kB\n")
+    env = cgroup_env(tmp_path, proc)
+    env["MEMINFO_FILE"] = str(tmp_path / "meminfo")
+    names = ["cgroup_limit", "available_memory_kb", "resolve_parallel_chromosomes"]
+    assert run_functions("available_memory_kb", names, env) == str(2 * 1024 * 1024)
+    assert (
+        run_functions(
+            'kb=$(available_memory_kb); resolve_parallel_chromosomes auto 16 50000000 "$kb" 0.05',
+            names,
+            env,
+        )
+        == "1"
+    )
+
+
+@pytest.mark.parametrize("version", [1, 2])
+def test_cgroup_memory_applies_remaining_memory_of_each_parent(tmp_path, version):
+    root = tmp_path / "cg"
+    if version == 2:
+        write(root / "cgroup.controllers", "memory")
+        tree = root
+        limit, usage = "memory.max", "memory.current"
+        proc = "0::/job/step\n"
+        unlimited = "max"
+    else:
+        tree = root / "memory"
+        limit, usage = "memory.limit_in_bytes", "memory.usage_in_bytes"
+        proc = "4:memory:/job/step\n"
+        unlimited = "9223372036854771712"
+    write(tree / limit, str(16 * 1024**3))
+    write(tree / usage, str(14 * 1024**3))
+    write(tree / "job" / limit, str(8 * 1024**3))
+    write(tree / "job" / usage, str(3 * 1024**3))
+    write(tree / "job" / "step" / limit, unlimited)
+    write(tree / "job" / "step" / usage, str(1024**3))
+    env = cgroup_env(tmp_path, proc)
+    assert run_functions("cgroup_limit memory", ["cgroup_limit"], env) == str(
+        2 * 1024 * 1024
+    )
+
+
+@pytest.mark.parametrize("version", [1, 2])
+@pytest.mark.parametrize("current", [None, "unreadable", "invalid", str(20 * 1024**3)])
+def test_cgroup_memory_is_conservative_when_usage_is_unknown_or_exhausted(
+    tmp_path, version, current
+):
+    root = tmp_path / "cg"
+    if version == 2:
+        write(root / "cgroup.controllers", "memory")
+        directory = root
+        limit, usage = "memory.max", "memory.current"
+        proc = "0::/\n"
+    else:
+        directory = root / "memory"
+        limit, usage = "memory.limit_in_bytes", "memory.usage_in_bytes"
+        proc = "4:memory:/\n"
+    write(directory / limit, str(16 * 1024**3))
+    if current == "unreadable":
+        (directory / usage).mkdir()
+    elif current is not None:
+        write(directory / usage, current)
+    env = cgroup_env(tmp_path, proc)
+    assert run_functions("cgroup_limit memory", ["cgroup_limit"], env) == "0"
+
+
+@pytest.mark.parametrize("mount", ["cpu,cpuacct", "cpuacct,cpu"])
+def test_cgroup_v1_cpu_quota_is_read_from_a_combined_controller_mount(tmp_path, mount):
+    root = tmp_path / "cg" / mount
+    write(root / "job" / "step" / "cpu.cfs_quota_us", "400000")
+    write(root / "job" / "step" / "cpu.cfs_period_us", "100000")
+    write(root / "job" / "cpu.cfs_quota_us", "150000")
+    write(root / "job" / "cpu.cfs_period_us", "100000")
+    env = cgroup_env(tmp_path, "3:cpu,cpuacct:/job/step\n")
+    names = ["cgroup_limit", "available_cores"]
+    assert run_functions("cgroup_limit cpu", names, env) == "2"
+    assert run_functions("nproc() { echo 8; }; available_cores", names, env) == "2"
+
+
+def test_cgroup_hybrid_uses_each_controllers_explicit_v1_membership(tmp_path):
+    root = tmp_path / "cg"
+    # A unified hierarchy can coexist with v1 memory and CPU controller trees.
+    # Its limits do not govern controllers explicitly assigned to v1.
+    write(root / "cgroup.controllers", "")
+    write(root / "user.slice" / "memory.max", str(16 * 1024**3))
+    write(root / "user.slice" / "memory.current", "0")
+    write(root / "user.slice" / "cpu.max", "800000 100000")
+    write(root / "memory" / "job" / "memory.limit_in_bytes", str(8 * 1024**3))
+    write(root / "memory" / "job" / "memory.usage_in_bytes", str(6 * 1024**3))
+    write(root / "cpu,cpuacct" / "job" / "cpu.cfs_quota_us", "200000")
+    write(root / "cpu,cpuacct" / "job" / "cpu.cfs_period_us", "100000")
+    write(tmp_path / "meminfo", "MemAvailable:   64000000 kB\n")
+    env = cgroup_env(tmp_path, "0::/user.slice\n4:memory:/job\n3:cpu,cpuacct:/job\n")
+    env["MEMINFO_FILE"] = str(tmp_path / "meminfo")
+    names = ["cgroup_limit", "available_memory_kb", "available_cores"]
+    assert run_functions("available_memory_kb", names, env) == str(2 * 1024 * 1024)
+    assert run_functions("nproc() { echo 16; }; available_cores", names, env) == "2"
 
 
 def test_allow_missing_predictions_option_is_passed_to_hybrid_decoding():
@@ -660,6 +776,56 @@ def decoded_files(root, chrom):
     )
 
 
+def test_decoding_settings_are_recorded_before_any_cpu_output(tmp_path):
+    assert check_decode_settings(tmp_path, ["chr1"]) == ""
+    directory = tmp_path / "out" / "chr1"
+    assert (directory / "decoding_settings.txt").read_text() == (
+        "mode=plant frame_aware=0 min_transcript_length=3\n"
+    )
+    assert decoded_files(tmp_path / "out", "chr1") == []
+
+
+@pytest.mark.parametrize(
+    "options,change",
+    [
+        ({"FRAME_AWARE": "1"}, "frame_aware 0 -> 1"),
+        ({"MIN_TRANSCRIPT_LENGTH": "30"}, "min_transcript_length 3 -> 30"),
+    ],
+)
+def test_interrupted_decoding_is_rebuilt_when_its_recorded_options_change(
+    tmp_path, options, change
+):
+    out = tmp_path / "out"
+    make_chromosome_files(out, "chr1", filtered=False)
+    record = out / "chr1" / "decoding_settings.txt"
+    record.write_text("mode=plant frame_aware=0 min_transcript_length=3\n")
+    before = decoded_files(out, "chr1")
+    assert check_decode_settings(tmp_path, ["chr1"]) == ""
+    assert decoded_files(out, "chr1") == before
+
+    message = check_decode_settings(tmp_path, ["chr1"], **options)
+    assert f"chr1 ({change})" in message
+    assert decoded_files(out, "chr1") == []
+    assert record.is_file()
+    assert (out / "chr1" / "predictions_chr1" / "_SUCCESS.json").exists()
+    assert (out / "chr1" / "sequences_chr1.zarr").exists()
+    assert check_decode_settings(tmp_path, ["chr1"], **options) == ""
+
+
+def test_interrupted_decoding_without_recorded_options_is_rebuilt(tmp_path):
+    out = tmp_path / "out"
+    make_chromosome_files(out, "chr1", filtered=False)
+    message = check_decode_settings(tmp_path, ["chr1"], FRAME_AWARE="1")
+    assert "chr1 (decoding options unknown)" in message
+    assert decoded_files(out, "chr1") == []
+    assert (
+        (out / "chr1" / "decoding_settings.txt")
+        .read_text()
+        .startswith("mode=plant frame_aware=1 ")
+    )
+    assert (out / "chr1" / "predictions_chr1" / "_SUCCESS.json").exists()
+
+
 def test_sequences_decoded_with_other_options_are_decoded_again(tmp_path):
     out = tmp_path / "out"
     make_chromosome_files(out, "chr1")
@@ -673,14 +839,19 @@ def test_sequences_decoded_with_other_options_are_decoded_again(tmp_path):
     assert "delete their predictions_filtered_<ID>.gff" in message
     record = (out / "chr1" / "decoding_settings.txt").read_text()
     assert record == "mode=plant frame_aware=0 min_transcript_length=3\n"
-    assert not (out / "chr3" / "decoding_settings.txt").exists()
+    assert (out / "chr3" / "decoding_settings.txt").read_text() == record
+    assert decoded_files(out, "chr3") == []
     assert check_decode_settings(tmp_path, ["chr1", "chr2"]) == ""
     assert decoded_files(out, "chr1") == everything
 
     message = check_decode_settings(tmp_path, ["chr1"], FRAME_AWARE="1")
     assert "1 sequence(s), e.g. chr1 (frame_aware 0 -> 1)" in message
     assert decoded_files(out, "chr1") == []
-    assert not (out / "chr1" / "decoding_settings.txt").exists()
+    assert (
+        (out / "chr1" / "decoding_settings.txt")
+        .read_text()
+        .startswith("mode=plant frame_aware=1 ")
+    )
     # Predictions and sequences are kept; other sequences are untouched.
     assert (out / "chr1" / "predictions_chr1" / "_SUCCESS.json").exists()
     assert (out / "chr1" / "sequences_chr1.zarr").exists()
@@ -718,7 +889,9 @@ def test_a_decoded_sequence_records_its_options():
     assert "export DECODE_SETTINGS" in PREDICT_SH
 
 
-def run_post_processing_logged(tmp_path, decoder, keep_partial, hybrid_exits=()):
+def run_post_processing_logged(
+    tmp_path, decoder, keep_partial, hybrid_exits=(), *, real_stages=False
+):
     """Steps 7-8 with a fake Python whose hybrid_decode.py exits with the given
     statuses in turn; stage helpers and re-prediction are logged."""
     log = tmp_path / "calls.log"
@@ -726,21 +899,37 @@ def run_post_processing_logged(tmp_path, decoder, keep_partial, hybrid_exits=())
     count.write_text("0")
     statuses = " ".join(str(s) for s in hybrid_exits)
     fake = tmp_path / "python"
+    import shlex
+    import sys
+
     fake.write_text(
         "#!/bin/bash\n"
         f'echo "$*" >> {log}\n'
+        'if [[ "$1" == */stage_inputs.py ]]; then\n'
+        f'  exec {shlex.quote(sys.executable)} "$@"\n'
+        "fi\n"
+        'step="$1"\n'
         'if [[ "$1" == */hybrid_decode.py ]]; then\n'
         f"  n=$(cat {count}); echo $((n + 1)) > {count}\n"
         f"  statuses=({statuses})\n"
-        '  exit "${statuses[$n]:-0}"\n'
+        '  status="${statuses[$n]:-0}"\n'
+        '  [[ "$status" == 0 ]] || exit "$status"\n'
         "fi\n"
+        "while [[ $# -gt 0 ]]; do\n"
+        '  if [[ "$1" == --output-gff ]]; then\n'
+        '    mkdir -p "$(dirname "$2")"\n'
+        '    printf "validated by %s\\n" "$step" > "$2"\n'
+        "    break\n"
+        "  fi\n"
+        "  shift\n"
+        "done\n"
     )
     fake.chmod(0o755)
     out = tmp_path / "out"
     env = {
         "PATH": "/usr/bin:/bin",
         "PYTHON": str(fake),
-        "SCRIPT_DIR": "/genecad",
+        "SCRIPT_DIR": str(Path(__file__).resolve().parents[2]),
         "INPUT_FILE": "genome.fa",
         "OUTPUT_DIR": str(out),
         "SPECIES_ID": "Sp",
@@ -761,14 +950,20 @@ def run_post_processing_logged(tmp_path, decoder, keep_partial, hybrid_exits=())
         "ALLOW_U12_INTRONS": "0",
         "ALLOW_MISSING_PREDICTIONS": "0",
     }
+    stage_helpers = (
+        shell_function("refresh_stage") + shell_function("record_stage")
+        if real_stages
+        else (
+            f'refresh_stage() {{ echo "refresh $*" >> {log}; }}\n'
+            f'record_stage() {{ echo "record $*" >> {log}; }}\n'
+        )
+    )
     stubs = (
-        f'refresh_stage() {{ echo "refresh $*" >> {log}; }}\n'
-        f'record_stage() {{ echo "record $*" >> {log}; }}\n'
         f'extract_needed_sequences() {{ echo "extract" >> {log}; }}\n'
         f'run_prediction_workers() {{ echo "predict" >> {log}; }}\n'
     )
     result = subprocess.run(
-        ["bash", "-c", stubs + post_processing()],
+        ["bash", "-c", stage_helpers + stubs + post_processing()],
         env=env,
         text=True,
         capture_output=True,
@@ -824,7 +1019,7 @@ def test_orf_and_hybrid_stages_are_redone_when_their_options_change(
 ):
     result, calls = run_post_processing_logged(tmp_path, decoder, keep_partial)
     assert result.returncode == 0, result.stderr
-    orf = ["max_shift=300", f"keep_partial={orf_keep}"]
+    orf = ["max_shift=300", f"keep_partial={orf_keep}", "orf_validation=2"]
     assert stage_settings(calls, "refresh", "Sp_GeneCAD_orf.gff") == orf
     assert stage_settings(calls, "record", "Sp_GeneCAD_orf.gff") == orf
     if decoder == "hybrid":
@@ -832,6 +1027,63 @@ def test_orf_and_hybrid_stages_are_redone_when_their_options_change(
         assert hybrid == stage_settings(calls, "record", "Sp_GeneCAD_hybrid.gff")
         assert "max_gap=20000" in hybrid and "mode=plant" in hybrid
         assert f"keep_partial={keep_partial}" in hybrid
+        assert "hybrid_revision=2" in hybrid
+
+
+@pytest.mark.parametrize("changed_stage", ["orf", "hybrid"])
+@pytest.mark.parametrize("legacy_settings", ["previous_revision", "missing_settings"])
+def test_stricter_orf_validation_rebuilds_saved_stages_and_final_gff(
+    tmp_path, changed_stage, legacy_settings
+):
+    from scripts import stage_inputs
+
+    out = tmp_path / "out"
+    intermediate = out / "intermediate"
+    intermediate.mkdir(parents=True)
+    raw = intermediate / "Sp_GeneCAD_raw.gff"
+    orf = intermediate / "Sp_GeneCAD_orf.gff"
+    hybrid = intermediate / "Sp_GeneCAD_hybrid.gff"
+    final = out / "Sp_GeneCAD_final.gff"
+    for path in (raw, orf, hybrid, final):
+        path.write_text("old invalid ORF\n")
+    orf_settings = {"max_shift": "300", "keep_partial": "1", "orf_validation": "2"}
+    hybrid_settings = {
+        "hybrid_revision": "2",
+        "mode": "plant",
+        "max_gap": "20000",
+        "keep_partial": "0",
+        "min_intron_length": "20",
+        "min_coding_run_length": "9",
+        "exon_length_strictness": "16",
+        "allow_u12_introns": "0",
+        "allow_missing_predictions": "0",
+    }
+    for stage, output, source, current, revision in (
+        ("orf", orf, raw, orf_settings, "orf_validation"),
+        ("hybrid", hybrid, orf, hybrid_settings, "hybrid_revision"),
+    ):
+        recorded = current.copy()
+        if stage == changed_stage:
+            if legacy_settings == "missing_settings":
+                recorded = None
+            else:
+                recorded.pop(revision)
+        stage_inputs.record(str(output), [str(source)], recorded)
+    stage_inputs.record(str(final), [str(hybrid)])
+
+    result, calls = run_post_processing_logged(
+        tmp_path, "hybrid", "0", real_stages=True
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "hybrid_decode.py" in names(calls)
+    assert "refine.py" in names(calls)
+    assert ("fix_orf.py" in names(calls)) == (changed_stage == "orf")
+    assert hybrid.read_text().startswith("validated by ")
+    assert final.read_text().startswith("validated by ")
+    assert stage_inputs.check(str(orf), [str(raw)], orf_settings) is None
+    assert stage_inputs.check(str(hybrid), [str(orf)], hybrid_settings) is None
+    assert stage_inputs.check(str(final), [str(hybrid)]) is None
 
 
 def check_input_fasta(tmp_path, fasta):
@@ -910,3 +1162,127 @@ def test_another_fasta_is_accepted_while_there_are_no_results(tmp_path):
     assert result.returncode == 0, result.stderr
     record = json.loads((tmp_path / "out" / ".state" / "input_fasta.json").read_text())
     assert record["path"] == str(second.resolve())
+
+
+def test_replacing_bases_with_the_same_size_and_mtime_cannot_reuse_results(tmp_path):
+    fasta = tmp_path / "genome.fa"
+    fasta.write_text(">chr1\nACGT\n")
+    assert check_input_fasta(tmp_path, fasta).returncode == 0
+    (tmp_path / "out" / "chr1").mkdir()
+    original = fasta.stat()
+    fasta.write_text(">chr1\nTTTT\n")
+    os.utime(fasta, ns=(original.st_atime_ns, original.st_mtime_ns))
+
+    result = check_input_fasta(tmp_path, fasta)
+
+    assert result.returncode == 1
+    assert "another FASTA file" in result.stderr
+
+
+def test_existing_results_without_fasta_identity_are_not_silently_adopted(tmp_path):
+    output = tmp_path / "out" / "chr1"
+    output.mkdir(parents=True)
+    gff = output / "predictions_filtered_chr1.gff"
+    gff.write_text("old results\n")
+    fasta = tmp_path / "genome.fa"
+    fasta.write_text(">chr1\nTTTT\n")
+
+    result = check_input_fasta(tmp_path, fasta)
+
+    assert result.returncode == 1
+    assert "cannot verify" in result.stderr
+    assert gff.read_text() == "old results\n"
+    assert not (tmp_path / "out" / ".state" / "input_fasta.json").exists()
+
+
+def resolve_gpu_selection(tmp_path, requested, visible=None, *, nvml_rows=None):
+    import shlex
+
+    if nvml_rows is None:
+        nvml_rows = "\n".join(f"{index}, GPU-abcd{index}" for index in range(4))
+    numeric_indexes = "\n".join(row.split(",")[0] for row in nvml_rows.splitlines())
+    fake_smi = tmp_path / "nvidia-smi"
+    fake_smi.write_text(
+        '#!/bin/bash\nif [[ "$*" == *"--query-gpu=index,uuid"* ]]; then\n'
+        f"  printf '%s\\n' {shlex.quote(nvml_rows)}\n"
+        'elif [[ "$*" == *"--query-gpu=index"* ]]; then\n'
+        f"  printf '%s\\n' {shlex.quote(numeric_indexes)}\n"
+        "fi\n"
+    )
+    fake_smi.chmod(0o755)
+    start = PREDICT_SH.index("# GPU Resolution")
+    end = PREDICT_SH.index('echo "Using GPU(s):', start)
+    env = {**os.environ, "PATH": f"{tmp_path}:/usr/bin:/bin", "GPUS_ARG": requested}
+    env.pop("CUDA_VISIBLE_DEVICES", None)
+    if visible is not None:
+        env["CUDA_VISIBLE_DEVICES"] = visible
+    return subprocess.run(
+        [
+            "bash",
+            "-c",
+            PREDICT_SH[start:end]
+            + '\nprintf "%s|%s|%s\\n" "$GPU_LIST_STR" "$GPU_DEVICE_LIST_STR" "$REFINE_GPU_LIST_STR"',
+        ],
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+
+
+@pytest.mark.parametrize(
+    "requested,visible,expected",
+    [
+        ("all", "2,3", "0,1|2,3|0,1"),
+        ("0", "2,3", "0|2|0"),
+        ("1", "2,3", "1|3|0"),
+        ("1,0", "2,3", "1,0|3,2|0,1"),
+        ("all", "GPU-abcd,GPU-ef01", "0,1|GPU-abcd,GPU-ef01|0,1"),
+        ("0", "MIG-GPU-abcd/1/0", "0|MIG-GPU-abcd/1/0|0"),
+        ("2", None, "2|GPU-abcd2|0"),
+        ("all", None, "0,1,2,3|GPU-abcd0,GPU-abcd1,GPU-abcd2,GPU-abcd3|0,1,2,3"),
+    ],
+)
+def test_gpu_selection_respects_the_inherited_cuda_visibility(
+    tmp_path, requested, visible, expected
+):
+    result = resolve_gpu_selection(tmp_path, requested, visible)
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert result.stdout.strip().splitlines()[-1] == expected
+
+
+@pytest.mark.parametrize(
+    "requested,rows,expected",
+    [
+        ("2", "2, GPU-abcd2\n0, GPU-abcd0\n1, GPU-abcd1", "2|GPU-abcd2|0"),
+        ("4", "4, GPU-abcd4\n2, GPU-abcd2", "4|GPU-abcd4|0"),
+        ("all", "4, GPU-abcd4\n2, GPU-abcd2", "2,4|GPU-abcd2,GPU-abcd4|0,1"),
+    ],
+)
+def test_unrestricted_gpu_selection_uses_nvml_index_uuid_pairs(
+    tmp_path, requested, rows, expected
+):
+    result = resolve_gpu_selection(tmp_path, requested, nvml_rows=rows)
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert result.stdout.strip().splitlines()[-1] == expected
+
+
+def test_unavailable_nvml_discovery_still_tries_gpu_zero(tmp_path):
+    result = resolve_gpu_selection(tmp_path, "all", nvml_rows="")
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert result.stdout.strip().splitlines()[-1] == "0|0|0"
+
+
+@pytest.mark.parametrize(
+    "requested,visible",
+    [
+        ("all", ""),
+        ("0", "-1"),
+        ("2", "2,3"),
+        ("0,0", "2,3"),
+        ("-1", None),
+        ("0,", None),
+        ("all", "2,,3"),
+    ],
+)
+def test_invalid_or_disabled_gpu_selection_fails_early(tmp_path, requested, visible):
+    assert resolve_gpu_selection(tmp_path, requested, visible).returncode != 0

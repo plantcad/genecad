@@ -38,6 +38,9 @@ import numpy as np
 from src.atomic_io import atomic_output_path
 from src.frame_crf import (
     AT_AC,
+    BASE_A,
+    BASE_G,
+    BASE_T,
     GT_AG,
     FrameStateGraph,
     load_chromosome_codes,
@@ -208,6 +211,34 @@ class LocalDecoder:
             return np.flip(labels)
         return self.graph.decode(probs, codes, self.transition)
 
+    def has_complete_orf(self, gene: Gene) -> bool:
+        """Verify the spliced CDS before accepting a rescued or merged gene.
+
+        The frame graph permits unknown bases inside CDS. They cannot verify an
+        ORF, even when the decoder found a start and stop. Check the actual bases
+        in transcription order, including codons split across exon boundaries.
+        Unknown bases in introns and UTRs do not affect this check.
+        """
+        blocks = [(s, e) for t, s, e in gene.feats if t == "CDS"]
+        if not blocks or any(s < 1 or e < s or e > len(self.codes) for s, e in blocks):
+            return False
+        cds = np.concatenate([self.codes[s - 1 : e] for s, e in blocks])
+        if len(cds) < 6 or len(cds) % 3 or np.any((cds < BASE_A) | (cds > BASE_T)):
+            return False
+        if gene.strand == "-":
+            cds = reverse_complement_codes(cds)
+        codons = cds.reshape(-1, 3)
+        if not np.array_equal(codons[0], (BASE_A, BASE_T, BASE_G)):
+            return False
+        stops = (codons[:, 0] == BASE_T) & (
+            (
+                (codons[:, 1] == BASE_A)
+                & ((codons[:, 2] == BASE_A) | (codons[:, 2] == BASE_G))
+            )
+            | ((codons[:, 1] == BASE_G) & (codons[:, 2] == BASE_A))
+        )
+        return bool(stops[-1] and not stops[:-1].any())
+
 
 def rescue(
     genes: list[Gene],
@@ -229,6 +260,7 @@ def rescue(
     for g in (g for g in genes if g.partial):
         lo, hi = max(g.start - 1 - flank, 0), min(g.end + flank, length)
         found = []
+        represented = False
         windows = (
             transcripts_from_labels(decoder.decode(g.strand, lo, hi), lo, g.strand)
             if g.cds_len
@@ -240,6 +272,14 @@ def rescue(
                 continue
             if t.cds_len <= min_cds:
                 stats["rescue: tiny, dropped"] += 1
+                continue
+            if not decoder.has_complete_orf(t):
+                stats["rescue: invalid ORF, dropped"] += 1
+                continue
+            if (t.strand, tuple(t.feats)) in seen:
+                # Two partial genes may be rescued by exactly the same model.
+                # Both are represented; keep_partial must not add either back.
+                represented = True
                 continue
             if any(
                 overlaps(t.start, t.end, k)
@@ -257,7 +297,8 @@ def rescue(
             if n:
                 t.gene_id = f"{g.gene_id}_{n + 1}"
             out.append(t)
-        if found:
+            by_strand[t.strand].append(t)
+        if found or represented:
             stats["partial genes rescued"] += 1
         else:
             stats["partial genes dropped"] += 1
@@ -312,6 +353,7 @@ def merge(
                         t.start <= min(a_mid, b_mid)
                         and t.end >= max(a_mid, b_mid)
                         and t.cds_len > min_cds
+                        and decoder.has_complete_orf(t)
                     ):
                         t.merged_from = (cur.merged_from or (cur.gene_id,)) + (
                             nxt.merged_from or (nxt.gene_id,)

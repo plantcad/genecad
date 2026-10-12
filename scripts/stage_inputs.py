@@ -9,8 +9,8 @@
 A record (OUTPUT.inputs.json) holds the SHA-256 of every input and the settings. Without a
 record, which is the case for results made by earlier versions, OUTPUT is rebuilt only when
 an input was modified more than TOLERANCE seconds after it, so that copying a directory does
-not trigger a rebuild. Records written by earlier versions hold no settings; their outputs
-are not rebuilt for a setting.
+not trigger a rebuild. Records written by earlier versions hold no settings; when current
+settings are provided, their outputs must be rebuilt to establish their provenance.
 """
 
 import argparse
@@ -65,6 +65,8 @@ def check(
                 {n for n in set(new) | set(old) if new.get(n) != old.get(n)}
             )
             return f"{len(changed)} input file(s) changed, e.g. {changed[0]}"
+        if settings is not None and old_settings is None:
+            return "stage settings were not recorded"
         if settings is not None and old_settings is not None:
             keys: set[str] = set(settings) | set(old_settings)
             for key in sorted(keys):
@@ -74,6 +76,8 @@ def check(
                         f"to {settings.get(key)}"
                     )
         return None
+    if settings is not None:
+        return "stage settings were not recorded"
     built = os.path.getmtime(output)
     for path in inputs:
         if os.path.isfile(path) and os.path.getmtime(path) > built + TOLERANCE:
