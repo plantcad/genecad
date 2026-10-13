@@ -353,9 +353,12 @@ scaffold. (Default: auto)
 When `CUDA_VISIBLE_DEVICES` is set by Slurm or a container, indexes refer to that list:
 with `CUDA_VISIBLE_DEVICES=2,3`, `--gpus 0` uses physical GPU 2 and `--gpus all` uses
 only GPUs 2 and 3. Prediction and protein refinement use the same selected devices.
-* `--launcher` - Custom entrypoint command to launch predict.py (e.g. 'srun python').
-If set, overrides automatic DDP/SLURM detection. Can also be set via LAUNCHER environment variable.
-(Default: python)
+A single-node Slurm batch job uses the same automatic GPU dispatch as local execution.
+* `--launcher` - Custom entrypoint command to launch predict.py (e.g. a torchrun wrapper).
+If set, overrides the automatic launcher. Can also be set via the LAUNCHER environment variable.
+Multi-process launchers must supply `RANK`, `WORLD_SIZE`, `LOCAL_RANK` and the distributed
+rendezvous configuration (`MASTER_ADDR`, `MASTER_PORT`), as torchrun does.
+(Default: automatically selected Python or torchrun launcher)
 * `--model-checkpoint` - Overrides the GeneCAD head model set by `--mode`. Accepts a local path to a `.ckpt` file or a
 HuggingFace model repo ID. Note that this does **not** override the base PlantCAD model set by `--mode`
 * `--decoder` - How per-base predictions become gene models: `hybrid`, `frame-aware` or `plain`. (Default: hybrid)

@@ -154,6 +154,102 @@ def test_keep_partial_is_passed_on_to_fix_orf(tmp_path):
     assert "--keep-partial" in fix_orf
 
 
+def run_dispatch(
+    environment: dict[str, str], chromosomes: int = 1, launcher: str = ""
+) -> subprocess.CompletedProcess[str]:
+    section = PREDICT_SH.index("# Choose dispatch strategy")
+    start = PREDICT_SH.index(
+        'echo "================================================================="',
+        section,
+    )
+    end = PREDICT_SH.index("\nexport PREDICT_MODE PY_LAUNCHER", start)
+    script = (
+        "set -euo pipefail\n"
+        "declare -A GPU_BATCH_SIZES=([0]=2 [1]=3 [2]=4)\n"
+        "GPU_ARRAY=(0 1 2)\n"
+        + PREDICT_SH[start:end]
+        + '\nprintf "RESULT %s|%s\\n" "$PREDICT_MODE" "$PY_LAUNCHER"'
+    )
+    return subprocess.run(
+        ["bash", "-c", script],
+        env={
+            "PATH": "/usr/bin:/bin",
+            "PYTHON": "python",
+            "LAUNCHER_ARG": launcher,
+            "NUM_GPUS": "3",
+            "CHROM_COUNT": str(chromosomes),
+            **environment,
+        },
+        text=True,
+        capture_output=True,
+    )
+
+
+@pytest.mark.parametrize(
+    "environment,chromosomes,expected_mode,expected_launcher",
+    [
+        (
+            {},
+            1,
+            "ddp",
+            "python -m torch.distributed.run --standalone --nproc_per_node=3",
+        ),
+        (
+            {
+                "SLURM_JOB_ID": "123",
+                "SLURM_NTASKS": "1",
+                "SLURM_PROCID": "0",
+                "SLURM_LOCALID": "0",
+            },
+            1,
+            "ddp",
+            "python -m torch.distributed.run --standalone --nproc_per_node=3",
+        ),
+        (
+            {
+                "SLURM_JOB_ID": "123",
+                "SLURM_NTASKS": "1",
+                "SLURM_PROCID": "0",
+                "SLURM_LOCALID": "0",
+            },
+            4,
+            "single",
+            "python",
+        ),
+        (
+            {"SLURM_JOB_ID": "123", "SLURM_NTASKS": "3"},
+            1,
+            "ddp",
+            "python -m torch.distributed.run --standalone --nproc_per_node=3",
+        ),
+        ({"SLURM_JOB_ID": "123", "SLURM_NTASKS": "3"}, 4, "single", "python"),
+        ({"WORLD_SIZE": "3", "RANK": "0", "LOCAL_RANK": "0"}, 1, "ddp_slurm", "python"),
+    ],
+)
+def test_dispatch_uses_all_selected_gpus_in_slurm_allocations(
+    environment, chromosomes, expected_mode, expected_launcher
+):
+    result = run_dispatch(environment, chromosomes)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (
+        result.stdout.splitlines()[-1] == f"RESULT {expected_mode}|{expected_launcher}"
+    )
+
+
+def test_dispatch_rejects_world_size_without_rank():
+    result = run_dispatch({"WORLD_SIZE": "3"})
+    assert result.returncode != 0
+    assert "WORLD_SIZE > 1 requires RANK" in result.stderr
+
+
+def test_dispatch_preserves_custom_launcher_override():
+    result = run_dispatch(
+        {"SLURM_NTASKS": "1", "SLURM_PROCID": "0"}, launcher="custom-launch"
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stdout.splitlines()[-1] == "RESULT ddp|custom-launch"
+
+
 # -------------------------------------------------------------------------------------------------
 # --max-parallel-chromosomes: how many chromosomes are decoded and exported at once
 # -------------------------------------------------------------------------------------------------

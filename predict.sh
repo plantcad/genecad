@@ -100,8 +100,9 @@ Options:
   -g, --gpus LIST       Comma-separated GPU IDs to use, or 'all' for all available GPUs.
                         Chromosomes are distributed across GPUs in parallel.
                         (default: 0 — single GPU, sequential)
-  --launcher CMD        Custom entrypoint command to launch predict.py (e.g. 'srun python').
-                        If set, overrides automatic DDP/SLURM detection.
+  --launcher CMD        Custom entrypoint command to launch predict.py (e.g. a torchrun wrapper).
+                        If set, overrides the automatic launcher.
+                        Multi-process launchers must provide RANK, WORLD_SIZE and LOCAL_RANK.
                         Can also be set via LAUNCHER environment variable.
   --model-checkpoint PATH_OR_REPO
                         Override the GeneCAD head checkpoint selected by --mode.
@@ -1278,17 +1279,20 @@ fi
 # =================================================================
 
 echo "================================================================="
-# Only switch to SLURM distributed mode when the shell is actually running in
-# a multi-rank context. A bare SLURM allocation (SLURM_JOB_ID only) should keep
-# normal per-GPU scheduling, otherwise we serialize chromosomes and underutilize GPUs.
-if [[ "${WORLD_SIZE:-1}" -gt 1 || "${SLURM_NTASKS:-1}" -gt 1 || -n "${SLURM_PROCID:-}" || -n "${SLURM_LOCALID:-}" ]]; then
+# SLURM allocation/task metadata does not establish a Python process group.
+# Keep automatic GPU dispatch unless an external launcher supplies rank variables.
+if [[ "${WORLD_SIZE:-1}" -gt 1 ]]; then
+    if [[ -z "${RANK:-}" ]]; then
+        echo "ERROR: WORLD_SIZE > 1 requires RANK from the distributed launcher." >&2
+        exit 1
+    fi
     PREDICT_MODE="ddp_slurm"
     DDP_BATCH="${GPU_BATCH_SIZES[${GPU_ARRAY[0]}]}"
     for gid in "${GPU_ARRAY[@]}"; do
         [[ "${GPU_BATCH_SIZES[$gid]}" -lt "$DDP_BATCH" ]] && DDP_BATCH="${GPU_BATCH_SIZES[$gid]}"
     done
-    echo "Processing ${CHROM_COUNT} chromosome(s) in SLURM distributed mode."
-    echo "  (SLURM/WORLD_SIZE environment detected → DDP handled by SLURM integration)"
+    echo "Processing ${CHROM_COUNT} chromosome(s) in distributed mode."
+    echo "  (RANK/WORLD_SIZE supplied by the external launcher)"
     echo "  Batch size per GPU: ${DDP_BATCH}"
 elif [[ $NUM_GPUS -gt 1 && $CHROM_COUNT -lt $NUM_GPUS ]]; then
     PREDICT_MODE="ddp"
