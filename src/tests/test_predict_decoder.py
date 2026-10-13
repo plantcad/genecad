@@ -294,6 +294,39 @@ def test_auto_parallel_chromosomes_fit_the_largest_chromosome_in_memory(
 
 
 @pytest.mark.parametrize(
+    "cores,cpu_workers,gpus,expected",
+    [
+        (1, 1, 4, 1),
+        (8, 4, 4, 2),
+        (32, 1, 20, 16),
+        (2, 8, 4, 1),
+        (64, 2, 4, 16),
+        (8, 2, 1, 4),
+    ],
+)
+def test_auto_cpu_concurrency_respects_cpu_budget_independently_of_gpus(
+    cores, cpu_workers, gpus, expected
+):
+    start = PREDICT_SH.index('if [[ "$MAX_PARALLEL_CHROMOSOMES" == "auto" ]]')
+    end = PREDICT_SH.index(
+        "\n# =================================================================", start
+    )
+    script = (
+        shell_function("resolve_parallel_chromosomes")
+        + f"available_cores() {{ echo {cores}; }}\n"
+        + "largest_sequence_bp() { echo 1000000; }\n"
+        + "available_memory_kb() { echo 268435456; }\n"
+        + f"CPU_WORKERS={cpu_workers}\nNUM_GPUS={gpus}\n"
+        + "MAX_PARALLEL_CHROMOSOMES=auto\nDECODE_GB_PER_MB=0.05\n"
+        + PREDICT_SH[start:end]
+        + '\necho "$PARALLEL_CHROMOSOMES"\n'
+    )
+    result = subprocess.run(["bash", "-c", script], text=True, capture_output=True)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines()[-1] == str(expected)
+
+
+@pytest.mark.parametrize(
     "max_auto,largest_mb,available_gb,expected",
     [
         (4, 300, 256, "4"),  # 15 GB each: capped at max_auto

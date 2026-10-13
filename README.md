@@ -344,10 +344,12 @@ genecad predict [OPTIONS]
 * `--max-parallel-chromosomes` - How many chromosomes are decoded and exported to GFF at the same time. This is
 not a number of CPUs. Frame-aware decoding needs about 0.35 GB of RAM per Mb of chromosome and plain or hybrid
 decoding about 0.05 GB (the predictions are read segment by segment), so several large chromosomes at once can run
-out of memory. `auto` runs as many as fit in the available RAM, at most one per CPU core (up to 16), so genomes with thousands
+out of memory. `auto` uses these RAM estimates to choose concurrency, capped at the available CPU cores divided by
+`--cpu-workers` (at least one chromosome, up to 16), independently of the GPU count. Genomes with thousands
 of small scaffolds are no longer decoded one at a time. Set a number to override. Sequences shorter than 1 Mb are
 decoded in groups, one process per step for each group, because starting a step takes longer than decoding a small
-scaffold. (Default: auto)
+scaffold. If even one chromosome is estimated to exceed available RAM, the pipeline warns and runs one at a time;
+this does not guarantee it will fit. (Default: auto)
 * `--batch-size` `-b` - Inference batch size for GPU (Default is auto-scaled to GPU VRAM, at most 35)
 * `--gpus` `-g` - Comma-separated GPU indexes, or "all" for all visible GPUs (Default: 0).
 When `CUDA_VISIBLE_DEVICES` is set by Slurm or a container, indexes refer to that list:
@@ -422,6 +424,15 @@ directory when moving results between servers. Automatic CPU parallelism uses re
 cgroup memory (after current usage) and CPU quotas, including combined cgroup v1 mounts.
 Existing ORF and hybrid outputs are rebuilt when their recorded validation revision is
 older or unknown, so updating the validator also replaces previously accepted invalid CDS.
+
+For manual cleanup, delete whole sequence or interval Zarr directories; deleting individual
+files inside those stores is not automatically repaired. Prediction segments have separate
+checksums and can be repaired selectively. Keep the original FASTA, `.state`, and GFF outputs,
+and finish or stop the current run before removing intermediates. A missing intermediate is
+regenerated only when a later step needs it. Resume supports a different batch size or GPU
+count, but changing model weights, tokenizer, dtype, window settings, or PyTorch version can
+invalidate prediction checkpoints. Use a new output directory when changing models; see
+[prediction resume details](docs/predict.md#resuming-interrupted-predictions).
 
 The individual components of the prediction pipeline are also accessible as python scripts.
 While this is not the main recommended method to run the GeneCAD pipeline, some users may

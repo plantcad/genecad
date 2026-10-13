@@ -1248,11 +1248,11 @@ fi
 if [[ "$MAX_PARALLEL_CHROMOSOMES" == "auto" ]]; then
     LARGEST_BP=$(largest_sequence_bp)
     AVAILABLE_KB=$(available_memory_kb)
-    # Decoding is single-threaded, so allow one chromosome per free core (each export
-    # also starts CPU_WORKERS processes), but never fewer than one per GPU or more than 16.
+    # GPU prediction finishes before CPU processing. Budget chromosome jobs by CPU
+    # workers alone, with a minimum of one job and a maximum of 16.
     MAX_AUTO=$(( $(available_cores) / CPU_WORKERS ))
     (( MAX_AUTO > 16 )) && MAX_AUTO=16
-    (( MAX_AUTO < NUM_GPUS )) && MAX_AUTO=$NUM_GPUS
+    (( MAX_AUTO < 1 )) && MAX_AUTO=1
     PARALLEL_CHROMOSOMES=$(resolve_parallel_chromosomes auto "$MAX_AUTO" "$LARGEST_BP" "$AVAILABLE_KB" "$DECODE_GB_PER_MB")
     echo "Decoding up to $PARALLEL_CHROMOSOMES chromosome(s) at once" \
         "(longest sequence $(( LARGEST_BP / 1000000 )) Mb, $(( AVAILABLE_KB / 1048576 )) GB RAM available, CPU allows $MAX_AUTO)"
