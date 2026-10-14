@@ -5,6 +5,7 @@ if (( BASH_VERSINFO[0] < 4 )); then
     exit 1
 fi
 SCRIPT_DIR="$(cd "$(dirname "$(realpath "$0")")" && pwd)"
+source "$SCRIPT_DIR/scripts/genecad_version.sh"
 
 # =================================================================
 # Multi-Chromosome GeneCAD Prediction Pipeline
@@ -107,6 +108,7 @@ Options:
   --model-checkpoint PATH_OR_REPO
                         Override the GeneCAD head checkpoint selected by --mode.
                         Accepts a local .ckpt path or a Hugging Face model repo ID.
+  -V, --version         Show the GeneCAD version and exit
   -h, --help            Show this help message
 
 Batch size auto-detection:
@@ -197,6 +199,7 @@ while [[ $# -gt 0 ]]; do
     --launcher)      LAUNCHER_ARG="$2";   shift 2 ;;
     --model-checkpoint) MODEL_CHECKPOINT_ARG="$2"; shift 2 ;;
     --base-model)    BASE_MODEL_ARG="$2"; shift 2 ;;
+    -V|--version) echo "GeneCAD $(genecad_version "$SCRIPT_DIR")"; exit 0 ;;
     -h|--help) usage ;;
     *) echo "Unknown option: $1"; usage ;;
   esac
@@ -257,6 +260,7 @@ fi
 
 echo "================================================================="
 echo "GeneCAD Prediction Pipeline"
+echo "Version: $(genecad_version "$SCRIPT_DIR")"
 echo "================================================================="
 
 # Download default Arabidopsis sequence if missing
