@@ -57,7 +57,7 @@ cd "$SCRIPT_DIR"
 
 # ── Argument parsing ──────────────────────────────────────────────────────────
 usage() {
-  sed -n '3,46p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '3,/^# Requirements:/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'
     exit 0
 }
 

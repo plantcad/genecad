@@ -21,6 +21,16 @@ def test_pipeline_scripts_print_the_version(script, flag):
     assert result.stdout.startswith(f"GeneCAD {VERSION}")
 
 
+def test_train_help_shows_every_option_and_stops_before_requirements():
+    result = subprocess.run(
+        ["bash", str(ROOT / "train.sh"), "--help"], capture_output=True, text=True
+    )
+    assert result.returncode == 0, result.stderr
+    assert "-V, --version" in result.stdout
+    assert result.stdout.rstrip().endswith("-h, --help              Show this message")
+    assert "Requirements" not in result.stdout
+
+
 def test_cli_prints_the_version():
     result = subprocess.run(
         [sys.executable, "-m", "src.cli", "--version"],
