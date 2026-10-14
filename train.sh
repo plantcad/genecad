@@ -41,6 +41,7 @@
 #   --hf-upload-repo ID     Upload artifacts to Hugging Face repo (optional)
 #   --hf-upload-type TYPE   model or dataset repo type (default: model)
 #   --hf-upload-path PATH   Path inside HF repo (default: run name)
+#   -V, --version           Show the GeneCAD version and exit
 #   -h, --help              Show this message
 #
 # Requirements:
@@ -51,11 +52,12 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$(realpath "${BASH_SOURCE[0]}")")" && pwd)"
+source "$SCRIPT_DIR/scripts/genecad_version.sh"
 cd "$SCRIPT_DIR"
 
 # ── Argument parsing ──────────────────────────────────────────────────────────
 usage() {
-  sed -n '3,45p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '3,46p' "$0" | sed 's/^# \{0,1\}//'
     exit 0
 }
 
@@ -122,6 +124,7 @@ while [[ $# -gt 0 ]]; do
     --hf-upload-repo) HF_UPLOAD_REPO="$2"; shift 2 ;;
     --hf-upload-type) HF_UPLOAD_TYPE="$2"; shift 2 ;;
     --hf-upload-path) HF_UPLOAD_PATH="$2"; shift 2 ;;
+    -V|--version) echo "GeneCAD $(genecad_version "$SCRIPT_DIR")"; exit 0 ;;
     -h|--help) usage ;;
     *) echo "Unknown option: $1"; usage ;;
   esac
@@ -604,6 +607,7 @@ print(f'Uploaded {folder_path} to {repo_id}/{path_in_repo}')
 # ── Banner ────────────────────────────────────────────────────────────────────
 echo "============================================"
 echo " GeneCAD Fine-Tuning"
+echo " Version:     $(genecad_version "$SCRIPT_DIR")"
 echo " Domain:      $DOMAIN"
 echo " Base model:  $BASE_MODEL"
 echo " Species:     $SPECIES_IDS"
