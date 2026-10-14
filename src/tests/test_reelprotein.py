@@ -257,3 +257,201 @@ def test_merge_group_transcripts_recalculates_phases(tmp_path):
     assert cds_features_rev[1][3] == "10"
     assert cds_features_rev[1][4] == "18"
     assert cds_features_rev[1][7] == "2"
+
+
+def test_embed_batch_splits_the_batch_when_the_gpu_runs_out_of_memory(monkeypatch):
+    """An out-of-memory batch is retried in halves; no protein may be skipped."""
+    import contextlib
+    import types
+
+    import numpy as np
+
+    class OutOfMemory(RuntimeError):
+        pass
+
+    class Tensor:
+        def __init__(self, rows):
+            self.rows = rows
+
+        def to(self, device):
+            return self
+
+    fake_torch = types.SimpleNamespace(
+        tensor=Tensor,
+        no_grad=contextlib.nullcontext,
+        cuda=types.SimpleNamespace(
+            OutOfMemoryError=OutOfMemory, empty_cache=lambda: None
+        ),
+    )
+    monkeypatch.setattr(reelprotein, "torch", fake_torch)
+
+    class Hidden:
+        def __init__(self, rows):
+            self.rows = rows
+
+        def __getitem__(self, key):
+            row, span = key
+            return types.SimpleNamespace(
+                mean=lambda dim: types.SimpleNamespace(
+                    detach=lambda: types.SimpleNamespace(
+                        cpu=lambda: types.SimpleNamespace(
+                            numpy=lambda: types.SimpleNamespace(
+                                squeeze=lambda: np.full(2, self.rows[row][0])
+                            )
+                        )
+                    )
+                )
+            )
+
+    calls = []
+
+    def model(input_ids, attention_mask):
+        calls.append(len(input_ids.rows))
+        if len(input_ids.rows) > 2:
+            raise OutOfMemory("CUDA out of memory")
+        return types.SimpleNamespace(last_hidden_state=Hidden(input_ids.rows))
+
+    def tokenizer(seqs, add_special_tokens, padding):
+        rows = [[float(s.split()[0] == "A") + i] for i, s in enumerate(seqs)]
+        return {"input_ids": rows, "attention_mask": rows}
+
+    ids = ["p1", "p2", "p3", "p4", "p5"]
+    result = reelprotein._embed_batch(
+        model, tokenizer, "cpu", ids, ["A A", "A A", "A A", "A A", "A A"], [2] * 5
+    )
+
+    assert [pid for pid, _ in result] == ids
+    assert calls == [5, 2, 3, 1, 2]
+
+
+def test_embed_batch_leaves_out_a_protein_that_never_fits_and_keeps_the_rest(
+    monkeypatch,
+):
+    import contextlib
+    import types
+
+    class OutOfMemory(RuntimeError):
+        pass
+
+    class Tensor:
+        def __init__(self, rows):
+            self.rows = rows
+
+        def to(self, device):
+            return self
+
+    monkeypatch.setattr(
+        reelprotein,
+        "torch",
+        types.SimpleNamespace(
+            tensor=Tensor,
+            no_grad=contextlib.nullcontext,
+            cuda=types.SimpleNamespace(
+                OutOfMemoryError=OutOfMemory, empty_cache=lambda: None
+            ),
+        ),
+    )
+
+    class Vector:
+        def __init__(self, value):
+            self.value = value
+
+        def mean(self, dim):
+            return self
+
+        def detach(self):
+            return self
+
+        def cpu(self):
+            return self
+
+        def numpy(self):
+            return self
+
+        def squeeze(self):
+            return self.value
+
+    class Hidden:
+        def __init__(self, rows):
+            self.rows = rows
+
+        def __getitem__(self, key):
+            return Vector(self.rows[key[0]][0])
+
+    def model(input_ids, attention_mask):
+        if any(row[0] == 99 for row in input_ids.rows):
+            raise OutOfMemory("CUDA out of memory")
+        return types.SimpleNamespace(last_hidden_state=Hidden(input_ids.rows))
+
+    def tokenizer(seqs, add_special_tokens, padding):
+        rows = [[99 if s == "HUGE" else i] for i, s in enumerate(seqs)]
+        return {"input_ids": rows, "attention_mask": rows}
+
+    result = reelprotein._embed_batch(
+        model, tokenizer, "cpu", ["a", "b", "c"], ["x", "HUGE", "y"], [1, 4, 1]
+    )
+
+    assert [pid for pid, _ in result] == ["a", "c"]
+
+
+def test_refine_writes_the_genes_when_there_are_no_candidates(tmp_path, monkeypatch):
+    """Without protein candidates, refinement still writes the final GFF."""
+    import importlib.util
+    import pathlib
+
+    path = pathlib.Path(__file__).resolve().parents[2] / "scripts" / "refine.py"
+    spec = importlib.util.spec_from_file_location("refine_script", path)
+    assert spec is not None and spec.loader is not None
+    refine = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(refine)
+
+    gff_path = tmp_path / "input.gff3"
+    gff_path.write_text(
+        "\n".join(
+            [
+                "##gff-version 3",
+                "chr1\tsrc\tgene\t50\t60\t.\t+\t.\tID=gene3",
+                "chr1\tsrc\tmRNA\t50\t60\t.\t+\t.\tID=gene3.t1;Parent=gene3",
+                "chr1\tsrc\tCDS\t50\t60\t.\t+\t0\tID=cds3;Parent=gene3.t1",
+                "chr1\tsrc\tgene\t1\t9\t.\t+\t.\tID=gene1",
+                "chr1\tsrc\tmRNA\t1\t9\t.\t+\t.\tID=gene1.t1;Parent=gene1",
+                "chr1\tsrc\tCDS\t1\t9\t.\t+\t0\tID=cds1;Parent=gene1.t1",
+            ]
+        )
+        + "\n"
+    )
+    monkeypatch.setattr(
+        reelprotein, "extract_candidate_proteins", lambda genes, fasta: {}
+    )
+
+    def no_embeddings(*args, **kwargs):
+        raise AssertionError("no candidates to embed")
+
+    monkeypatch.setattr(reelprotein, "generate_embeddings", no_embeddings)
+
+    for filter_unmerged in (False, True):
+        output_path = tmp_path / f"output.{filter_unmerged}.gff3"
+        expected_path = tmp_path / f"expected.{filter_unmerged}.gff3"
+        refine.run_reelprotein(
+            input_gff=str(gff_path),
+            input_fasta=str(tmp_path / "unused.fa"),
+            output_gff=str(output_path),
+            model_source="unused",
+            filter_unmerged=filter_unmerged,
+            gpus=[0],
+        )
+        # The same output as when no candidate is accepted.
+        reelprotein.generate_final_gff(
+            pd.DataFrame({"ProteinID": ["chr1~gene1~+"], "Predicted_Label": [0]}),
+            gff_path,
+            expected_path,
+            keep_unmerged=not filter_unmerged,
+        )
+        assert output_path.read_text() == expected_path.read_text()
+
+    assert output_path.read_text() == ""
+    unfiltered = (tmp_path / "output.False.gff3").read_text().splitlines()
+    assert [line.split("\t")[8] for line in unfiltered if "\tgene\t" in line] == [
+        "ID=gene1",
+        "ID=gene3",
+    ]

@@ -49,6 +49,11 @@ different types of organisms. Default: plant. Options: plant, animal.
 * `--allow-u12-introns` - Flag. Also allow U12-type AT-AC introns during frame-aware decoding, in addition to the
 default GT-AG/GC-AG. These are real but rare; enabling this roughly doubles the intron state count and slows
 decoding accordingly. Ignored unless `--input-fasta` is set.
+* `--save-sequences` - Flag. Also save the base-level predictions the intervals were decoded from, under `/sequences` in
+the output zarr. Nothing in the pipeline reads them (`export_gff.py` uses only `/intervals`), and keeping them needs
+memory for the whole chromosome. Without this flag, plain Viterbi decoding reads the predictions one segment at a time,
+so memory use does not grow with chromosome length. Frame-aware decoding (`--input-fasta`) and `--decode-direct` still
+load the whole chromosome.
 
 ### Next Step
 

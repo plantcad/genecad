@@ -555,10 +555,31 @@ def _load_tokenizer(tokenizer_path: str) -> Tokenizer:
         specials=list(FASTA_OOV_TOKENS),
     )
     logger.info(f"Vectorizing token map: {token_map}")
-    token_map = {k.encode("utf-8"): v for k, v in token_map.items()}
-    tokenizer = np.vectorize(lambda x: token_map.get(x, -1))
+    return ByteTokenizer(token_map)
 
-    return tokenizer
+
+COUNT_BLOCK = 1 << 24
+
+
+class ByteTokenizer:
+    """Map single-byte tokens to their ids through a 256-entry table; other bytes are -1.
+
+    Gives the same int64 ids as applying the token map to each base, without a Python
+    call per base or the temporary object arrays that would take.
+    """
+
+    def __init__(self, token_map: dict[str, int]):
+        self.table = np.full(256, -1, dtype=np.int64)
+        for token, token_id in token_map.items():
+            encoded = token.encode("utf-8")
+            if len(encoded) == 1:
+                self.table[encoded[0]] = token_id
+
+    def __call__(self, seq: npt.NDArray, out: npt.NDArray | None = None) -> npt.NDArray:
+        codes = seq.view(np.uint8)
+        if out is None:
+            return np.take(self.table, codes)
+        return np.take(self.table, codes, out=out)
 
 
 def _write_chromosome_zarr(
@@ -578,19 +599,18 @@ def _write_chromosome_zarr(
     caller handles atomicity for the whole store, once, after every group has
     been written (see `extract_fasta_file`).
     """
-    # Convert sequences to arrays
-    seq_str = str(record.seq)
-    seq_array = np.array(list(seq_str), dtype="S1")
-    seq_mask = np.char.isupper(seq_array)
-    rev_comp = str(record.seq.complement())
-    rev_array = np.array(list(rev_comp), dtype="S1")
-    rev_mask = np.char.isupper(rev_array)
-    chrom_length = len(seq_str)
-
-    seq_arrays = np.vstack([seq_array, rev_array])
-    assert seq_arrays.shape == (2, chrom_length)
-    seq_masks = np.vstack([seq_mask, rev_mask])
-    assert seq_masks.shape == (2, chrom_length)
+    # Convert sequences to arrays, one byte per base. Each strand is copied straight
+    # into its row: a list of characters would take 8 bytes per base.
+    chrom_length = len(record.seq)
+    seq_arrays = np.empty((2, chrom_length), dtype="S1")
+    seq_masks = np.empty((2, chrom_length), dtype=bool)
+    for row, strand_seq in enumerate((record.seq, record.seq.complement())):
+        seq_arrays[row] = np.frombuffer(bytes(strand_seq), dtype="S1")
+        codes = seq_arrays[row].view(np.uint8)
+        # Upper case ASCII letters, as np.char.isupper gives for single bytes
+        np.greater_equal(codes, ord("A"), out=seq_masks[row])
+        seq_masks[row] &= codes <= ord("Z")
+    seq_array, rev_array = seq_arrays
 
     # Create dataset with base sequences
     logger.info(f"[species={species_id}] Creating dataset...")
@@ -609,35 +629,52 @@ def _write_chromosome_zarr(
     # Add tokenized sequences if tokenizer provided
     if tokenizer:
         # Tokenize sequences for both strands
-        input_ids = []
+        input_ids = np.empty((2, chrom_length), dtype=np.int64)
 
         for i, seq in enumerate([seq_array, rev_array]):
             strand = ["forward", "reverse"][i]
             logger.info(
                 f"[species={species_id}] Tokenizing {strand} strand: {''.join(np.char.decode(seq[:64]))} ..."
             )
-            token_ids = tokenizer(seq)
+            if isinstance(tokenizer, ByteTokenizer):
+                tokenizer(seq, out=input_ids[i])
+            else:
+                input_ids[i] = tokenizer(seq)
+            # Counted per letter, in blocks, so that no copy of the ids is made;
+            # each letter has one id.
+            codes = seq.view(np.uint8)
+            by_code = np.zeros(256, dtype=np.int64)
+            for start in range(0, len(codes), COUNT_BLOCK):
+                by_code += np.bincount(
+                    codes[start : start + COUNT_BLOCK], minlength=256
+                )
+            present = np.flatnonzero(by_code)
+            letters = present.astype(np.uint8).view("S1")
+            counts = by_code[present]
+            letter_ids = (
+                np.asarray(tokenizer(letters)) if len(letters) else np.array([], int)
+            )
+            frequencies: dict[int, int] = {}
+            for token_id, count in zip(letter_ids.tolist(), counts.tolist()):
+                frequencies[token_id] = frequencies.get(token_id, 0) + count
             logger.info(
-                f"[species={species_id}] Token ID frequencies: {pd.Series(token_ids).value_counts().to_dict()}"
+                f"[species={species_id}] Token ID frequencies: "
+                f"{dict(sorted(frequencies.items(), key=lambda item: -item[1]))}"
             )
             # Fail on presence of any tokens not explicitly defined in the tokenizer
             # or added as a special case by FASTA_OOV_TOKENS
-            if np.any(token_ids < 0):
+            if np.any(letter_ids < 0):
                 bad_tokens = pd.Series(
-                    # pyrefly: ignore  # bad-argument-type
-                    np.char.decode(token_ids[token_ids < 0])
-                ).value_counts()
+                    counts[letter_ids < 0],
+                    index=np.char.decode(letters[letter_ids < 0], "latin-1"),
+                ).sort_values(ascending=False)
                 raise ValueError(
                     f"Found {len(bad_tokens)} unmapped tokens in "
                     f"{strand} strand for {species_id}/{chrom_id}; "
                     f"Frequencies:\n{bad_tokens.head(15)}"
                 )
-            assert token_ids.shape == (chrom_length,)
-            input_ids.append(token_ids)
 
         # Add tokenized data to dataset
-        input_ids = np.vstack(input_ids)
-        assert input_ids.shape == (2, chrom_length)
         ds["sequence_input_ids"] = (["strand", "sequence"], input_ids)
 
     # Set chunking and save
@@ -648,24 +685,38 @@ def _write_chromosome_zarr(
         # without disturbing the others written in this same pass over the
         # FASTA file.
         with atomic_output_path(target_path) as tmp_target_path:
-            ds.to_zarr(
-                tmp_target_path,
-                group=f"{species_id}/{chrom_id}",
-                zarr_format=2,
-                consolidated=True,
-                mode="w",
+            _write_in_chunks(
+                ds, tmp_target_path, f"{species_id}/{chrom_id}", chunk_size
             )
     else:
         # All chromosomes share one store as separate groups, so it can only
         # be promoted atomically once as a whole by the caller (see
         # extract_fasta_file), not per group here.
-        ds.to_zarr(
-            target_path,
-            group=f"{species_id}/{chrom_id}",
-            zarr_format=2,
-            consolidated=True,
-            mode="w",
-        )
+        _write_in_chunks(ds, target_path, f"{species_id}/{chrom_id}", chunk_size)
+
+
+def _write_in_chunks(ds: xr.Dataset, path: str, group: str, chunk_size: int) -> None:
+    """Write `ds` one chunk of the sequence dimension at a time.
+
+    Writing it whole makes the Zarr encoder copy every array at once, which costs
+    more memory than the arrays themselves. Appending chunk-sized blocks gives the
+    same store.
+    """
+    length = ds.sizes["sequence"]
+    for start in range(0, max(length, 1), chunk_size):
+        block = ds.isel(sequence=slice(start, start + chunk_size))
+        if start == 0:
+            block.to_zarr(path, group=group, zarr_format=2, consolidated=True, mode="w")
+        else:
+            for variable in block.variables.values():
+                variable.encoding.pop("chunks", None)
+            block.to_zarr(
+                path,
+                group=group,
+                zarr_format=2,
+                consolidated=True,
+                append_dim="sequence",
+            )
 
 
 def _extract_fasta_sequences(

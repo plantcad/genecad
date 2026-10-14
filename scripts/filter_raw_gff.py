@@ -169,33 +169,21 @@ def filter_to_valid_genes(
     mrnas = features[features["type"] == GffFeatureType.MRNA.value]
     logger.info(f"Found {len(mrnas)} mRNA features")
 
-    # Create index of parent -> children
-    features_by_parent = features.set_index("parent")
-
-    # Identify which mRNAs have the required features
-    valid_mrnas = set()
-    for mrna_id in mrnas["id"].dropna():
-        # Check if mRNA has any children
-        if mrna_id in features_by_parent.index:
-            # Get all children of this mRNA using the index
-            children = features_by_parent.loc[[mrna_id]]
-
-            # Check if it has all required feature types
-            has_cds = (children["type"] == GffFeatureType.CDS.value).any()
-
-            if require_utrs:
-                has_five_prime = (
-                    children["type"] == GffFeatureType.FIVE_PRIME_UTR.value
-                ).any()
-                has_three_prime = (
-                    children["type"] == GffFeatureType.THREE_PRIME_UTR.value
-                ).any()
-
-                if has_five_prime and has_cds and has_three_prime:
-                    valid_mrnas.add(mrna_id)
-            else:
-                if has_cds:
-                    valid_mrnas.add(mrna_id)
+    # Identify which mRNAs have the required features: an mRNA has a feature type
+    # when one of the rows of that type has the mRNA as its parent.
+    required = [GffFeatureType.CDS.value]
+    if require_utrs:
+        required += [
+            GffFeatureType.FIVE_PRIME_UTR.value,
+            GffFeatureType.THREE_PRIME_UTR.value,
+        ]
+    mrna_ids = mrnas["id"].dropna()
+    complete = pd.Series(True, index=mrna_ids.index)
+    for feature_type in required:
+        complete &= mrna_ids.isin(
+            features.loc[features["type"] == feature_type, "parent"].dropna()
+        )
+    valid_mrnas = set(mrna_ids[complete])
 
     # Identify invalid mRNAs
     invalid_mrnas = set(mrnas["id"].dropna()) - valid_mrnas
@@ -290,6 +278,51 @@ def filter_to_min_gene_length(features: pd.DataFrame, min_length: int) -> pd.Dat
     return features
 
 
+def update_boundaries(
+    features: pd.DataFrame, genes: pd.DataFrame, mrnas: pd.DataFrame
+) -> tuple[pd.DataFrame, int, int]:
+    """Fit each gene's mRNAs to their remaining children, then each gene to its mRNAs.
+
+    `genes` and `mrnas` are the gene and mRNA rows of `features`. Returns the updated
+    features and the number of genes and mRNAs whose boundaries changed. Computed with
+    one grouping per level, so the time grows with the number of rows, not with the
+    number of genes times the number of rows.
+    """
+    features = features.copy()
+
+    def extents(rows: pd.DataFrame) -> pd.DataFrame:
+        return rows.groupby("parent", sort=False).agg(
+            start=("start", "min"), end=("end", "max")
+        )
+
+    def assign(ids, extent: pd.DataFrame) -> None:
+        rows = features["id"].isin(ids)
+        for column in ("start", "end"):
+            features.loc[rows, column] = features.loc[rows, "id"].map(extent[column])
+
+    # mRNAs of a gene that have children, compared with the first row of their ID
+    children = extents(features)
+    mrna_ids = mrnas.loc[mrnas["parent"].isin(genes["id"].dropna()), "id"]
+    mrna_ids = mrna_ids[mrna_ids.isin(children.index)].drop_duplicates()
+    first = features[~features["id"].duplicated()].set_index("id")
+    new = children.loc[mrna_ids]
+    old = first.loc[mrna_ids]
+    changed = (new["start"].to_numpy() != old["start"].to_numpy()) | (
+        new["end"].to_numpy() != old["end"].to_numpy()
+    )
+    assign(mrna_ids[changed], children)
+
+    # Genes, compared with their own rows before any update
+    spans = extents(features[features["type"] == GffFeatureType.MRNA.value])
+    with_mrnas = genes[genes["id"].isin(spans.index)]
+    span = spans.loc[with_mrnas["id"]]
+    gene_changed = (span["start"].to_numpy() != with_mrnas["start"].to_numpy()) | (
+        span["end"].to_numpy() != with_mrnas["end"].to_numpy()
+    )
+    assign(with_mrnas.loc[gene_changed, "id"], spans)
+    return features, int(gene_changed.sum()), int(changed.sum())
+
+
 def filter_to_min_feature_length(
     features: pd.DataFrame, feature_types: list[str], min_length: int
 ) -> pd.DataFrame:
@@ -360,66 +393,9 @@ def filter_to_min_feature_length(
         total_genes = len(genes)
         total_transcripts = len(mrnas)
 
-        for _, gene in genes.iterrows():
-            gene_id = gene["id"]
-            original_gene_start = gene["start"]
-            original_gene_end = gene["end"]
-
-            # Find all features belonging to this gene (direct children and grandchildren via mRNAs)
-            gene_children = features_filtered[features_filtered["parent"] == gene_id]
-            gene_mrna_ids = gene_children[
-                gene_children["type"] == GffFeatureType.MRNA.value
-            ]["id"].tolist()
-
-            # First, update mRNA boundaries for this gene
-            for mrna_id in gene_mrna_ids:
-                mrna_features = features_filtered[
-                    features_filtered["parent"] == mrna_id
-                ]
-                if not mrna_features.empty:
-                    original_mrna = features_filtered[
-                        features_filtered["id"] == mrna_id
-                    ].iloc[0]
-                    original_mrna_start = original_mrna["start"]
-                    original_mrna_end = original_mrna["end"]
-
-                    mrna_start = mrna_features["start"].min()
-                    mrna_end = mrna_features["end"].max()
-
-                    # Update mRNA boundaries and track if changed
-                    if (
-                        mrna_start != original_mrna_start
-                        or mrna_end != original_mrna_end
-                    ):
-                        transcripts_updated += 1
-                        features_filtered.loc[
-                            features_filtered["id"] == mrna_id, "start"
-                        ] = mrna_start
-                        features_filtered.loc[
-                            features_filtered["id"] == mrna_id, "end"
-                        ] = mrna_end
-
-            # Now update gene boundaries based on updated mRNA boundaries
-            updated_gene_children = features_filtered[
-                features_filtered["parent"] == gene_id
-            ]
-            updated_mrnas = updated_gene_children[
-                updated_gene_children["type"] == GffFeatureType.MRNA.value
-            ]
-
-            if not updated_mrnas.empty:
-                new_start = updated_mrnas["start"].min()
-                new_end = updated_mrnas["end"].max()
-
-                # Update gene boundaries and track if changed
-                if new_start != original_gene_start or new_end != original_gene_end:
-                    genes_updated += 1
-                    features_filtered.loc[
-                        features_filtered["id"] == gene_id, "start"
-                    ] = new_start
-                    features_filtered.loc[features_filtered["id"] == gene_id, "end"] = (
-                        new_end
-                    )
+        features_filtered, genes_updated, transcripts_updated = update_boundaries(
+            features_filtered, genes, mrnas
+        )
     else:
         total_genes = int(
             (features_filtered["type"] == GffFeatureType.GENE.value).sum()

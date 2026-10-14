@@ -3,6 +3,7 @@ import json
 import logging
 import multiprocessing as mp
 import os
+import numpy as np
 import tqdm
 from typing import Literal
 from pydantic import BaseModel, Field, field_validator, ValidationInfo
@@ -65,16 +66,69 @@ class GffRecord(BaseModel):
         )
 
 
+def feature_index(features: pd.DataFrame) -> dict:
+    """Positions of the features of each strand ordered by start, for range lookups.
+
+    Features that end before they start cannot be found by their start; they are
+    listed apart and checked one by one.
+    """
+    starts = features["start"].to_numpy()
+    stops = features["stop"].to_numpy()
+    with np.errstate(invalid="ignore"):
+        ordered = stops >= starts
+    index: dict = {"stops": stops, "unordered": np.flatnonzero(~ordered)}
+    for strand, positions in features.groupby("strand", sort=False).indices.items():
+        positions = positions[ordered[positions]]
+        positions = positions[np.argsort(starts[positions], kind="stable")]
+        index[strand] = (starts[positions], positions)
+    return index
+
+
+def features_within(
+    transcript_row: pd.Series, all_features: pd.DataFrame, index: dict
+) -> pd.DataFrame:
+    """The features on the transcript's strand that lie within its bounds, in the
+    order of `all_features`."""
+    strand, start, stop = (
+        transcript_row["strand"],
+        transcript_row["start"],
+        transcript_row["stop"],
+    )
+    found = np.array([], dtype=np.intp)
+    if strand in index:
+        starts, positions = index[strand]
+        # start <= stop <= transcript stop, so the start is within the transcript too
+        candidates = positions[
+            np.searchsorted(starts, start, side="left") : np.searchsorted(
+                starts, stop, side="right"
+            )
+        ]
+        found = candidates[index["stops"][candidates] <= stop]
+    unordered = index["unordered"]
+    if len(unordered):
+        rows = all_features.iloc[unordered]
+        found = np.concatenate(
+            [
+                found,
+                unordered[
+                    (
+                        (rows["strand"] == strand)
+                        & (rows["start"] >= start)
+                        & (rows["stop"] <= stop)
+                    ).to_numpy()
+                ],
+            ]
+        )
+    return all_features.iloc[np.sort(found)]
+
+
 def process_single_transcript(
-    transcript_row: pd.Series, all_features: pd.DataFrame
+    transcript_row: pd.Series, all_features: pd.DataFrame, index: dict | None = None
 ) -> pd.DataFrame | None:
     # Find features within the transcript bounds on the same strand
-    mask = (
-        (all_features["strand"] == transcript_row["strand"])
-        & (all_features["start"] >= transcript_row["start"])
-        & (all_features["stop"] <= transcript_row["stop"])
-    )
-    matching_features = all_features[mask]
+    if index is None:
+        index = feature_index(all_features)
+    matching_features = features_within(transcript_row, all_features, index)
 
     if not matching_features.empty:
         # Combine transcript and its features, sort by start position
@@ -87,11 +141,13 @@ def process_single_transcript(
 
 
 _TRANSCRIPT_WORKER_FEATURES: pd.DataFrame | None = None
+_TRANSCRIPT_WORKER_INDEX: dict | None = None
 
 
 def _init_transcript_worker(all_features: pd.DataFrame) -> None:
-    global _TRANSCRIPT_WORKER_FEATURES
+    global _TRANSCRIPT_WORKER_FEATURES, _TRANSCRIPT_WORKER_INDEX
     _TRANSCRIPT_WORKER_FEATURES = all_features
+    _TRANSCRIPT_WORKER_INDEX = feature_index(all_features)
 
 
 def _process_single_transcript_worker(
@@ -100,7 +156,9 @@ def _process_single_transcript_worker(
     if _TRANSCRIPT_WORKER_FEATURES is None:
         raise RuntimeError("Transcript worker was not initialized with features")
     transcript_row = pd.Series(transcript_row_dict)
-    return process_single_transcript(transcript_row, _TRANSCRIPT_WORKER_FEATURES)
+    return process_single_transcript(
+        transcript_row, _TRANSCRIPT_WORKER_FEATURES, _TRANSCRIPT_WORKER_INDEX
+    )
 
 
 def _create_gff_attributes(id: str, parent_id: str | None = None) -> str:
@@ -170,8 +228,9 @@ def group_intervals_by_transcript(
     transcript_rows = [row.to_dict() for _, row in transcript_intervals.iterrows()]
 
     if cpu_workers <= 1 or len(transcript_rows) == 0:
+        index = feature_index(feature_intervals)
         results = [
-            process_single_transcript(pd.Series(row), feature_intervals)
+            process_single_transcript(pd.Series(row), feature_intervals, index)
             for row in tqdm.tqdm(
                 transcript_rows,
                 total=len(transcript_rows),

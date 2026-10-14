@@ -60,8 +60,11 @@ The repair is deliberately constrained so that it cannot invent gene structure:
     experimentation; the raw prediction is the safer default.
 
 Transcripts that cannot be repaired under these rules are *not* forced into an
-ORF.  They are passed through unchanged and flagged (partial=true, orf_issue=…,
-plus GFF3 start_range / end_range) so downstream steps can filter them.
+ORF.  By default they are left out of the output: on maize NAM, 99% of the tiny
+(<= 10 aa) genes in the v0.5.0 output were such partial transcripts, and dropping
+them removed no correctly predicted gene.  With --keep-partial they are passed
+through unchanged and flagged (partial=true, orf_issue=..., plus GFF3 start_range /
+end_range) so downstream steps can filter them.
 
 Usage
 -----
@@ -365,6 +368,8 @@ def is_complete_orf(seq: str, begin: int, stop: int, min_protein_length: int) ->
     length = stop - begin
     if length % 3 != 0 or length < 3 * (min_protein_length + 1):
         return False
+    if any(base not in "ACGT" for base in seq[begin:stop]):
+        return False
     if seq[begin : begin + 3] != START_CODON:
         return False
     if seq[stop - 3 : stop] not in STOP_CODONS:
@@ -519,7 +524,9 @@ def find_best_start_by_kozak(
             # later) in-frame stop than the original -- it is not a
             # different start for the same ORF, it is a different ORF.
             continue
-        if stop - begin < 3 * (min_protein_length + 1):
+        # An upstream start can extend the CDS across unknown UTR bases that
+        # were outside the original ORF and outside either Kozak window.
+        if not is_complete_orf(seq, begin, stop, min_protein_length):
             continue
         if abs(stop - cds_stop) > max_shift:
             continue
@@ -627,9 +634,7 @@ def repair_transcript(
 
     missing_start = seq[begin : begin + 3] != START_CODON
     missing_stop = seq[stop - 3 : stop] not in STOP_CODONS
-    ambiguous = "N" in seq[begin:stop]
-
-    if not ambiguous and is_complete_orf(seq, begin, stop, min_protein_length):
+    if is_complete_orf(seq, begin, stop, min_protein_length):
         if (
             fix_weak_starts
             and first_exon_length(transcript, begin, stop) < weak_start_threshold
@@ -672,7 +677,7 @@ def repair_transcript(
                 return Result("complete", issue="weak_kozak_support"), None
         return Result("complete"), None
 
-    if "N" in seq:
+    if any(base not in "ACGT" for base in seq):
         # An ORF cannot be verified across an assembly gap, and picking a start
         # or stop codon adjacent to one would be guesswork.
         return (
@@ -894,6 +899,7 @@ def fix_orf(
     kozak_margin: float = 3.0,
     weak_kozak_threshold: float = 5.0,
     calibrate_margin: bool = True,
+    keep_partial: bool = False,
 ) -> Counter:
     logger.info(f"Reading GFF {input_gff}")
     header, records = read_gff(input_gff)
@@ -993,14 +999,32 @@ def fix_orf(
             if result.missing_stop:
                 mrna.attributes["end_range"] = f"{mrna.end},."
             parent = by_id.get(mrna.parent or "")
-            if parent is not None and parent.type == GENE:
+            if parent is not None and parent.type == GENE and keep_partial:
                 parent.attributes["partial"] = "true"
+
+    # Unless keep_partial is set, partial transcripts (and genes left with none)
+    # are removed rather than flagged; they are still listed in the report.
+    dropped: set[str] = set()
+    if not keep_partial:
+        dropped = {m for m, r in results.items() if r.status == "partial"}
+        stats["dropped"] = len(dropped)
+        kept_parents = {
+            t.mrna.parent for m, t in transcripts.items() if m not in dropped
+        }
+        dropped |= {
+            t.mrna.parent or ""
+            for m, t in transcripts.items()
+            if m in dropped and t.mrna.parent not in kept_parents
+        }
+        dropped.discard("")
 
     output: list[Record] = []
     replaced_parents = set(replacements)
     for record in records:
         if record.parent in replaced_parents and record.type in EXONIC_TYPES:
             continue  # superseded by regenerated features
+        if record.id in dropped or record.parent in dropped:
+            continue
         output.append(record)
     for mrna_id, new_records in replacements.items():
         output.extend(new_records)
@@ -1045,6 +1069,8 @@ def fix_orf(
         f"({100 * stats['complete'] / max(total, 1):.1f}% -> "
         f"{100 * valid / max(total, 1):.1f}%)"
     )
+    if not keep_partial:
+        logger.info(f"  dropped (partial): {stats['dropped']}")
     issues = {k[6:]: v for k, v in stats.items() if k.startswith("issue:")}
     if issues:
         # Not all issues mean "unrepaired": weak_start_kozak is a repair
@@ -1140,6 +1166,13 @@ def main() -> None:
         "silently.",
     )
     parser.add_argument(
+        "--keep-partial",
+        action="store_true",
+        help="Keep transcripts that cannot be repaired, flagged partial=true, "
+        "instead of leaving them out of the output along with genes left with no "
+        "transcript. Dropped transcripts are still listed in --report.",
+    )
+    parser.add_argument(
         "--report",
         default=None,
         help="Optional TSV path for per-transcript status output",
@@ -1159,6 +1192,7 @@ def main() -> None:
         kozak_margin=args.kozak_margin,
         weak_kozak_threshold=args.weak_kozak_threshold,
         calibrate_margin=args.calibrate_margin,
+        keep_partial=args.keep_partial,
     )
 
 
