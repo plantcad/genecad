@@ -1056,35 +1056,37 @@ echo "  Effective batch: $((BATCH_SIZE * ACCUM_GRAD * NUM_GPUS))"
 echo "  Output:         $OUTPUT_DIR"
 echo ""
 
-run_python scripts/train.py \
-  --train-dataset "$PREP_DIR/splits/train.zarr" \
-  --val-dataset   "$PREP_DIR/splits/valid.zarr" \
-  --output-dir    "$OUTPUT_DIR" \
-  --base-encoder-path    "$BASE_MODEL" \
-  --base-encoder-frozen  "$BASE_FROZEN" \
-  --architecture         "$ARCHITECTURE" \
-  --head-encoder-layers  $HEAD_LAYERS \
-  --token-embedding-dim  $TOKEN_EMBED_DIM \
-  --batch-size           $BATCH_SIZE \
-  --accumulate-grad-batches $ACCUM_GRAD \
-  --epochs               $EPOCHS \
-  --learning-rate        $LEARNING_RATE \
-  --learning-rate-decay  cosine \
-  --num-workers          $NUM_WORKERS \
-  --prefetch-factor      2 \
-  --gpu                  $NUM_GPUS \
-  --strategy             ddp \
-  --checkpoint-frequency 2000 \
-  --val-check-interval   10000 \
-  --train-eval-frequency 10000 \
-  --limit-val-batches    1.0 \
-  --log-frequency        1 \
-  --enable-visualization no \
-  --torch-compile        no \
-  --auto-class-weights   "$AUTO_CLASS_WEIGHTS" \
-  --project-name         "$PROJECT_NAME" \
-  --run-name             "$RUN_NAME" \
-  2>&1 | tee "$OUTPUT_DIR/training.log"
+{
+  echo "GeneCAD $(genecad_version "$SCRIPT_DIR")"
+  run_python scripts/train.py \
+    --train-dataset "$PREP_DIR/splits/train.zarr" \
+    --val-dataset   "$PREP_DIR/splits/valid.zarr" \
+    --output-dir    "$OUTPUT_DIR" \
+    --base-encoder-path    "$BASE_MODEL" \
+    --base-encoder-frozen  "$BASE_FROZEN" \
+    --architecture         "$ARCHITECTURE" \
+    --head-encoder-layers  $HEAD_LAYERS \
+    --token-embedding-dim  $TOKEN_EMBED_DIM \
+    --batch-size           $BATCH_SIZE \
+    --accumulate-grad-batches $ACCUM_GRAD \
+    --epochs               $EPOCHS \
+    --learning-rate        $LEARNING_RATE \
+    --learning-rate-decay  cosine \
+    --num-workers          $NUM_WORKERS \
+    --prefetch-factor      2 \
+    --gpu                  $NUM_GPUS \
+    --strategy             ddp \
+    --checkpoint-frequency 2000 \
+    --val-check-interval   10000 \
+    --train-eval-frequency 10000 \
+    --limit-val-batches    1.0 \
+    --log-frequency        1 \
+    --enable-visualization no \
+    --torch-compile        no \
+    --auto-class-weights   "$AUTO_CLASS_WEIGHTS" \
+    --project-name         "$PROJECT_NAME" \
+    --run-name             "$RUN_NAME"
+} 2>&1 | tee "$OUTPUT_DIR/training.log"
 
 echo ""
 echo "============================================"
