@@ -266,13 +266,16 @@ def _generate_training_windows(task):
         strand_data = ds_data.sel(strand=strand_name)
 
         if fixed is not None:
-            # Reuse another run's windows (same order); no re-selection, no mask-based skipping
-            for _, position in [w for w in fixed if w[0] == strand_name]:
+            # Reuse another run's windows (same order); no re-selection, no mask-based skipping.
+            # Load the strand once; slicing many windows from the lazy zarr store is far slower.
+            strand_windows = [w for w in fixed if w[0] == strand_name]
+            strand_loaded = strand_data.compute() if strand_windows else None
+            for _, position in strand_windows:
                 total_windows_processed += 1
                 total_windows_kept += 1
-                window_data = strand_data.isel(
+                window_data = strand_loaded.isel(
                     sequence=slice(position, position + args.window_size)
-                ).compute()
+                )
                 if strand_name == "negative":
                     window_data = window_data.isel(sequence=slice(None, None, -1))
                 batch_samples.append(
