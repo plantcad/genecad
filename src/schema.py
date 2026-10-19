@@ -39,6 +39,7 @@ class FilterReason(StrEnum):
     OVERLAPPING_FEATURES = "overlapping_features"
     NO_CANONICAL_TRANSCRIPT = "no_canonical_transcript"
     MULTIPLE_CANONICAL_TRANSCRIPTS = "multiple_canonical_transcripts"
+    REVISION_SELECTION = "revision_selection"
 
 
 class SentinelType(StrEnum):

@@ -94,6 +94,47 @@ def _write_training_window_batch(
     )
 
 
+def _build_sample(window_data, species_id, chrom_id, strand_name, position) -> dict:
+    """Turn one (already strand-oriented) window into a training sample."""
+    window_valid_mask = window_data.label_masks.values
+    # Extract BILUO labels for this window
+    window_tag_labels_masked = window_data.tag_labels_masked.values
+    window_tag_labels = window_data.tag_labels.values
+    # Make feature_labels 2D with argmax; check that at least one
+    # feature is present at each position first to avoid ambiguity
+    # w/ argmax of 0 when all features 0 vs 0 when the first feature is present
+    assert (window_data.feature_labels.sum(dim="feature") > 0).all().item()
+    window_feature_labels = window_data.feature_labels.argmax(dim="feature").values
+
+    # Ensure that the mask is consistent with sentinel values in the masked labels
+    assert ((window_tag_labels_masked >= 0) == window_valid_mask).all()
+    return {
+        "input_ids": window_data.sequence_input_ids.values,
+        "tag_labels_masked": window_tag_labels_masked,
+        "tag_labels": window_tag_labels,
+        "feature_labels": window_feature_labels,
+        "soft_mask": window_data.sequence_masks.values,
+        "label_mask": window_valid_mask,
+        "species": species_id,
+        "chromosome": chrom_id,
+        "strand": strand_name,
+        "position": position,
+    }
+
+
+def _fixed_windows(windows_from: str, species_id: str, chrom_id: str) -> list[tuple[str, int]]:
+    """(strand, position) of every window another run kept for this chromosome, in its order.
+
+    Lets several label sets (e.g. training-data selections) share one window universe:
+    windows are not re-selected from the labels and not dropped for their mask fraction.
+    """
+    try:
+        ref = xr.open_zarr(windows_from, group=f"{species_id}/{chrom_id}")
+    except (FileNotFoundError, KeyError):
+        return []
+    return list(zip(ref["strand"].values.tolist(), ref["position"].values.tolist()))
+
+
 def _create_sequence_partitions(
     strand_data: xr.Dataset,
     min_partition_length: int,
@@ -218,9 +259,39 @@ def _generate_training_windows(task):
     all_window_stats = []
 
     # Process both strands
+    fixed = _fixed_windows(args.windows_from, species_id, chrom_id) if args.windows_from else None
+
     for strand_name in ds.strand.values:
         # Extract strand data once (keep as lazy arrays)
         strand_data = ds_data.sel(strand=strand_name)
+
+        if fixed is not None:
+            # Reuse another run's windows (same order); no re-selection, no mask-based skipping
+            for _, position in [w for w in fixed if w[0] == strand_name]:
+                total_windows_processed += 1
+                total_windows_kept += 1
+                window_data = strand_data.isel(
+                    sequence=slice(position, position + args.window_size)
+                ).compute()
+                if strand_name == "negative":
+                    window_data = window_data.isel(sequence=slice(None, None, -1))
+                batch_samples.append(
+                    _build_sample(window_data, species_id, chrom_id, strand_name, position)
+                )
+                if len(batch_samples) >= args.chunk_size:
+                    _write_training_window_batch(
+                        samples=batch_samples,
+                        output_path=args.output,
+                        species_id=species_id,
+                        chrom_id=chrom_id,
+                        feature_class_map=feature_class_map,
+                        tag_class_map=tag_class_map,
+                        chunk_size=args.chunk_size,
+                        total_samples_written=total_samples_generated,
+                    )
+                    total_samples_generated += len(batch_samples)
+                    batch_samples = []
+            continue
 
         # Create sequence partitions based on intergenic regions
         partitions = _create_sequence_partitions(
@@ -287,33 +358,13 @@ def _generate_training_windows(task):
 
                 total_windows_kept += 1
 
-                # Create sample
-                # Extract BILUO labels for this window
-                window_tag_labels_masked = window_data.tag_labels_masked.values
-                window_tag_labels = window_data.tag_labels.values
-                # Make feature_labels 2D with argmax; check that at least one
-                # feature is present at each position first to avoid ambiguity
-                # w/ argmax of 0 when all features 0 vs 0 when the first feature is present
-                assert (window_data.feature_labels.sum(dim="feature") > 0).all().item()
-                window_feature_labels = window_data.feature_labels.argmax(
-                    dim="feature"
-                ).values
-
-                # Ensure that the mask is consistent with sentinel values in the masked labels
-                assert ((window_tag_labels_masked >= 0) == window_valid_mask).all()
-                sample = {
-                    "input_ids": window_data.sequence_input_ids.values,
-                    "tag_labels_masked": window_tag_labels_masked,
-                    "tag_labels": window_tag_labels,
-                    "feature_labels": window_feature_labels,
-                    "soft_mask": window_data.sequence_masks.values,
-                    "label_mask": window_valid_mask,
-                    "species": species_id,
-                    "chromosome": chrom_id,
-                    "strand": strand_name,
-                    "position": partition_start
-                    + w_start,  # Adjust position to global coordinates
-                }
+                sample = _build_sample(
+                    window_data,
+                    species_id,
+                    chrom_id,
+                    strand_name,
+                    partition_start + w_start,  # Adjust position to global coordinates
+                )
 
                 batch_samples.append(sample)
 
@@ -713,6 +764,12 @@ def main():
     windows_parser = subparsers.add_parser(
         "generate_training_windows",
         help="Generate training windows from sequence datasets",
+    )
+    windows_parser.add_argument(
+        "--windows-from",
+        default=None,
+        help="Output zarr of a previous generate_training_windows run; reuse its windows "
+        "(species/chromosome/strand/position, same order) instead of selecting new ones",
     )
     windows_parser.add_argument(
         "--input", required=True, help="Path to input Zarr dataset with sequence data"
