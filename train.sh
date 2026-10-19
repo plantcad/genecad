@@ -41,6 +41,7 @@
 #   --hf-upload-repo ID     Upload artifacts to Hugging Face repo (optional)
 #   --hf-upload-type TYPE   model or dataset repo type (default: model)
 #   --hf-upload-path PATH   Path inside HF repo (default: run name)
+#   -V, --version           Show the GeneCAD version and exit
 #   -h, --help              Show this message
 #
 # Requirements:
@@ -51,11 +52,12 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$(realpath "${BASH_SOURCE[0]}")")" && pwd)"
+source "$SCRIPT_DIR/scripts/genecad_version.sh"
 cd "$SCRIPT_DIR"
 
 # ── Argument parsing ──────────────────────────────────────────────────────────
 usage() {
-  sed -n '3,45p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '3,/^# Requirements:/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'
     exit 0
 }
 
@@ -122,6 +124,7 @@ while [[ $# -gt 0 ]]; do
     --hf-upload-repo) HF_UPLOAD_REPO="$2"; shift 2 ;;
     --hf-upload-type) HF_UPLOAD_TYPE="$2"; shift 2 ;;
     --hf-upload-path) HF_UPLOAD_PATH="$2"; shift 2 ;;
+    -V|--version) echo "GeneCAD $(genecad_version "$SCRIPT_DIR")"; exit 0 ;;
     -h|--help) usage ;;
     *) echo "Unknown option: $1"; usage ;;
   esac
@@ -604,6 +607,7 @@ print(f'Uploaded {folder_path} to {repo_id}/{path_in_repo}')
 # ── Banner ────────────────────────────────────────────────────────────────────
 echo "============================================"
 echo " GeneCAD Fine-Tuning"
+echo " Version:     $(genecad_version "$SCRIPT_DIR")"
 echo " Domain:      $DOMAIN"
 echo " Base model:  $BASE_MODEL"
 echo " Species:     $SPECIES_IDS"
@@ -1052,35 +1056,37 @@ echo "  Effective batch: $((BATCH_SIZE * ACCUM_GRAD * NUM_GPUS))"
 echo "  Output:         $OUTPUT_DIR"
 echo ""
 
-run_python scripts/train.py \
-  --train-dataset "$PREP_DIR/splits/train.zarr" \
-  --val-dataset   "$PREP_DIR/splits/valid.zarr" \
-  --output-dir    "$OUTPUT_DIR" \
-  --base-encoder-path    "$BASE_MODEL" \
-  --base-encoder-frozen  "$BASE_FROZEN" \
-  --architecture         "$ARCHITECTURE" \
-  --head-encoder-layers  $HEAD_LAYERS \
-  --token-embedding-dim  $TOKEN_EMBED_DIM \
-  --batch-size           $BATCH_SIZE \
-  --accumulate-grad-batches $ACCUM_GRAD \
-  --epochs               $EPOCHS \
-  --learning-rate        $LEARNING_RATE \
-  --learning-rate-decay  cosine \
-  --num-workers          $NUM_WORKERS \
-  --prefetch-factor      2 \
-  --gpu                  $NUM_GPUS \
-  --strategy             ddp \
-  --checkpoint-frequency 2000 \
-  --val-check-interval   10000 \
-  --train-eval-frequency 10000 \
-  --limit-val-batches    1.0 \
-  --log-frequency        1 \
-  --enable-visualization no \
-  --torch-compile        no \
-  --auto-class-weights   "$AUTO_CLASS_WEIGHTS" \
-  --project-name         "$PROJECT_NAME" \
-  --run-name             "$RUN_NAME" \
-  2>&1 | tee "$OUTPUT_DIR/training.log"
+{
+  echo "GeneCAD $(genecad_version "$SCRIPT_DIR")"
+  run_python scripts/train.py \
+    --train-dataset "$PREP_DIR/splits/train.zarr" \
+    --val-dataset   "$PREP_DIR/splits/valid.zarr" \
+    --output-dir    "$OUTPUT_DIR" \
+    --base-encoder-path    "$BASE_MODEL" \
+    --base-encoder-frozen  "$BASE_FROZEN" \
+    --architecture         "$ARCHITECTURE" \
+    --head-encoder-layers  $HEAD_LAYERS \
+    --token-embedding-dim  $TOKEN_EMBED_DIM \
+    --batch-size           $BATCH_SIZE \
+    --accumulate-grad-batches $ACCUM_GRAD \
+    --epochs               $EPOCHS \
+    --learning-rate        $LEARNING_RATE \
+    --learning-rate-decay  cosine \
+    --num-workers          $NUM_WORKERS \
+    --prefetch-factor      2 \
+    --gpu                  $NUM_GPUS \
+    --strategy             ddp \
+    --checkpoint-frequency 2000 \
+    --val-check-interval   10000 \
+    --train-eval-frequency 10000 \
+    --limit-val-batches    1.0 \
+    --log-frequency        1 \
+    --enable-visualization no \
+    --torch-compile        no \
+    --auto-class-weights   "$AUTO_CLASS_WEIGHTS" \
+    --project-name         "$PROJECT_NAME" \
+    --run-name             "$RUN_NAME"
+} 2>&1 | tee "$OUTPUT_DIR/training.log"
 
 echo ""
 echo "============================================"

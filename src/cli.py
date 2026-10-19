@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 import argparse
+import importlib.metadata
 import os
 import subprocess
 import sys
+import tomllib
 import urllib.request
 from pathlib import Path
 
@@ -16,6 +18,21 @@ def _find_script_dir() -> Path:
     raise FileNotFoundError(
         "predict.sh not found. Re-install the package or run from the repo root."
     )
+
+
+def _genecad_version() -> str:
+    """Return the version in pyproject.toml for a source checkout, or else the
+    version of the installed package."""
+    pyproject = Path(__file__).resolve().parent.parent / "pyproject.toml"
+    if pyproject.exists():
+        with open(pyproject, "rb") as f:
+            version = tomllib.load(f).get("project", {}).get("version")
+        if version:
+            return version
+    try:
+        return importlib.metadata.version("genecad")
+    except importlib.metadata.PackageNotFoundError:
+        return "unknown"
 
 
 def _ensure_example_fasta(cache_dir: Path) -> Path:
@@ -238,6 +255,12 @@ Typical output:
   annotation files that can be opened in genome browsers or used in downstream
   evaluation pipelines.
 """,
+    )
+    parser.add_argument(
+        "-V",
+        "--version",
+        action="version",
+        version=f"GeneCAD {_genecad_version()}",
     )
     parser.add_argument(
         "command",
