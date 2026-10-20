@@ -4,6 +4,7 @@ import time
 import logging
 import torch
 import warnings
+import json
 from torch.utils.data import DataLoader
 from torch import set_float32_matmul_precision
 import xarray as xr
@@ -25,6 +26,12 @@ from src.modeling import (
 from src.logging import rank_zero_logger
 from src.visualization import set_visualization_save_dir
 import numpy as np
+from src.training_protocol import (
+    read_initial_state,
+    restore_initial_state,
+    save_initial_state,
+    state_digest,
+)
 
 logger = rank_zero_logger(logging.getLogger(__name__))
 
@@ -104,6 +111,20 @@ def parse_args(args: Optional[list[str]] = None) -> Args:
     )
     parser.add_argument(
         "--epochs", type=int, default=1, help="Number of epochs for training"
+    )
+    parser.add_argument(
+        "--max-steps",
+        type=int,
+        default=-1,
+        help="Fixed optimizer updates; when positive, overrides the epoch limit",
+    )
+    initialization = parser.add_mutually_exclusive_group()
+    initialization.add_argument(
+        "--initial-state", help="Load shared initial weights (not a trained checkpoint)"
+    )
+    initialization.add_argument(
+        "--export-initial-state",
+        help="Write shared initial weights and exit before training; use U as the reference dataset",
     )
     parser.add_argument(
         "--log-frequency",
@@ -216,6 +237,9 @@ def parse_args(args: Optional[list[str]] = None) -> Args:
         help="Freeze the base encoder during training",
     )
     parser.add_argument(
+        "--base-encoder-revision", help="Pin the foundation model to this HF revision"
+    )
+    parser.add_argument(
         "--torch-compile",
         type=str,
         default="no",
@@ -236,7 +260,22 @@ def parse_args(args: Optional[list[str]] = None) -> Args:
         choices=["yes", "no"],
         help="Automatically compute class weights from the training dataset",
     )
-    return parser.parse_args(args)
+    result = parser.parse_args(args)
+    if result.initial_state and (
+        result.auto_class_weights == "yes" or result.checkpoint
+    ):
+        parser.error(
+            "--initial-state requires --auto-class-weights no and no --checkpoint"
+        )
+    if result.export_initial_state and (
+        result.checkpoint or result.torch_compile == "yes"
+    ):
+        parser.error("export initial weights without --checkpoint or --torch-compile")
+    if result.initial_state and result.torch_compile == "yes":
+        parser.error("shared initialization currently requires --torch-compile no")
+    if result.max_steps == 0 or result.max_steps < -1:
+        parser.error("--max-steps must be positive or -1")
+    return result
 
 
 def sample_transform(ds: xr.Dataset) -> dict:
@@ -263,7 +302,7 @@ def train(args: Args) -> None:
 
     # Set precision and random seed
     set_float32_matmul_precision("medium")
-    L.seed_everything(args.seed)
+    L.seed_everything(args.seed, workers=True)
     logger.info(f"Set random seed to {args.seed}")
 
     # Set visualization save directory with run name
@@ -303,8 +342,16 @@ def train(args: Args) -> None:
         f"Validation dataset loaded with {len(val_dataset)} samples ({len(val_dataset.datasets)} datasets)"
     )
 
-    # Compute dynamic class frequencies if requested
+    initial_state = (
+        read_initial_state(args.initial_state, args.seed)
+        if args.initial_state
+        else None
+    )
+    # Compute dynamic class frequencies only when creating an initialization.
+    # Paired runs instead use the frequencies saved in the shared U artifact.
     token_class_frequencies = None
+    if initial_state is not None:
+        token_class_frequencies = initial_state["config"]["token_class_frequencies"]
     if args.auto_class_weights == "yes":
         logger.info(
             "Computing auto class weights from training dataset... (this may take a minute)"
@@ -378,6 +425,7 @@ def train(args: Args) -> None:
     logger.info(
         f"Initializing model (learning_rate={args.learning_rate}, learning_rate_decay={args.learning_rate_decay})"
     )
+    L.seed_everything(args.seed, workers=True)
     if args.checkpoint and args.checkpoint_type == "model":
         logger.info(f"Loading model from checkpoint: {args.checkpoint}")
         model = GeneClassifier.load_from_checkpoint(
@@ -418,7 +466,9 @@ def train(args: Args) -> None:
             f"Creating new model (architecture={args.architecture}, base_encoder_path={args.base_encoder_path})"
         )
         _base_config = AutoConfig.from_pretrained(
-            args.base_encoder_path, trust_remote_code=True
+            args.base_encoder_path,
+            revision=args.base_encoder_revision,
+            trust_remote_code=True,
         )
         _d_model = _base_config.d_model
         # HNet models store d_model as a list (e.g. [1024])
@@ -434,6 +484,7 @@ def train(args: Args) -> None:
             train_eval_frequency=args.train_eval_frequency,
             head_encoder_layers=args.head_encoder_layers,
             base_encoder_path=args.base_encoder_path,
+            base_encoder_revision=args.base_encoder_revision,
             base_encoder_dim=base_encoder_dim,
             enable_visualization=args.enable_visualization == "yes",
             base_encoder_frozen=args.base_encoder_frozen == "yes",
@@ -448,6 +499,32 @@ def train(args: Args) -> None:
             learning_rate_decay=args.learning_rate_decay,
             torch_compile=args.torch_compile == "yes",
         )
+
+    if args.export_initial_state:
+        digest = save_initial_state(model, args.export_initial_state, args.seed)
+        logger.info(
+            f"Saved shared initialization sha256={digest}; no training performed"
+        )
+        return
+    digest = (
+        restore_initial_state(model, initial_state)
+        if initial_state is not None
+        else state_digest(model.state_dict())
+    )
+    os.makedirs(args.output_dir, exist_ok=True)
+    with open(os.path.join(args.output_dir, "initialization.json"), "w") as fh:
+        json.dump(
+            {
+                "seed": args.seed,
+                "state_sha256": digest,
+                "initial_state": args.initial_state,
+                "base_encoder_revision": args.base_encoder_revision,
+            },
+            fh,
+            indent=2,
+        )
+    # Weight loading must not change the training RNG stream across conditions.
+    L.seed_everything(args.seed, workers=True)
 
     logger.info(f"Model for training:\n{model}")
 
@@ -487,7 +564,8 @@ def train(args: Args) -> None:
     # Initialize trainer
     logger.info("Initializing Lightning Trainer")
     trainer = L.Trainer(
-        max_epochs=args.epochs,
+        max_epochs=-1 if args.max_steps > 0 else args.epochs,
+        max_steps=args.max_steps,
         default_root_dir=args.output_dir,
         log_every_n_steps=args.log_frequency,
         precision="bf16-mixed",
@@ -513,6 +591,10 @@ def train(args: Args) -> None:
         val_dataloaders=valid_loader,
         ckpt_path=args.checkpoint if args.checkpoint_type == "trainer" else None,
     )
+    if args.max_steps > 0 and trainer.global_step != args.max_steps:
+        raise RuntimeError(
+            f"Expected {args.max_steps} optimizer steps, got {trainer.global_step}"
+        )
 
     logger.info(f"Training complete (see {args.output_dir})")
 

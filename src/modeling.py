@@ -663,6 +663,11 @@ class GeneClassifier(L.LightningModule):
         return logits
 
     def _compute_loss(self, batch: Batch) -> Tensor:
+        # A fixed window universe can contain batches with no supervised bases
+        # after selection. CrossEntropyLoss(mean) returns NaN when all labels
+        # are ignored. Keep a zero-valued graph so backward/DDP remains valid.
+        if not batch.masks.any():
+            return batch.logits.sum() * 0.0
         labels = torch.where(batch.masks, batch.labels, IGNORE_INDEX)
         logits, labels = batch.logits.view(-1, self.num_labels), labels.view(-1)
         # Coerce to long to avoid this cross_entropy_loss error with int labels:
