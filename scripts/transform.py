@@ -2,7 +2,7 @@ import pandas as pd
 import argparse
 import os
 import logging
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, fields
 from concurrent.futures import ProcessPoolExecutor
 from typing import cast as cast_type
 from src.dataset import (
@@ -367,9 +367,15 @@ def filter_features(
     # Remove genes excluded by an external selection (e.g. a training-data quality filter)
     selection_filters: list[Filter] = []
     if exclude_genes_path is not None:
-        excluded = pd.read_csv(exclude_genes_path, sep="\t", dtype=str)[["species_id", "gene_id"]]
-        to_exclude = filtered_features.merge(excluded, on=["species_id", "gene_id"], how="inner")
-        selection_filters = create_filters(to_exclude, FilterReason.REVISION_SELECTION.value)
+        excluded = pd.read_csv(exclude_genes_path, sep="\t", dtype=str)[
+            ["species_id", "gene_id"]
+        ]
+        to_exclude = filtered_features.merge(
+            excluded, on=["species_id", "gene_id"], how="inner"
+        )
+        selection_filters = create_filters(
+            to_exclude, FilterReason.REVISION_SELECTION.value
+        )
         filtered_features = apply_filters(filtered_features, selection_filters)
         logger.info(
             f"Excluded {len(selection_filters)} genes listed in {exclude_genes_path} "
@@ -387,7 +393,8 @@ def filter_features(
                 + feature_overlap_filters
                 + selection_filters
             )
-        ]
+        ],
+        columns=[field.name for field in fields(Filter)],
     )
     filtered_genes = total_genes - _gene_count(filtered_features)
 

@@ -144,6 +144,71 @@ def test_shared_initialization_rejects_auto_class_weights():
         )
 
 
+@pytest.mark.parametrize("rank", [0, 1])
+def test_training_exports_shared_initialization_only_on_global_rank_zero(
+    tmp_path, monkeypatch, rank
+):
+    from types import SimpleNamespace
+
+    from scripts import train as training
+
+    class Examples(list):
+        datasets = [None]
+
+    # Exercise the actual train/export branch, without external models, logging
+    # services or a GPU. Dataset iteration is not needed before initialization.
+    monkeypatch.setattr(training, "XarrayDataset", lambda *a, **kw: Examples([None]))
+    monkeypatch.setattr(training, "WandbLogger", lambda **kw: None)
+    monkeypatch.setattr(training, "CSVLogger", lambda **kw: None)
+    monkeypatch.setattr(training, "set_visualization_save_dir", lambda path: None)
+    monkeypatch.setattr(
+        training.AutoConfig,
+        "from_pretrained",
+        lambda *a, **kw: SimpleNamespace(d_model=16),
+    )
+    monkeypatch.setattr(training.rank_zero_only, "rank", rank)
+    for variable in ("RANK", "SLURM_PROCID", "JSM_NAMESPACE_RANK"):
+        monkeypatch.delenv(variable, raising=False)
+    path = tmp_path / "shared.pt"
+    args = training.parse_args(
+        [
+            "--train-dataset",
+            "unused.zarr",
+            "--val-dataset",
+            "unused.zarr",
+            "--output-dir",
+            str(tmp_path / "run"),
+            "--export-initial-state",
+            str(path),
+            "--architecture",
+            "classifier-only",
+            "--token-embedding-dim",
+            "16",
+            "--window-size",
+            "8",
+        ]
+    )
+    args.base_encoder_path = None
+    training.train(args)
+    assert path.exists() == (rank == 0)
+    if rank == 0:
+        from src.training_protocol import read_initial_state
+
+        assert read_initial_state(path, args.seed)["seed"] == args.seed
+
+
+def test_slurm_global_rank_takes_precedence_over_local_zero(monkeypatch):
+    from scripts import train as training
+
+    monkeypatch.delenv("RANK", raising=False)
+    monkeypatch.setenv("LOCAL_RANK", "0")
+    monkeypatch.setenv("SLURM_PROCID", "3")
+    monkeypatch.setattr(training.rank_zero_only, "rank", 0)
+    assert not training._is_global_zero()
+    monkeypatch.setenv("RANK", "0")
+    assert training._is_global_zero()
+
+
 def test_real_lightning_optimizer_updates_with_an_excluded_only_batch():
     import lightning as L
     from torch.utils.data import DataLoader

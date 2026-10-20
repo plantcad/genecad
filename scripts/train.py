@@ -11,6 +11,7 @@ import xarray as xr
 import lightning as L
 from lightning.pytorch.loggers import WandbLogger, CSVLogger
 from lightning.pytorch.callbacks import ModelCheckpoint, LearningRateMonitor, Callback
+from lightning.pytorch.utilities.rank_zero import rank_zero_only
 from argparse import Namespace as Args
 from typing import Optional
 from transformers import AutoConfig
@@ -34,6 +35,17 @@ from src.training_protocol import (
 )
 
 logger = rank_zero_logger(logging.getLogger(__name__))
+
+
+def _is_global_zero() -> bool:
+    if torch.distributed.is_initialized():
+        return torch.distributed.get_rank() == 0
+    # Before Trainer initializes, prefer global launcher ranks to LOCAL_RANK.
+    # A local rank of zero can also belong to a later node in a Slurm job.
+    for variable in ("RANK", "SLURM_PROCID", "JSM_NAMESPACE_RANK"):
+        if variable in os.environ:
+            return int(os.environ[variable]) == 0
+    return rank_zero_only.rank == 0
 
 
 class CheckpointAtValidation(Callback):
@@ -501,10 +513,11 @@ def train(args: Args) -> None:
         )
 
     if args.export_initial_state:
-        digest = save_initial_state(model, args.export_initial_state, args.seed)
-        logger.info(
-            f"Saved shared initialization sha256={digest}; no training performed"
-        )
+        if _is_global_zero():
+            digest = save_initial_state(model, args.export_initial_state, args.seed)
+            logger.info(
+                f"Saved shared initialization sha256={digest}; no training performed"
+            )
         return
     digest = (
         restore_initial_state(model, initial_state)
@@ -512,17 +525,18 @@ def train(args: Args) -> None:
         else state_digest(model.state_dict())
     )
     os.makedirs(args.output_dir, exist_ok=True)
-    with open(os.path.join(args.output_dir, "initialization.json"), "w") as fh:
-        json.dump(
-            {
-                "seed": args.seed,
-                "state_sha256": digest,
-                "initial_state": args.initial_state,
-                "base_encoder_revision": args.base_encoder_revision,
-            },
-            fh,
-            indent=2,
-        )
+    if _is_global_zero():
+        with open(os.path.join(args.output_dir, "initialization.json"), "w") as fh:
+            json.dump(
+                {
+                    "seed": args.seed,
+                    "state_sha256": digest,
+                    "initial_state": args.initial_state,
+                    "base_encoder_revision": args.base_encoder_revision,
+                },
+                fh,
+                indent=2,
+            )
     # Weight loading must not change the training RNG stream across conditions.
     L.seed_everything(args.seed, workers=True)
 

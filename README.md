@@ -247,6 +247,10 @@ The training pipeline is useful for reproducing the training methodology for the
 It can be run using either the command line interface `genecad train`
 or the script `train.sh`. Both methods use the same set of options
 
+For controlled comparisons of training-data selections, the lower-level Python
+scripts also support exclusion masks, a shared window set, shared initialization,
+and fixed optimizer updates. See [Paired training comparisons](docs/training_protocol.md).
+
 > [!NOTE]
 > At the current time, the training pipeline is not set up to add arbitrary new species for fine-tuning
 > or retraining GeneCAD models. To add new species to the training pipeline, modify the train.sh script and add

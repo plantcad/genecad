@@ -5,6 +5,7 @@ import logging
 import os
 from argparse import Namespace as Args
 import xarray as xr
+import zarr
 from concurrent.futures import ProcessPoolExecutor
 from src.dataset import (
     open_datatree,
@@ -122,17 +123,22 @@ def _build_sample(window_data, species_id, chrom_id, strand_name, position) -> d
     }
 
 
-def _fixed_windows(windows_from: str, species_id: str, chrom_id: str) -> list[tuple[str, int]]:
+def _fixed_windows(
+    windows_from: str, species_id: str, chrom_id: str
+) -> list[tuple[str, int]]:
     """(strand, position) of every window another run kept for this chromosome, in its order.
 
     Lets several label sets (e.g. training-data selections) share one window universe:
     windows are not re-selected from the labels and not dropped for their mask fraction.
     """
-    try:
-        ref = xr.open_zarr(windows_from, group=f"{species_id}/{chrom_id}")
-    except (FileNotFoundError, KeyError):
+    group = f"{species_id}/{chrom_id}"
+    # A missing chromosome can legitimately have no reference windows. A missing
+    # store is a configuration error and must not silently produce an empty run.
+    root = zarr.open_group(windows_from, mode="r")
+    if group not in root:
         return []
-    return list(zip(ref["strand"].values.tolist(), ref["position"].values.tolist()))
+    with xr.open_zarr(windows_from, group=group) as ref:
+        return list(zip(ref["strand"].values.tolist(), ref["position"].values.tolist()))
 
 
 def _create_sequence_partitions(
@@ -259,28 +265,67 @@ def _generate_training_windows(task):
     all_window_stats = []
 
     # Process both strands
-    fixed = _fixed_windows(args.windows_from, species_id, chrom_id) if args.windows_from else None
+    fixed = (
+        _fixed_windows(args.windows_from, species_id, chrom_id)
+        if args.windows_from
+        else None
+    )
 
-    for strand_name in ds.strand.values:
-        # Extract strand data once (keep as lazy arrays)
-        strand_data = ds_data.sel(strand=strand_name)
+    if fixed:
+        with xr.open_zarr(args.windows_from, group=group_path) as reference:
+            if reference.sizes["sequence"] != args.window_size:
+                raise ValueError(
+                    f"{prefix} Reference window size differs from --window-size"
+                )
+            for strand, position in fixed:
+                if strand not in {"positive", "negative"}:
+                    raise ValueError(f"{prefix} Invalid reference strand: {strand!r}")
+                if (
+                    not isinstance(position, int)
+                    or position < 0
+                    or position + args.window_size > seq_length
+                ):
+                    raise ValueError(
+                        f"{prefix} Reference window position out of bounds: {position}"
+                    )
 
-        if fixed is not None:
-            # Reuse another run's windows (same order); no re-selection, no mask-based skipping.
-            # Load the strand once; slicing many windows from the lazy zarr store is far slower.
-            strand_windows = [w for w in fixed if w[0] == strand_name]
-            strand_loaded = strand_data.compute() if strand_windows else None
-            for _, position in strand_windows:
-                total_windows_processed += 1
-                total_windows_kept += 1
+            # Follow the reference order, including interleaved strands. Only keep
+            # one complete strand in memory; ordinary references switch once.
+            loaded_strand = None
+            strand_loaded = None
+            reference_batch = np.empty((0, args.window_size), dtype=np.int64)
+            for sample_index, (strand_name, position) in enumerate(fixed):
+                if strand_name != loaded_strand:
+                    strand_loaded = None
+                    strand_loaded = ds_data.sel(strand=strand_name).compute()
+                    loaded_strand = strand_name
+                if sample_index % args.chunk_size == 0:
+                    reference_batch = (
+                        reference["input_ids"]
+                        .isel(
+                            sample=slice(sample_index, sample_index + args.chunk_size)
+                        )
+                        .values
+                    )
                 window_data = strand_loaded.isel(
                     sequence=slice(position, position + args.window_size)
                 )
                 if strand_name == "negative":
                     window_data = window_data.isel(sequence=slice(None, None, -1))
+                if not np.array_equal(
+                    window_data.sequence_input_ids.values,
+                    reference_batch[sample_index % args.chunk_size],
+                ):
+                    raise ValueError(
+                        f"{prefix} DNA differs from reference window at sample {sample_index}"
+                    )
                 batch_samples.append(
-                    _build_sample(window_data, species_id, chrom_id, strand_name, position)
+                    _build_sample(
+                        window_data, species_id, chrom_id, strand_name, position
+                    )
                 )
+                total_windows_processed += 1
+                total_windows_kept += 1
                 if len(batch_samples) >= args.chunk_size:
                     _write_training_window_batch(
                         samples=batch_samples,
@@ -294,6 +339,12 @@ def _generate_training_windows(task):
                     )
                     total_samples_generated += len(batch_samples)
                     batch_samples = []
+
+    for strand_name in ds.strand.values:
+        # Extract strand data once (keep as lazy arrays)
+        strand_data = ds_data.sel(strand=strand_name)
+
+        if fixed is not None:
             continue
 
         # Create sequence partitions based on intergenic regions
@@ -577,6 +628,17 @@ def generate_training_windows(args: Args) -> None:
     logger.info(f"Finding species/contig combinations from {args.input}")
     group_info = list_species_contig_datatree(args.input)
 
+    if args.windows_from:
+        reference_groups = list_species_contig_datatree(args.windows_from)
+        input_groups = {group["group_path"] for group in group_info}
+        for group in reference_groups:
+            with xr.open_zarr(args.windows_from, group=group["group_path"]) as ref:
+                if ref.sizes["sample"] and group["group_path"] not in input_groups:
+                    raise ValueError(
+                        f"Missing input group {group['group_path']} required by reference windows; "
+                        "a chromosome with all genes excluded must retain its labels and masks"
+                    )
+
     logger.info(f"Found {len(group_info)} sequence datasets")
     logger.info(f"Processing {len(group_info)} datasets:")
     for group in group_info:
@@ -664,7 +726,9 @@ def generate_training_splits(args: Args) -> None:
 
     # Fixed order: the zarr listing order is not stable, and the shared RNG below is consumed
     # group by group, so an unsorted order gives a different split on every run.
-    filtered_groups = sorted(filtered_groups, key=lambda gc: (gc[0]["species_id"], gc[0]["chrom_id"]))
+    filtered_groups = sorted(
+        filtered_groups, key=lambda gc: (gc[0]["species_id"], gc[0]["chrom_id"])
+    )
     rng = np.random.RandomState(args.seed)
 
     # Track global sample indices for each split
