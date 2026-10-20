@@ -4,65 +4,70 @@
   "window_size": 8192,
   "gpu": "NVIDIA H100 PCIe",
   "data_role": "bounded_real_revision_annotations_not_formal_corpus",
+  "boundary_mask_size": [
+    944,
+    1240
+  ],
   "effective_batch": 4,
+  "final_update_windows": 2,
   "conditions": {
     "U": {
       "result": "PASS",
       "initial_state_sha256": "ffa787971258276016313f21fddfcf637673e754150ce573631be3474ed0b8f5",
       "windows": 22,
       "optimizer_updates": 6,
-      "loss_min": 0.46493586897850037,
-      "loss_max": 2.7491958141326904,
+      "loss_min": 0.47839924693107605,
+      "loss_max": 2.9449915885925293,
       "backbone_updated": true,
       "head_updated": true,
       "masked_logits_gradient_zero": true,
       "masked_loss_perturbation_invariant": true,
       "all_masked_loss_and_gradient_zero": true,
-      "final_state_sha256": "f54c3172fc3387aa1aef0c3f44390e2e91c690fe8f065ae7c742ec40fd1fb1bd"
+      "final_state_sha256": "ad65bea814b46666669c8decd336ddade72caff5e56610d8b005deaf75ac7706"
     },
     "B": {
       "result": "PASS",
       "initial_state_sha256": "ffa787971258276016313f21fddfcf637673e754150ce573631be3474ed0b8f5",
       "windows": 22,
       "optimizer_updates": 6,
-      "loss_min": 0.15927377343177795,
-      "loss_max": 2.7564756870269775,
+      "loss_min": 0.17018276453018188,
+      "loss_max": 2.9498095512390137,
       "backbone_updated": true,
       "head_updated": true,
       "masked_logits_gradient_zero": true,
       "masked_loss_perturbation_invariant": true,
       "all_masked_loss_and_gradient_zero": true,
-      "final_state_sha256": "1d58da6740c91274d51c6c5b05ef306bc4719d464c6476d4416ab5c97085053f"
+      "final_state_sha256": "9b1a8ac390d6eca0d3ce70c6b467ef3b6dd68d1908b148bb1832e2bf7009d532"
     },
     "M": {
       "result": "PASS",
       "initial_state_sha256": "ffa787971258276016313f21fddfcf637673e754150ce573631be3474ed0b8f5",
       "windows": 22,
       "optimizer_updates": 6,
-      "loss_min": 0.0351206436753273,
-      "loss_max": 3.1867542266845703,
+      "loss_min": 0.030218282714486122,
+      "loss_max": 3.186605930328369,
       "backbone_updated": true,
       "head_updated": true,
       "masked_logits_gradient_zero": true,
       "masked_loss_perturbation_invariant": true,
       "all_masked_loss_and_gradient_zero": true,
-      "final_state_sha256": "f99dfb220ed2aa7f57535a3bfa98ab774af1b5607f62f0dfd62ab9bbcb1d1b37"
+      "final_state_sha256": "ef018803ad793a7a800b5a8026ca0811d848ce10c85598ecfb9b522429f41d1d"
     },
     "R1": {
       "result": "PASS",
       "initial_state_sha256": "ffa787971258276016313f21fddfcf637673e754150ce573631be3474ed0b8f5",
       "windows": 22,
       "optimizer_updates": 6,
-      "loss_min": 0.09445038437843323,
-      "loss_max": 3.4611434936523438,
+      "loss_min": 0.09487402439117432,
+      "loss_max": 3.876239061355591,
       "backbone_updated": true,
       "head_updated": true,
       "masked_logits_gradient_zero": true,
       "masked_loss_perturbation_invariant": true,
       "all_masked_loss_and_gradient_zero": true,
-      "final_state_sha256": "891343f871de428c4ab9d196c02f638c233d9555b0ca1a559d6e3be7aa8670eb"
+      "final_state_sha256": "240d01d68ca096bdc36de5422cca6c0f23fcb248eb267a768900874035c2594e"
     }
   },
-  "elapsed_s": 77.62316282466054,
-  "peak_cuda_bytes": 17701735424
+  "elapsed_s": 62.977434573695064,
+  "peak_cuda_bytes": 17702259712
 }

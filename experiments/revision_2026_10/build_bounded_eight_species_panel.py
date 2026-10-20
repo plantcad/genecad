@@ -193,6 +193,7 @@ def main(root, source, output):
             str(out / "filters.parquet"),
             str(out / "labels.zarr"),
             chunk_size=100_000,
+            boundary_mask_size=(944, 1240),
         )
         samples = []
         label_cache = {}
@@ -280,9 +281,12 @@ def main(root, source, output):
         "role": "bounded_real_revision_annotations_not_formal_corpus",
         "source_tokens": str(source),
         "window_size": LENGTH,
+        "boundary_mask_size": [944, 1240],
         "species": SPECIES,
         "conditions": results,
         "stale_U_mask_negative_control_detected": True,
+        "selection_never_unmasks_U_filtered_bases": True,
+        "labels_identical_on_jointly_trainable_bases": True,
     }
     (output / "verification.json").write_text(json.dumps(report, indent=2))
     print("PASS DATA PANEL", json.dumps(report), flush=True)

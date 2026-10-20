@@ -3,6 +3,10 @@
   "role": "bounded_real_revision_annotations_not_formal_corpus",
   "source_tokens": "/local/workdir/zl843/GeneCAD/genecad/genecad_result/training/Plant10_Taestivum_finetune/pipeline/prep/splits/train.zarr",
   "window_size": 8192,
+  "boundary_mask_size": [
+    944,
+    1240
+  ],
   "species": [
     "Athaliana",
     "Osativa",
@@ -16,25 +20,25 @@
   "conditions": {
     "U": {
       "windows": 22,
-      "trainable_bases": 173404,
-      "masked_bases": 6820
+      "trainable_bases": 168392,
+      "masked_bases": 11832
     },
     "B": {
       "windows": 22,
-      "trainable_bases": 155587,
-      "masked_bases": 24637,
+      "trainable_bases": 150575,
+      "masked_bases": 29649,
       "newly_masked_vs_U": 17817
     },
     "M": {
       "windows": 22,
-      "trainable_bases": 115648,
-      "masked_bases": 64576,
+      "trainable_bases": 110636,
+      "masked_bases": 69588,
       "newly_masked_vs_U": 57756
     },
     "R1": {
       "windows": 22,
-      "trainable_bases": 144686,
-      "masked_bases": 35538,
+      "trainable_bases": 139674,
+      "masked_bases": 40550,
       "newly_masked_vs_U": 28718
     }
   },

@@ -14,5 +14,7 @@
   "head_changed_tensors": 57,
   "logged_loss_min": 1.0443617105484009,
   "logged_loss_max": 1.244556188583374,
-  "dataset_role": "Athaliana_actual_persisted_exclusion_fixture_not_formal_eight_species_corpus"
+  "dataset_role": "Athaliana_actual_persisted_exclusion_fixture_not_formal_eight_species_corpus",
+  "all_checkpoint_tensors_finite": true,
+  "all_optimizer_states_finite": true
 }
