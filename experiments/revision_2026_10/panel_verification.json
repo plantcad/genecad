@@ -1,0 +1,44 @@
+{
+  "result": "PASS",
+  "role": "bounded_real_revision_annotations_not_formal_corpus",
+  "source_tokens": "/local/workdir/zl843/GeneCAD/genecad/genecad_result/training/Plant10_Taestivum_finetune/pipeline/prep/splits/train.zarr",
+  "window_size": 8192,
+  "species": [
+    "Athaliana",
+    "Osativa",
+    "Gmax",
+    "Hvulgare",
+    "Ptrichocarpa",
+    "Acoerulea",
+    "Ncolorata",
+    "Taestivum"
+  ],
+  "conditions": {
+    "U": {
+      "windows": 22,
+      "trainable_bases": 173404,
+      "masked_bases": 6820
+    },
+    "B": {
+      "windows": 22,
+      "trainable_bases": 155587,
+      "masked_bases": 24637,
+      "newly_masked_vs_U": 17817
+    },
+    "M": {
+      "windows": 22,
+      "trainable_bases": 115648,
+      "masked_bases": 64576,
+      "newly_masked_vs_U": 57756
+    },
+    "R1": {
+      "windows": 22,
+      "trainable_bases": 144686,
+      "masked_bases": 35538,
+      "newly_masked_vs_U": 28718
+    }
+  },
+  "stale_U_mask_negative_control_detected": true,
+  "selection_never_unmasks_U_filtered_bases": true,
+  "labels_identical_on_jointly_trainable_bases": true
+}

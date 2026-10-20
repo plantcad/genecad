@@ -1,0 +1,68 @@
+{
+  "result": "PASS",
+  "initial_state_sha256": "ffa787971258276016313f21fddfcf637673e754150ce573631be3474ed0b8f5",
+  "window_size": 8192,
+  "gpu": "NVIDIA H100 PCIe",
+  "data_role": "bounded_real_revision_annotations_not_formal_corpus",
+  "effective_batch": 4,
+  "conditions": {
+    "U": {
+      "result": "PASS",
+      "initial_state_sha256": "ffa787971258276016313f21fddfcf637673e754150ce573631be3474ed0b8f5",
+      "windows": 22,
+      "optimizer_updates": 6,
+      "loss_min": 0.46493586897850037,
+      "loss_max": 2.7491958141326904,
+      "backbone_updated": true,
+      "head_updated": true,
+      "masked_logits_gradient_zero": true,
+      "masked_loss_perturbation_invariant": true,
+      "all_masked_loss_and_gradient_zero": true,
+      "final_state_sha256": "f54c3172fc3387aa1aef0c3f44390e2e91c690fe8f065ae7c742ec40fd1fb1bd"
+    },
+    "B": {
+      "result": "PASS",
+      "initial_state_sha256": "ffa787971258276016313f21fddfcf637673e754150ce573631be3474ed0b8f5",
+      "windows": 22,
+      "optimizer_updates": 6,
+      "loss_min": 0.15927377343177795,
+      "loss_max": 2.7564756870269775,
+      "backbone_updated": true,
+      "head_updated": true,
+      "masked_logits_gradient_zero": true,
+      "masked_loss_perturbation_invariant": true,
+      "all_masked_loss_and_gradient_zero": true,
+      "final_state_sha256": "1d58da6740c91274d51c6c5b05ef306bc4719d464c6476d4416ab5c97085053f"
+    },
+    "M": {
+      "result": "PASS",
+      "initial_state_sha256": "ffa787971258276016313f21fddfcf637673e754150ce573631be3474ed0b8f5",
+      "windows": 22,
+      "optimizer_updates": 6,
+      "loss_min": 0.0351206436753273,
+      "loss_max": 3.1867542266845703,
+      "backbone_updated": true,
+      "head_updated": true,
+      "masked_logits_gradient_zero": true,
+      "masked_loss_perturbation_invariant": true,
+      "all_masked_loss_and_gradient_zero": true,
+      "final_state_sha256": "f99dfb220ed2aa7f57535a3bfa98ab774af1b5607f62f0dfd62ab9bbcb1d1b37"
+    },
+    "R1": {
+      "result": "PASS",
+      "initial_state_sha256": "ffa787971258276016313f21fddfcf637673e754150ce573631be3474ed0b8f5",
+      "windows": 22,
+      "optimizer_updates": 6,
+      "loss_min": 0.09445038437843323,
+      "loss_max": 3.4611434936523438,
+      "backbone_updated": true,
+      "head_updated": true,
+      "masked_logits_gradient_zero": true,
+      "masked_loss_perturbation_invariant": true,
+      "all_masked_loss_and_gradient_zero": true,
+      "final_state_sha256": "891343f871de428c4ab9d196c02f638c233d9555b0ca1a559d6e3be7aa8670eb"
+    }
+  },
+  "elapsed_s": 77.62316282466054,
+  "peak_cuda_bytes": 17701735424
+}
