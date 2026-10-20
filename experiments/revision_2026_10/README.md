@@ -18,6 +18,7 @@ This fixture tests the actual CLI, DataLoader, mixed precision, optimizer,
 checkpoint, shared-state loading, and fixed-step termination. It is not the
 complete new eight-species training corpus. The two CSV loss observations are
 optimizer-logging samples, not a claim about every microbatch or convergence.
+All saved model and optimizer tensors are finite.
 
 The relevant arguments are:
 
@@ -51,6 +52,11 @@ tokens and genomic coordinates only. Current U/B/M/R1 feature and filter
 parquets supply labels and masks through production `stack_gff_features`,
 `create_labels`, `extract_label_dataset`, and `_build_sample` functions. Small
 chromosome prefixes provide complete genes and label context around the probes.
+Boundary masks are explicitly upstream 944 bp and downstream 1240 bp, matching
+the production CLI rather than the label function's different direct-call
+defaults. The GPU verifier rejects a panel without these parameters. The final
+artifacts supersede the initial panel report in commit `f75714c`, which used
+the function defaults.
 
 MMLR anchors are genes retained by B and removed by M. Additional basic-QC
 anchors exercise B. The script checks equal DNA and coordinates, actual
@@ -92,7 +98,7 @@ means excluded positions do not contribute a direct supervised loss; DNA at
 those positions remains available as sequence context. See
 `panel_verification.json` and `gpu_verification.json`.
 
-The four-condition loop took 77.6 seconds after model setup and peaked at
-17,701,735,424 allocated CUDA bytes. This uses a smaller batch than the CLI test
-and is not a clean hardware throughput benchmark. Formal 12-run training,
+The JSON report records loop time after model setup and peak allocated CUDA
+bytes. This uses a smaller batch than the CLI test and is not a clean hardware
+throughput benchmark. Formal 12-run training,
 whole-corpus window/split validation, and LS6 DDP/GPU checks remain separate work.

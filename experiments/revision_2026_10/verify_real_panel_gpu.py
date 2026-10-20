@@ -28,6 +28,9 @@ def main(panel, initial, output):
     output.mkdir(parents=True, exist_ok=False)
     data_report = json.loads((panel / "verification.json").read_text())
     assert data_report["result"] == "PASS"
+    assert data_report.get("boundary_mask_size") == [944, 1240], (
+        "panel must match the production CLI boundary masks"
+    )
     payload = read_initial_state(initial, seed=11)
     L.seed_everything(11, workers=True)
     model = (
@@ -42,7 +45,9 @@ def main(panel, initial, output):
         "window_size": 8192,
         "gpu": torch.cuda.get_device_name(),
         "data_role": data_report["role"],
+        "boundary_mask_size": data_report["boundary_mask_size"],
         "effective_batch": 4,
+        "final_update_windows": 2,
         "conditions": {},
     }
     start = time.monotonic()
