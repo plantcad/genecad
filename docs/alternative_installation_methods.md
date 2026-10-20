@@ -1,5 +1,8 @@
 # Installing GeneCAD
 
+For GH200, use the standard installation script or a multi-platform container.
+See [GH200 setup](tacc_vista.md) for compiler requirements and validation.
+
 ## Installing from a pre-built wheel (recommended)
 
 The recommended method uses a pre-built wheel to reduce installation time.
@@ -25,7 +28,10 @@ git clone https://github.com/plantcad/genecad && cd genecad
 
 # Install all dependencies
 # mamba and causal-conv1d build from source — this can take 3–30 minutes
+# Linux x86-64
 uv sync --extra torch --extra mamba
+# Linux ARM64 / GH200 (uv.lock still references an x86-only Triton wheel)
+# bash scripts/install_release.sh
 
 # Activate the virtual environment
 source .venv/bin/activate
@@ -46,6 +52,16 @@ causal-conv1d = { path = "path/to/causal_conv1d-1.5.0.post8-*.whl" }
 ## Containers (Singularity/Apptainer or Docker)
 
 The Docker image at `ghcr.io/plantcad/genecad_v1` bundles the complete runtime.
+The publishing workflow builds native `linux/amd64` and `linux/arm64` images
+under the same tag. Docker, Singularity and Apptainer select the matching
+architecture when pulling. Existing tags published before ARM64 support remain
+x86-only; use a tag whose manifest contains `linux/arm64` on GH200.
+Check available platforms with:
+
+```bash
+docker manifest inspect ghcr.io/plantcad/genecad_v1:latest
+```
+
 Source code is **mounted at run time**, so changes you make to the cloned repository
 take effect immediately — no rebuild needed.
 
@@ -77,9 +93,10 @@ docker run --rm --gpus all \
     -m plant
 ```
 
-For HPC environments where Docker is not available, you can use Singularity
-(or Apptainer) to pull and run the Docker image directly. The `--nv` flag is
-required to enable GPU support.
+For HPC environments where Docker is not available, use Singularity or
+Apptainer to pull the same image on the target machine. Replace `singularity`
+with `apptainer` in the examples below. Both require `--nv` for GPU support.
+A SIF file is architecture-specific; create a separate SIF on each architecture.
 
 ```bash
 # Clone the repository

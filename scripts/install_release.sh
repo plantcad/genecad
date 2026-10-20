@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Grace Hopper uses an ARM CPU. Keep the existing x86-64 release installation
+# below, and use native dependencies rather than x86 wheels on ARM64.
+if [[ "$(uname -s)" == Linux && "$(uname -m)" == aarch64 ]]; then
+  exec bash "$(dirname "${BASH_SOURCE[0]}")/install_arm64.sh" "$@"
+fi
+
 # Install GeneCAD from a tracked GitHub release wheel.
 # Usage:
 #   bash scripts/install_release.sh

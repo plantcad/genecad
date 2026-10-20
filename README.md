@@ -110,10 +110,14 @@ Recommended installation uses [uv](https://docs.astral.sh/uv/) for environment m
 For other installation options see [Alternative Installation Methods](docs/alternative_installation_methods.md)
 Docker/Singularity/Apptainer container images are available and may be useful when working on HPCs or in the cloud.
 
+**GH200 / ARM64:** load CUDA 12.8 and a compatible C++ compiler, then use the
+same installation command below. The first run compiles native CUDA extensions;
+subsequent installations reuse cached wheels. See [GH200 setup](docs/tacc_vista.md).
+
 > [!IMPORTANT]
-> GeneCAD requires a CUDA GPU. Installation must also be performed
-> on machines with a CUDA GPU, or else the correct pytorch CUDA will not
-> be installed.
+> Run installation and inference on an allocated GPU node when using an HPC.
+> ARM64 source builds require a CUDA toolkit (`nvcc`). CPU build nodes can use
+> `--skip-gpu-check`, followed by validation on a GPU node.
 
 ```bash
 # Download the GeneCAD repository
@@ -776,7 +780,8 @@ Official images are built and published automatically by
 [`docker-publish.yml`](.github/workflows/docker-publish.yml) whenever
 `Dockerfile`, `pyproject.toml`, `uv.lock`, `src/`, or `scripts/` change on
 `main`, and on every version tag, as `ghcr.io/plantcad/genecad_v1:latest`
-and `:<version>`. There's no need to tag or push a release image by hand.
+and `:<version>`. Each tag includes native `linux/amd64` and `linux/arm64`
+images after both builds pass. There's no need to publish release images by hand.
 
 </details>
 
