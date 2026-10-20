@@ -1,4 +1,4 @@
-ARG TARGETARCH=amd64
+ARG TARGETARCH
 FROM pytorch/pytorch:2.7.1-cuda12.8-cudnn9-devel AS base-amd64
 FROM nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04 AS base-arm64
 FROM base-${TARGETARCH} AS runtime
