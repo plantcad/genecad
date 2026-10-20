@@ -61,25 +61,10 @@ jobs:
         with:
           context: .
           platforms: linux/${{ matrix.arch }}
-          load: true
+          push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:build-${{ github.sha }}-${{ matrix.arch }}
           cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache-${{ matrix.arch }}
-      - name: Check runtime without a GPU
-        env:
-          IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:build-${{ github.sha }}-${{ matrix.arch }}
-        run: |
-          docker run --rm --entrypoint /build/.venv/bin/python "$IMAGE" \
-            /build/scripts/check_install.py --imports-only
-          docker run --rm --user 1000:1000 -e HOME=/tmp "$IMAGE" genecad --version
-      - name: Push checked image
-        if: github.event_name != 'pull_request'
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          platforms: linux/${{ matrix.arch }}
-          push: true
-          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:build-${{ github.sha }}-${{ matrix.arch }}
-          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache-${{ matrix.arch }},mode=min
+          cache-to: ${{ github.event_name != 'pull_request' && format('type=registry,ref={0}/{1}:buildcache-{2},mode=min', env.REGISTRY, env.IMAGE_NAME, matrix.arch) || '' }}
 
   publish:
     needs: build

@@ -40,4 +40,9 @@ source /build/.venv/bin/activate\n\
 export PYTHONPATH="$(pwd):$PYTHONPATH"\n\
 exec "$@"' > /usr/local/bin/genecad && \
     chmod +x /usr/local/bin/genecad
+
+RUN /build/.venv/bin/python /build/scripts/check_install.py --imports-only
+USER 65534:65534
+RUN HOME=/tmp /usr/local/bin/genecad genecad --version
+USER root
 ENTRYPOINT ["/usr/local/bin/genecad"]
