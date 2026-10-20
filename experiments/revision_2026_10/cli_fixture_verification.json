@@ -1,0 +1,18 @@
+{
+  "result": "PASS",
+  "global_step": 2,
+  "batch_size": 4,
+  "accumulate_grad_batches": 96,
+  "effective_batch": 384,
+  "microbatches": 192,
+  "windows": 768,
+  "window_size": 8192,
+  "seed": 11,
+  "initial_state_sha256": "ffa787971258276016313f21fddfcf637673e754150ce573631be3474ed0b8f5",
+  "changed_tensors": 337,
+  "backbone_changed_tensors": 280,
+  "head_changed_tensors": 57,
+  "logged_loss_min": 1.0443617105484009,
+  "logged_loss_max": 1.244556188583374,
+  "dataset_role": "Athaliana_actual_persisted_exclusion_fixture_not_formal_eight_species_corpus"
+}
