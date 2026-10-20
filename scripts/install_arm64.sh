@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Native Linux ARM64 / GH200 installation. Does not run uv sync or reuse another venv.
+# Native Linux ARM64 / GH200 installation without uv sync.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
