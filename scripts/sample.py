@@ -662,6 +662,9 @@ def generate_training_splits(args: Args) -> None:
 
     logger.info(f"Found {len(filtered_groups)} datasets to split")
 
+    # Fixed order: the zarr listing order is not stable, and the shared RNG below is consumed
+    # group by group, so an unsorted order gives a different split on every run.
+    filtered_groups = sorted(filtered_groups, key=lambda gc: (gc[0]["species_id"], gc[0]["chrom_id"]))
     rng = np.random.RandomState(args.seed)
 
     # Track global sample indices for each split
