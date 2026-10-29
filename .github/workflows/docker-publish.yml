@@ -1,82 +1,99 @@
 name: Build and Publish Docker Image
 
 on:
-  # Triggers the workflow when you push to the main branch
   push:
-    branches: [ "main", "master" , "refine-CrossEntropyLoss"]
-    # Also trigger when you create a version tag (e.g., v1.0.0)
-    tags: [ 'v*.*.*' ]
+    branches: ["main", "master", "refine-CrossEntropyLoss"]
+    tags: ['v*.*.*']
     paths:
       - 'Dockerfile'
+      - '.github/workflows/docker-publish.yml'
       - 'pyproject.toml'
       - 'uv.lock'
       - 'src/**'
       - 'scripts/**'
       - 'predict.sh'
       - 'train.sh'
-  # Allows you to run this workflow manually from the GitHub website
+  pull_request:
+    paths:
+      - 'Dockerfile'
+      - '.github/workflows/docker-publish.yml'
+      - 'pyproject.toml'
+      - 'uv.lock'
+      - 'src/**'
+      - 'scripts/**'
+      - 'predict.sh'
+      - 'train.sh'
   workflow_dispatch:
 
 env:
   REGISTRY: ghcr.io
-  # We use a new name to bypass permission locks on the legacy 'genecad' package
   IMAGE_NAME: plantcad/genecad_v1
 
 jobs:
-  build-and-push:
-    runs-on: ubuntu-latest
-
-    # These permissions allow GitHub to publish the image to your repository's packages
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
       packages: write
-
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
+      - uses: actions/checkout@v4
       - name: Free runner disk space
         run: |
-          df -h
-          sudo rm -rf /usr/share/dotnet
-          sudo rm -rf /usr/local/lib/android
-          sudo rm -rf /opt/ghc
-          sudo rm -rf /opt/hostedtoolcache
-          docker system prune -af || true
-          df -h
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Log into registry ${{ env.REGISTRY }}
-        # Login to GitHub Container Registry using the automatic GitHub token
-        uses: docker/login-action@v3
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache
+          docker system prune -af
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        if: github.event_name != 'pull_request'
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build native image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/${{ matrix.arch }}
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:build-${{ github.sha }}-${{ matrix.arch }}
+          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache-${{ matrix.arch }}
+          cache-to: ${{ github.event_name != 'pull_request' && format('type=registry,ref={0}/{1}:buildcache-{2},mode=min', env.REGISTRY, env.IMAGE_NAME, matrix.arch) || '' }}
 
-      - name: Extract Docker metadata
+  publish:
+    needs: build
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/metadata-action@v5
         id: meta
-        uses: docker/metadata-action@v5
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          # Automatically tag the image with 'latest' on main branch
-          # track version tags if you create GitHub Releases,
-          # and also attach the branch name if building a non-main branch.
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
             type=semver,pattern={{version}}
             type=ref,event=branch
-
-      - name: Build and push Docker image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: ./Dockerfile
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          # This enables layer caching, which makes subsequent builds MUCH faster
-          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache
-          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache,mode=min
+      - name: Publish multi-platform tags
+        env:
+          TAGS_JSON: ${{ steps.meta.outputs.json }}
+          IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+        run: |
+          args=()
+          while IFS= read -r tag; do args+=(--tag "$tag"); done < <(jq -r '.tags[]' <<< "$TAGS_JSON")
+          docker buildx imagetools create "${args[@]}" \
+            "$IMAGE:build-$GITHUB_SHA-amd64" "$IMAGE:build-$GITHUB_SHA-arm64"
