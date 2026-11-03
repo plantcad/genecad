@@ -33,6 +33,11 @@ from src.visualization import (
 )
 from src.hub import load_base_model
 from dataclasses import dataclass, field
+import importlib.util
+import logging
+import os
+
+logger = logging.getLogger(__name__)
 
 
 # ------------------------------------------------------------------------------------------------
@@ -40,6 +45,29 @@ from dataclasses import dataclass, field
 # ------------------------------------------------------------------------------------------------
 
 IGNORE_INDEX = -100
+
+
+def head_attention_implementation() -> str:
+    """Attention backend for the head encoder.
+
+    FlashAttention 2 when it is installed and the GPU supports it (Ampere or newer),
+    otherwise PyTorch SDPA, which is slower and differs only by bfloat16 rounding.
+    The GENECAD_ATTENTION environment variable (flash_attention_2 or sdpa) overrides this.
+    """
+    override = os.environ.get("GENECAD_ATTENTION")
+    if override:
+        return override
+    if not torch.cuda.is_available():
+        return "sdpa"
+    if torch.cuda.get_device_capability()[0] < 8:
+        logger.warning(
+            "FlashAttention 2 needs an Ampere or newer GPU; using PyTorch SDPA attention."
+        )
+        return "sdpa"
+    if importlib.util.find_spec("flash_attn") is None:
+        logger.warning("flash-attn is not installed; using PyTorch SDPA attention.")
+        return "sdpa"
+    return "flash_attention_2"
 
 
 class MLP(nn.Module):
@@ -369,7 +397,7 @@ class GeneClassifier(L.LightningModule):
                 attention_dropout=self.config.dropout,
                 mlp_dropout=self.config.dropout,
                 dtype=torch.bfloat16,
-                attn_implementation="flash_attention_2",
+                attn_implementation=head_attention_implementation(),
             )
             self.head_encoder = ModernBertModel(self.head_config)
 

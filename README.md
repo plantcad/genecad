@@ -73,7 +73,7 @@ The installer selects native dependencies for the host architecture.
 | Requirement  | Minimum             | Recommended   | Notes                                                                  |
 |--------------|---------------------|---------------|------------------------------------------------------------------------|
 | OS           | Linux x86-64 or ARM64 | —           | See [GH200 setup](docs/tacc_vista.md) for ARM64 requirements             |
-| GPU          | NVIDIA Ampere/Ada/Hopper, ≥ 16 GB VRAM | A100 / H100 | e.g. RTX 3090/4090 for development; the default FlashAttention 2 backend requires these architectures |
+| GPU          | NVIDIA Ampere/Ada/Hopper, ≥ 16 GB VRAM | A100 / H100 | e.g. RTX 3090/4090, RTX A6000 or RTX 6000 Ada. Older architectures (Turing, e.g. Quadro RTX 6000, T4; Volta, e.g. V100) are not supported (untested; the models run in bfloat16). FlashAttention 2 is used when installed; otherwise GeneCAD falls back to PyTorch SDPA attention (slower, results differ only by bfloat16 rounding; force it with `GENECAD_ATTENTION=sdpa`) |
 | CUDA         | 12.4                | 12.8          | Must match PyTorch 2.7.1 build                                         |
 | Python       | 3.12                | 3.12          | Managed automatically by `uv`                                          |
 | Disk         | ~20 GB free         | —             | Model weights cached in `~/.cache/huggingface`                         |
@@ -380,6 +380,9 @@ HuggingFace model repo ID. Note that this does **not** override the base PlantCA
 * `--merge-max-gap` - Largest gap (bp) between consecutive same-strand genes for which hybrid decoding tries a merge.
 (Default: 20000)
 * `--keep-partial` - Keep transcripts that cannot be made a valid ORF (flagged `partial=true`) instead of dropping them.
+* `--filter-unmerged` - Also remove gene models whose protein ReelProtein scores below 0.5. This raises precision,
+lowers recall and removes some conserved (BUSCO) genes, and makes ProtT5 embed every protein. By default all gene
+models are kept and ReelProtein only decides merges of adjacent fragments. See [refine](docs/refine.md).
 * `--clean-intermediates` - Save disk space. The sequence and interval files of a chromosome are deleted once its
 predictions are decoded, and the prediction files (the largest, about 50 MB per Mb of sequence) are deleted once the
 final GFF is written. All GFF files are kept, so repeating the run afterwards does nothing. The prediction files are
@@ -454,7 +457,7 @@ Refer to the `docs/` folder for full parameter lists for each step/script.
    For convenience, this step creates a manifest file describing all the contigs in the input fasta, which can be passed in to each
    subsequent step to run all chromosomes sequentially.
 2. [Predict bases](docs/predict.md) - `scripts/predict.py` - **REQUIRES GPU** - Uses the GeneCAD model to perform base-level prediction of genome annotations.
-3. [Predict Genomic Intervals](docs/detect_intervals.md) - `scripts/detect_intervals.py` - Uses a custom CRF and the Viterbi algorithm to predict genomic
+3. [Predict Genomic Intervals](docs/detect_intervals.md) - `scripts/detect_intervals.py` - Uses Viterbi decoding with fixed transitions to predict genomic
    intervals or regions from the base-level predictions.
 4. [Export GFFs](docs/export_gff.md) - `scripts/export_gff.py` - Converts the genomic intervals to GFF format.
 5. [Filter GFFs](docs/filter_raw_gff.md) - `scripts/filter_raw_gff.py` - Removes fragmented or excessively short gene models.
@@ -462,8 +465,8 @@ Refer to the `docs/` folder for full parameter lists for each step/script.
 7. [Repair ORFs](docs/fix_orf.md) - `scripts/fix_orf.py` - Repairs CDS boundaries against the genome sequence so each transcript is a valid, translatable ORF.
    1. [Hybrid decoding](docs/hybrid_decode.md) - `scripts/hybrid_decode.py` - With `--decoder hybrid` (the default), rescues transcripts
    ORF repair could not fix and merges split genes by frame-aware decoding of local windows.
-8. [Refine with ReelProtein](docs/refine.md) - `scripts/refine.py` - **REQUIRES GPU** - Uses ReelProtein to evaluate  and filter gene models for likely
-protein functionality and merges gene fragments.
+8. [Refine with ReelProtein](docs/refine.md) - `scripts/refine.py` - Uses ReelProtein to decide merges of adjacent gene fragments and,
+with `--filter-unmerged`, to remove gene models unlikely to encode a functional protein. Needs a GPU only when there are proteins to score.
 
 #### Outputs
 
