@@ -455,3 +455,63 @@ def test_refine_writes_the_genes_when_there_are_no_candidates(tmp_path, monkeypa
         "ID=gene1",
         "ID=gene3",
     ]
+
+
+def test_refine_scores_only_merge_candidates_unless_filtering(tmp_path, monkeypatch):
+    import importlib.util
+    import pathlib
+
+    reelprotein = importlib.import_module("src.reelprotein")
+
+    path = pathlib.Path(__file__).resolve().parents[2] / "scripts" / "refine.py"
+    spec = importlib.util.spec_from_file_location("refine_script", path)
+    assert spec is not None and spec.loader is not None
+    refine = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(refine)
+
+    gff_path = tmp_path / "input.gff3"
+    gff_path.write_text(
+        "\n".join(
+            [
+                "##gff-version 3",
+                "chr1\tsrc\tgene\t1\t9\t.\t+\t.\tID=gene1",
+                "chr1\tsrc\tmRNA\t1\t9\t.\t+\t.\tID=gene1.t1;Parent=gene1",
+                "chr1\tsrc\tCDS\t1\t9\t.\t+\t0\tID=cds1;Parent=gene1.t1",
+            ]
+        )
+        + "\n"
+    )
+    singles = {"chr1~gene1~+": "MK"}
+    monkeypatch.setattr(
+        reelprotein, "extract_candidate_proteins", lambda genes, fasta: singles
+    )
+    embedded = []
+
+    def fake_embeddings(seqs, gpus):
+        embedded.append(sorted(seqs))
+        return pd.DataFrame({"ProteinID": list(seqs), 0: [0.0] * len(seqs)})
+
+    monkeypatch.setattr(reelprotein, "generate_embeddings", fake_embeddings)
+    monkeypatch.setattr(
+        reelprotein,
+        "score_proteins",
+        lambda df, src: pd.DataFrame(
+            {"ProteinID": df["ProteinID"], "Predicted_Label": [0] * len(df)}
+        ),
+    )
+
+    for filter_unmerged in (False, True):
+        refine.run_reelprotein(
+            input_gff=str(gff_path),
+            input_fasta=str(tmp_path / "unused.fa"),
+            output_gff=str(tmp_path / f"output.{filter_unmerged}.gff3"),
+            model_source="unused",
+            filter_unmerged=filter_unmerged,
+            gpus=[0],
+        )
+
+    # Without filtering a single-gene score cannot change the output, so nothing is embedded.
+    assert embedded == [["chr1~gene1~+"]]
+    kept = (tmp_path / "output.False.gff3").read_text()
+    assert "ID=gene1" in kept
+    assert (tmp_path / "output.True.gff3").read_text() == ""
