@@ -29,7 +29,6 @@ dependencies = [
   "wandb>=0.25.0",
   "optree>=0.19.0",
   "omegaconf>=2.3.0",
-  "gradio>=4.0.0",
 ]
 
 [project.optional-dependencies]
