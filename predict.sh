@@ -53,6 +53,12 @@ Options:
                                                 hybrid decoding tries a merge (default: 20000).
     --keep-partial          Keep transcripts that cannot be made a valid ORF (flagged
                                                 partial=true) instead of dropping them.
+    --filter-unmerged       Also remove genes whose protein ReelProtein scores below 0.5.
+                                                Raises precision and lowers recall, and
+                                                removes some conserved (BUSCO) genes. By
+                                                default all genes are kept and ReelProtein only
+                                                decides merges of adjacent gene fragments, so
+                                                ProtT5 runs only when there is a merge to decide.
     --clean-intermediates   Save disk space. Delete the sequence and interval files of a
                                                 chromosome once its predictions are decoded, and the
                                                 prediction files of all chromosomes once the final GFF
@@ -158,6 +164,7 @@ MIN_TRANSCRIPT_LENGTH="3"
 ORF_MAX_SHIFT="300"
 DECODER="hybrid"
 KEEP_PARTIAL="0"
+FILTER_UNMERGED="0"
 ALLOW_MISSING_PREDICTIONS="0"
 CLEAN_INTERMEDIATES="0"
 MERGE_MAX_GAP="20000"
@@ -186,6 +193,7 @@ while [[ $# -gt 0 ]]; do
         DECODER="plain"; shift ;;
     --merge-max-gap) MERGE_MAX_GAP="$2"; shift 2 ;;
     --keep-partial) KEEP_PARTIAL="1"; shift ;;
+    --filter-unmerged) FILTER_UNMERGED="1"; shift ;;
     --allow-missing-predictions) ALLOW_MISSING_PREDICTIONS="1"; shift ;;
     --clean-intermediates) CLEAN_INTERMEDIATES="1"; shift ;;
     --min-intron-length) MIN_INTRON_LENGTH="$2"; shift 2 ;;
@@ -1635,7 +1643,10 @@ echo "================================================================="
 echo "[8/8] Running protein refinement on merged predictions..."
 echo "================================================================="
 
-refresh_stage "$FINAL_GFF" "$REFINE_INPUT_GFF"
+REFINE_SETTINGS=(--setting "filter_unmerged=$FILTER_UNMERGED")
+REFINE_ARGS=()
+[[ "$FILTER_UNMERGED" == "1" ]] && REFINE_ARGS+=(--filter-unmerged)
+refresh_stage "$FINAL_GFF" "$REFINE_INPUT_GFF" "${REFINE_SETTINGS[@]}"
 if [[ -f "$FINAL_GFF" ]]; then
     echo "Skipping refinement — ${SPECIES_ID}_GeneCAD_final.gff already exists"
 else
@@ -1643,8 +1654,9 @@ else
         --input-gff "$REFINE_INPUT_GFF" \
         --input-fasta "$INPUT_FILE" \
         --output-gff "$FINAL_GFF" \
-        --gpus "${REFINE_GPU_LIST_STR:-$GPU_LIST_STR}"
-    record_stage "$FINAL_GFF" "$REFINE_INPUT_GFF"
+        --gpus "${REFINE_GPU_LIST_STR:-$GPU_LIST_STR}" \
+        "${REFINE_ARGS[@]}"
+    record_stage "$FINAL_GFF" "$REFINE_INPUT_GFF" "${REFINE_SETTINGS[@]}"
 fi
 rm -f "$FINAL_GFF.stale" "$RAW_GFF.stale" "$ORF_GFF.stale" "${HYBRID_GFF:-$RAW_GFF}.stale"
 
