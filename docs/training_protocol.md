@@ -2,8 +2,10 @@
 
 The lower-level Python scripts support comparisons in which training conditions
 differ only in labels and loss masks. These options belong to `scripts/sample.py`,
-`scripts/transform.py`, and `scripts/train.py`; they are not automatically forwarded
-by the `genecad train` shell pipeline.
+`scripts/transform.py`, and `scripts/train.py`. The plant pipeline (`train.sh` or
+`genecad train`) forwards them through `--exclude-genes`, `--windows-from`,
+`--initial-state`, `--seed`, `--max-steps` and `--base-encoder-revision`; its default
+`revision` preset applies the settings of the published model (see the README).
 
 ## Exclusion masks and fixed windows
 
