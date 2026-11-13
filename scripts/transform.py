@@ -2,7 +2,7 @@ import pandas as pd
 import argparse
 import os
 import logging
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, fields
 from concurrent.futures import ProcessPoolExecutor
 from typing import cast as cast_type
 from src.dataset import (
@@ -294,6 +294,7 @@ def filter_features(
     features_output_path: str,
     filters_output_path: str,
     remove_incomplete_features: bool = True,
+    exclude_genes_path: str | None = None,
 ) -> None:
     """Process GFF features by filtering to canonical transcripts and removing overlapping features.
 
@@ -309,6 +310,10 @@ def filter_features(
         Whether to filter out genes with incomplete feature annotations, by default True;
         note that the filter definitions will be saved regardless of whether or not the filters
         are applied to the underlying features
+    exclude_genes_path : str, optional
+        TSV with columns species_id and gene_id. Listed genes that survive the filters above are
+        removed with reason "revision_selection"; like every other filtered gene, their spans are
+        masked from the loss rather than labelled intergenic.
     """
     # Read input dataframe
     logger.info(f"Reading input from {input_path}")
@@ -359,6 +364,24 @@ def filter_features(
         filtered_features
     )
 
+    # Remove genes excluded by an external selection (e.g. a training-data quality filter)
+    selection_filters: list[Filter] = []
+    if exclude_genes_path is not None:
+        excluded = pd.read_csv(exclude_genes_path, sep="\t", dtype=str)[
+            ["species_id", "gene_id"]
+        ]
+        to_exclude = filtered_features.merge(
+            excluded, on=["species_id", "gene_id"], how="inner"
+        )
+        selection_filters = create_filters(
+            to_exclude, FilterReason.REVISION_SELECTION.value
+        )
+        filtered_features = apply_filters(filtered_features, selection_filters)
+        logger.info(
+            f"Excluded {len(selection_filters)} genes listed in {exclude_genes_path} "
+            f"({len(excluded)} listed)"
+        )
+
     # Create filters DataFrame for statistics
     filters = pd.DataFrame(
         [
@@ -368,8 +391,10 @@ def filter_features(
                 + gene_overlap_filters
                 + incomplete_features_filters
                 + feature_overlap_filters
+                + selection_filters
             )
-        ]
+        ],
+        columns=[field.name for field in fields(Filter)],
     )
     filtered_genes = total_genes - _gene_count(filtered_features)
 
@@ -1218,6 +1243,11 @@ def main():
         default="yes",
         help="Whether to filter out genes with incomplete feature annotations (default: yes)",
     )
+    filter_parser.add_argument(
+        "--exclude-genes",
+        default=None,
+        help="Optional TSV (columns species_id, gene_id) of genes to exclude and mask",
+    )
 
     # Stack features command
     stack_parser = subparsers.add_parser(
@@ -1304,7 +1334,11 @@ def main():
     if args.command == "filter_features":
         remove_incomplete = args.remove_incomplete_features == "yes"
         filter_features(
-            args.input, args.output_features, args.output_filters, remove_incomplete
+            args.input,
+            args.output_features,
+            args.output_filters,
+            remove_incomplete,
+            exclude_genes_path=args.exclude_genes,
         )
     elif args.command == "stack_features":
         stack_features(args.input, args.output)

@@ -48,7 +48,7 @@ def test_arm_release_installer_routes_help_without_installing(installer_commands
 
 def test_x86_release_installer_keeps_release_and_mamba_installation(installer_commands):
     root, environment = installer_commands
-    environment.update(TEST_ARCH="x86_64", GENECAD_VERSION="0.6.1")
+    environment.update(TEST_ARCH="x86_64", GENECAD_VERSION="0.7.0")
     subprocess.run(
         ["bash", str(SCRIPTS / "install_release.sh")],
         cwd=root,
@@ -60,7 +60,7 @@ def test_x86_release_installer_keeps_release_and_mamba_installation(installer_co
     commands = (root / "uv.log").read_text().splitlines()
     assert len(commands) == 2
     assert (
-        "genecad[torch] @ https://github.com/plantcad/genecad/releases/download/v0.6.1/"
+        "genecad[torch] @ https://github.com/plantcad/genecad/releases/download/v0.7.0/"
         in commands[0]
     )
     assert "transformers<5" in commands[0]
