@@ -6,7 +6,7 @@ are unlikely to be functional protein coding genes.
 
 By default every gene model is kept, so only merge candidates are scored. ORF repair and hybrid decoding
 usually leave no fragment to merge; ProtT5 then does not run and the output equals the input.
-`--filter-unmerged` scores every protein (21–76 minutes of GPU time on the five test genomes). It raises
+`--filter-unmerged` scores every protein (21–76 minutes of GPU time per genome on the five test genomes). It raises
 precision and lowers recall, and removes some conserved genes: on five test genomes it removed 6–10% of
 gene models, raised CDS locus F1 by 0.5–2.5 points and lowered BUSCO completeness by 0.7–1.3 points.
 
