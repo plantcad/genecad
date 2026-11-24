@@ -22,11 +22,17 @@ def installer_commands(tmp_path):
     uv = commands / "uv"
     uv.write_text('#!/bin/bash\nprintf "%s\\n" "$*" >> "$TEST_UV_LOG"\n')
     uv.chmod(0o755)
+    nvcc = commands / "nvcc"
+    nvcc.write_text(
+        '#!/bin/bash\necho "Cuda compilation tools, release 12.8, V12.8.93"\n'
+    )
+    nvcc.chmod(0o755)
     environment = {
         **os.environ,
         "PATH": f"{commands}:{os.environ['PATH']}",
         "TEST_UV_LOG": str(tmp_path / "uv.log"),
     }
+    environment.pop("CUDA_HOME", None)
     return tmp_path, environment
 
 
@@ -48,7 +54,7 @@ def test_arm_release_installer_routes_help_without_installing(installer_commands
 
 def test_x86_release_installer_keeps_release_and_mamba_installation(installer_commands):
     root, environment = installer_commands
-    environment.update(TEST_ARCH="x86_64", GENECAD_VERSION="0.6.1")
+    environment.update(TEST_ARCH="x86_64", GENECAD_VERSION="0.7.0")
     subprocess.run(
         ["bash", str(SCRIPTS / "install_release.sh")],
         cwd=root,
@@ -60,13 +66,32 @@ def test_x86_release_installer_keeps_release_and_mamba_installation(installer_co
     commands = (root / "uv.log").read_text().splitlines()
     assert len(commands) == 2
     assert (
-        "genecad[torch] @ https://github.com/plantcad/genecad/releases/download/v0.6.1/"
+        "genecad[torch] @ https://github.com/plantcad/genecad/releases/download/v0.7.0/"
         in commands[0]
     )
     assert "transformers<5" in commands[0]
     assert "--no-build-isolation" in commands[1]
     assert "mamba@v2.2.4" in commands[1]
     assert "causal-conv1d@v1.5.0.post8" in commands[1]
+
+
+def test_x86_release_installer_stops_on_old_glibc(installer_commands):
+    root, environment = installer_commands
+    ldd = root / "bin" / "ldd"
+    ldd.write_text('#!/bin/bash\necho "ldd (GNU libc) 2.28"\n')
+    ldd.chmod(0o755)
+    environment["TEST_ARCH"] = "x86_64"
+    result = subprocess.run(
+        ["bash", str(SCRIPTS / "install_release.sh")],
+        cwd=root,
+        env=environment,
+        text=True,
+        capture_output=True,
+    )
+    assert result.returncode == 1
+    assert "glibc 2.28" in result.stderr
+    assert "container image" in result.stderr
+    assert not (root / "uv.log").exists()
 
 
 def test_arm_installer_rejects_x86_before_installing(installer_commands):

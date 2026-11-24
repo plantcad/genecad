@@ -39,7 +39,9 @@ def run_reelprotein(
     model_source
         output json file name
     filter_unmerged
-        remove unmerged genes that #TODO
+        also remove unmerged genes whose protein ReelProtein scores below 0.5. When
+        False (default), unmerged genes are all kept and only merge candidates are
+        scored, so ProtT5 runs only if there is a merge to decide.
     gpus
         list of gpu indices to use for ProtT5 embeddings
     """
@@ -50,11 +52,24 @@ def run_reelprotein(
     # 1. Parse GFF and Genome
     genes_data = reelprotein.parse_gff3(input_gff)
     protein_candidates = reelprotein.extract_candidate_proteins(genes_data, input_fasta)
+    if not filter_unmerged:
+        # Unmerged genes are all kept, so only the scores of merge candidates
+        # (several gene IDs joined by "|") can change the output.
+        protein_candidates = {
+            pid: seq for pid, seq in protein_candidates.items() if "|" in pid
+        }
+        logger.info(
+            f"Filtering unmerged genes is off; scoring only the "
+            f"{len(protein_candidates)} merge candidates."
+        )
 
     if not protein_candidates:
         # Write the genes as they would be written when no candidate is accepted,
         # so that the pipeline always has a final GFF.
-        logger.warning("No protein candidates found; writing the genes unrefined.")
+        if filter_unmerged:
+            logger.warning("No protein candidates found; writing the genes unrefined.")
+        else:
+            logger.info("No merge candidates; writing the genes unchanged.")
         reelprotein.generate_final_gff(
             pd.DataFrame({"ProteinID": [], "Predicted_Label": []}),
             input_gff,
@@ -92,6 +107,12 @@ def main():
         help="Hugging Face Repo ID for models",
     )
     parser.add_argument(
+        "--filter-unmerged",
+        action="store_true",
+        help="Also remove unmerged genes whose protein ReelProtein scores below 0.5 "
+        "(raises precision, lowers recall). Default: keep all unmerged genes.",
+    )
+    parser.add_argument(
         "--gpus",
         default="0",
         help="Comma-separated GPU IDs for ProtT5 embedding (e.g. '0,1,2'). Default: '0'.",
@@ -106,7 +127,7 @@ def main():
         input_fasta=args.input_fasta,
         output_gff=args.output_gff,
         model_source=args.reelprotein_model_path,
-        filter_unmerged=False,
+        filter_unmerged=args.filter_unmerged,
         gpus=gpus,
     )
 

@@ -8,6 +8,12 @@
 #
 # Options:
 #   -m, --domain MODE       Training domain: plant or animal (default: plant)
+#   --preset NAME           Plant training setup: revision or legacy (default: revision).
+#                           revision: the eight species, MMLR gene selection (condition M),
+#                           shared initial weights, seed 11 and 1,753 optimizer steps used for
+#                           the released plant model; requires --plant-input-dir and
+#                           --plant-gff-dir (see "Training" in README.md).
+#                           legacy: the earlier five-species setup with data from Hugging Face.
 #   -o, --output DIR        Output directory for checkpoints and logs
 #                           (default: genecad_result/training/<domain>)
 #   -r, --run-name NAME     WandB run name  (default: genecad-plant-multispecies)
@@ -23,7 +29,8 @@
 #                           Intergenic window ratio in [0,1] for sample generation (default: 0.15)
 #   --base-frozen yes|no    Freeze base encoder during training (default: domain preset)
 #   --auto-class-weights yes|no
-#                           Compute class weights from train set before training (default: yes)
+#                           Compute class weights from train set before training
+#                           (default: no for --preset revision, yes otherwise)
 #   --label-qc yes|no       Run split/label QC before training (default: yes)
 #   --min-non-intergenic-ratio P
 #                           Fail if train non-intergenic token ratio < P (default: 0.01)
@@ -38,6 +45,19 @@
 #                           Example: --species-ids "Hsapiens Mmusculus"
 #   --species-config PATH   YAML file with custom species configs (see src/config.py for format)
 #                           Required when --species-ids references IDs not in src/config.py
+#   --exclude-genes PATH    TSV (species_id, gene_id) of genes to mask from training
+#                           (default for --preset revision: the condition M list)
+#   --windows-from PATH     Reuse the windows of an earlier run (windows.zarr) so that
+#                           conditions differ only in labels and masks
+#   --initial-state PATH    Shared initial weights (default for --preset revision: the
+#                           published file for --seed)
+#   --seed N                Training seed (default: 11 for --preset revision, 42 otherwise)
+#   --max-steps N           Number of optimizer steps; replaces --epochs
+#                           (default: 1753 for --preset revision)
+#   --base-encoder-revision REV
+#                           Pin the foundation model revision (default for --preset
+#                           revision: 5574ff5dd1795fe58ac929bd89a7f41a07e05997)
+#   --prepare-only yes|no   Stop after the training data are built (default: no)
 #   --hf-upload-repo ID     Upload artifacts to Hugging Face repo (optional)
 #   --hf-upload-type TYPE   model or dataset repo type (default: model)
 #   --hf-upload-path PATH   Path inside HF repo (default: run name)
@@ -78,7 +98,7 @@ GFF_PARALLEL=1
 WINDOW_SIZE=8192
 INTERGENIC_PROPORTION=0.15
 BASE_FROZEN_OVERRIDE=""
-AUTO_CLASS_WEIGHTS="yes"
+AUTO_CLASS_WEIGHTS=""
 BASE_MODEL=""
 LABEL_QC="yes"
 MIN_NON_INTERGENIC_RATIO="0.01"
@@ -90,6 +110,18 @@ PLANT_INPUT_DIR=""
 PLANT_GFF_DIR=""
 SPECIES_IDS_OVERRIDE=""
 SPECIES_CONFIG_FILE=""
+
+PRESET="revision"
+EXCLUDE_GENES=""
+WINDOWS_FROM=""
+INITIAL_STATE=""
+SEED=""
+MAX_STEPS=""
+BASE_ENCODER_REVISION=""
+PREPARE_ONLY="no"
+# Inputs of the released plant model (gene lists, species configuration, initial weights)
+REVISION_REPO="plantcad/genecad_revision_models"
+REVISION_REPO_COMMIT="9146b5a0c1690a56a9da6aa63afa4d73335f3342"  # pragma: allowlist secret
 
 HF_UPLOAD_REPO=""
 HF_UPLOAD_TYPE="model"
@@ -121,6 +153,14 @@ while [[ $# -gt 0 ]]; do
     --plant-gff-dir) PLANT_GFF_DIR="$2"; shift 2 ;;
     --species-ids)     SPECIES_IDS_OVERRIDE="$2"; shift 2 ;;
     --species-config)  SPECIES_CONFIG_FILE="$2"; shift 2 ;;
+    --preset)        PRESET="$2"; shift 2 ;;
+    --exclude-genes) EXCLUDE_GENES="$2"; shift 2 ;;
+    --windows-from)  WINDOWS_FROM="$2"; shift 2 ;;
+    --initial-state) INITIAL_STATE="$2"; shift 2 ;;
+    --seed)          SEED="$2"; shift 2 ;;
+    --max-steps)     MAX_STEPS="$2"; shift 2 ;;
+    --base-encoder-revision) BASE_ENCODER_REVISION="$2"; shift 2 ;;
+    --prepare-only)  PREPARE_ONLY="$2"; shift 2 ;;
     --hf-upload-repo) HF_UPLOAD_REPO="$2"; shift 2 ;;
     --hf-upload-type) HF_UPLOAD_TYPE="$2"; shift 2 ;;
     --hf-upload-path) HF_UPLOAD_PATH="$2"; shift 2 ;;
@@ -142,6 +182,17 @@ if [[ "$OUTPUT_DIR_USER_SET" -eq 0 ]]; then
   OUTPUT_DIR="$OUTPUT_BASE_DIR/$DOMAIN"
 fi
 
+case "$PRESET" in
+  revision|legacy) ;;
+  *)
+    echo "ERROR: --preset must be 'revision' or 'legacy'"
+    exit 1
+    ;;
+esac
+if [[ "$DOMAIN" != "plant" ]]; then
+  PRESET="legacy"
+fi
+
 if [[ "$DOMAIN" == "plant" ]]; then
   BASE_MODEL="${BASE_MODEL:-emarro/pcad2-200M-cnet-baseline}"
   SPECIES_IDS="Athaliana Osativa Gmax Hvulgare Ptrichocarpa"
@@ -153,6 +204,20 @@ if [[ "$DOMAIN" == "plant" ]]; then
   NUM_WORKERS=8
   VALID_PROPORTION=0.05
   RUN_NAME="${RUN_NAME:-genecad-plant-multispecies}"
+  if [[ "$PRESET" == "revision" ]]; then
+    # Species are read from the published species configuration (eight species).
+    SEED="${SEED:-11}"
+    MAX_STEPS="${MAX_STEPS:-1753}"
+    AUTO_CLASS_WEIGHTS="${AUTO_CLASS_WEIGHTS:-no}"
+    BASE_ENCODER_REVISION="${BASE_ENCODER_REVISION:-5574ff5dd1795fe58ac929bd89a7f41a07e05997}"
+    if [[ -z "$PLANT_INPUT_DIR" || -z "$PLANT_GFF_DIR" ]]; then
+      echo "ERROR: --preset revision needs --plant-input-dir and --plant-gff-dir."
+      echo "       Genomes and annotations are public but not redistributed; see"
+      echo "       https://huggingface.co/$REVISION_REPO/blob/main/training_inputs/README.md"
+      echo "       Use --preset legacy for the earlier five-species setup."
+      exit 1
+    fi
+  fi
 else
   BASE_MODEL="${BASE_MODEL:-emarro/pcad2_vert_small}"
   SPECIES_IDS="Drerio Ggallus Hsapiens Xtropicalis Mmusculus"
@@ -205,8 +270,37 @@ if [[ -n "$BASE_FROZEN_OVERRIDE" && "$BASE_FROZEN_OVERRIDE" != "yes" && "$BASE_F
   exit 1
 fi
 
+AUTO_CLASS_WEIGHTS="${AUTO_CLASS_WEIGHTS:-yes}"
 if [[ "$AUTO_CLASS_WEIGHTS" != "yes" && "$AUTO_CLASS_WEIGHTS" != "no" ]]; then
   echo "ERROR: --auto-class-weights must be 'yes' or 'no'"
+  exit 1
+fi
+
+if [[ "$PREPARE_ONLY" != "yes" && "$PREPARE_ONLY" != "no" ]]; then
+  echo "ERROR: --prepare-only must be 'yes' or 'no'"
+  exit 1
+fi
+
+for _opt in SEED MAX_STEPS; do
+  if [[ -n "${!_opt}" ]] && ! [[ "${!_opt}" =~ ^[0-9]+$ ]]; then
+    echo "ERROR: --$(echo "$_opt" | tr 'A-Z_' 'a-z-') must be a non-negative integer"
+    exit 1
+  fi
+done
+
+if [[ "$EXCLUDE_GENES" == "none" ]]; then
+  EXCLUDE_GENES="-"
+fi
+
+for _path in "${EXCLUDE_GENES#-}" "$WINDOWS_FROM" "$INITIAL_STATE"; do
+  if [[ -n "$_path" && ! -e "$_path" ]]; then
+    echo "ERROR: file not found: $_path"
+    exit 1
+  fi
+done
+
+if [[ -n "$INITIAL_STATE" && "$AUTO_CLASS_WEIGHTS" == "yes" ]]; then
+  echo "ERROR: --initial-state cannot be combined with --auto-class-weights yes"
   exit 1
 fi
 
@@ -362,6 +456,51 @@ run_python() {
   "${PYTHON_CMD[@]}" "$@"
 }
 export PYTHONPATH="$SCRIPT_DIR${PYTHONPATH:+:$PYTHONPATH}"
+
+# Download the inputs of the released plant model that the user did not supply.
+# They are pinned to one commit of the model repository, so a rerun uses the same files.
+if [[ "$PRESET" == "revision" ]]; then
+  REVISION_INPUT_DIR="$OUTPUT_DIR/revision_inputs"
+  mkdir -p "$REVISION_INPUT_DIR"
+  revision_download() {
+    REVISION_FILE="$1" REVISION_DIR="$REVISION_INPUT_DIR" REVISION_REPO="$REVISION_REPO" \
+    REVISION_COMMIT="$REVISION_REPO_COMMIT" run_python - <<'PY'
+import os
+from huggingface_hub import hf_hub_download
+
+print(
+    hf_hub_download(
+        repo_id=os.environ["REVISION_REPO"],
+        filename=os.environ["REVISION_FILE"],
+        revision=os.environ["REVISION_COMMIT"],
+        local_dir=os.environ["REVISION_DIR"],
+    )
+)
+PY
+  }
+  if [[ -z "$SPECIES_CONFIG_FILE" ]]; then
+    SPECIES_CONFIG_FILE=$(revision_download training_inputs/eight_species.yaml | tail -n 1)
+  fi
+  if [[ -z "$EXCLUDE_GENES" ]]; then
+    EXCLUDE_GENES=$(revision_download training_inputs/selection/M_excluded_genes.tsv | tail -n 1)
+  fi
+  if [[ -z "$INITIAL_STATE" ]]; then
+    case "$SEED" in
+      11|22|33) INITIAL_STATE=$(revision_download "initialization/seed${SEED}.pt" | tail -n 1) ;;
+      *)
+        echo "ERROR: published initial weights exist for seeds 11, 22 and 33 only;"
+        echo "       pass --initial-state for seed $SEED"
+        exit 1
+        ;;
+    esac
+  fi
+  echo "Revision inputs: species=$SPECIES_CONFIG_FILE"
+  echo "                 exclude=$EXCLUDE_GENES"
+  echo "                 initial=$INITIAL_STATE"
+fi
+if [[ "$EXCLUDE_GENES" == "-" ]]; then
+  EXCLUDE_GENES=""
+fi
 
 # Auto-read species IDs from YAML if --species-ids was not given
 if [[ -z "$SPECIES_IDS_OVERRIDE" && -n "$SPECIES_CONFIG_FILE" ]]; then
@@ -622,6 +761,14 @@ fi
 echo " Batch size:  $BATCH_SIZE (accum: $ACCUM_GRAD)"
 echo " LR:          $LEARNING_RATE"
 echo " Epochs:      $EPOCHS"
+if [[ "$DOMAIN" == "plant" ]]; then
+  echo " Preset:      $PRESET"
+fi
+[[ -n "$SEED" ]] && echo " Seed:        $SEED"
+[[ -n "$MAX_STEPS" ]] && echo " Max steps:   $MAX_STEPS (replaces epochs)"
+[[ -n "$EXCLUDE_GENES" ]] && echo " Exclude:     $EXCLUDE_GENES"
+[[ -n "$WINDOWS_FROM" ]] && echo " Windows from: $WINDOWS_FROM"
+[[ -n "$INITIAL_STATE" ]] && echo " Initial:     $INITIAL_STATE"
 echo " GFF parallel: $GFF_PARALLEL"
 print_batch_recommendations
 echo "============================================"
@@ -634,6 +781,19 @@ SPECIES_CONFIG_ARG=()
 if [[ -n "$SPECIES_CONFIG_FILE" ]]; then
   SPECIES_CONFIG_ARG=(--species-config "$SPECIES_CONFIG_FILE")
 fi
+EXCLUDE_ARG=()
+if [[ -n "$EXCLUDE_GENES" ]]; then
+  EXCLUDE_ARG=(--exclude-genes "$EXCLUDE_GENES")
+fi
+WINDOWS_FROM_ARG=()
+if [[ -n "$WINDOWS_FROM" ]]; then
+  WINDOWS_FROM_ARG=(--windows-from "$WINDOWS_FROM")
+fi
+TRAIN_EXTRA_ARG=()
+[[ -n "$SEED" ]] && TRAIN_EXTRA_ARG+=(--seed "$SEED")
+[[ -n "$MAX_STEPS" ]] && TRAIN_EXTRA_ARG+=(--max-steps "$MAX_STEPS")
+[[ -n "$INITIAL_STATE" ]] && TRAIN_EXTRA_ARG+=(--initial-state "$INITIAL_STATE")
+[[ -n "$BASE_ENCODER_REVISION" ]] && TRAIN_EXTRA_ARG+=(--base-encoder-revision "$BASE_ENCODER_REVISION")
 
 # =============================================================================
 # Step 0: Prepare training data
@@ -953,7 +1113,8 @@ if [ ! -f "$TRANSFORM_DIR/features.parquet" ]; then
     --input "$EXTRACT_DIR/raw_features.parquet" \
     --output-features "$TRANSFORM_DIR/features.parquet" \
     --output-filters "$TRANSFORM_DIR/filters.parquet" \
-    --remove-incomplete-features yes
+    --remove-incomplete-features yes \
+    "${EXCLUDE_ARG[@]}"
   echo "  Created: features.parquet"
 else
   echo "  Skipped (already exists)"
@@ -1017,7 +1178,8 @@ if [ ! -d "$PREP_DIR/splits/train.zarr" ]; then
     --output "$TRANSFORM_DIR/windows.zarr" \
     --window-size $WINDOW_SIZE \
     --intergenic-proportion $INTERGENIC_PROPORTION \
-    --num-workers $NUM_WORKERS
+    --num-workers $NUM_WORKERS \
+    "${WINDOWS_FROM_ARG[@]}"
 
   run_python scripts/sample.py generate_training_splits \
     --input "$TRANSFORM_DIR/windows.zarr" \
@@ -1043,6 +1205,12 @@ if [[ "$LABEL_QC" == "yes" ]]; then
   echo "  Label QC passed"
 else
   echo "  Label QC disabled (--label-qc no)"
+fi
+
+if [[ "$PREPARE_ONLY" == "yes" ]]; then
+  echo ""
+  echo "Training data ready in $PREP_DIR/splits (--prepare-only yes); not training."
+  exit 0
 fi
 
 # =============================================================================
@@ -1085,7 +1253,8 @@ echo ""
     --torch-compile        no \
     --auto-class-weights   "$AUTO_CLASS_WEIGHTS" \
     --project-name         "$PROJECT_NAME" \
-    --run-name             "$RUN_NAME"
+    --run-name             "$RUN_NAME" \
+    "${TRAIN_EXTRA_ARG[@]}"
 } 2>&1 | tee "$OUTPUT_DIR/training.log"
 
 echo ""

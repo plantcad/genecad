@@ -47,7 +47,7 @@ on the target architecture; a converted SIF is specific to that architecture.
 See [container commands](alternative_installation_methods.md#containers-singularityapptainer-or-docker).
 Tags published before ARM64 support remain x86-only. The new publishing workflow
 creates a shared tag only after both native builds and CPU smoke checks pass.
-Run `python /build/scripts/check_install.py` inside the container with GPU access
+Run `/usr/local/bin/genecad python /build/scripts/check_install.py` inside the container with GPU access
 to validate native CUDA kernels before inference.
 
 On Vista, load the available `tacc-apptainer` module and use an allocated GH node:
@@ -56,7 +56,7 @@ On Vista, load the available `tacc-apptainer` module and use an allocated GH nod
 module load tacc-apptainer
 apptainer pull genecad-arm64.sif docker://ghcr.io/plantcad/genecad_v1:latest
 apptainer exec --nv --bind "$PWD:/workspace" --pwd /workspace \
-  genecad-arm64.sif /usr/local/bin/genecad bash predict.sh \
+  genecad-arm64.sif /usr/local/bin/genecad bash /build/predict.sh \
   -i /workspace/genome.fa -o /workspace/result -s MySpecies -m plant
 ```
 
