@@ -86,7 +86,7 @@ docker pull ghcr.io/plantcad/genecad_v1:latest
 docker run --rm --gpus all \
   -v $(pwd):/workspace -w /workspace \
   ghcr.io/plantcad/genecad_v1:latest \
-  bash predict.sh \
+  bash /build/predict.sh \
     -i /workspace/data/my_plant.fa \
     -o /workspace/output \
     -s Zmays \
@@ -110,14 +110,14 @@ singularity exec --nv \
   --bind $(pwd):/workspace \
   --pwd /workspace \
   genecad.sif \
-  /usr/local/bin/genecad bash predict.sh
+  /usr/local/bin/genecad bash /build/predict.sh
 
 # Run GeneCAD in your Singularity container
 singularity exec --nv \
   --bind $(pwd):/workspace \
   --pwd /workspace \
   genecad.sif \
-  /usr/local/bin/genecad bash predict.sh \
+  /usr/local/bin/genecad bash /build/predict.sh \
     -i /workspace/data/my_plant.fa \
     -o /workspace/output \
     -s Zmays \
@@ -206,7 +206,7 @@ sky exec genecad 'docker pull ghcr.io/plantcad/genecad_v1:latest && \
                   docker run --rm --gpus all \
                   -v $(pwd):/workspace -w /workspace \
                   ghcr.io/plantcad/genecad_v1:latest \
-                  bash predict.sh'
+                  bash /build/predict.sh'
 
 # 3. Download the results back to your local machine
 rsync -avz genecad:~/sky_workdir/genecad_result/ ./genecad_result/

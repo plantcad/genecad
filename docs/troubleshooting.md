@@ -27,7 +27,7 @@ RuntimeError: Error building extension 'causal_conv1d_cuda'
   ```bash
   docker pull ghcr.io/plantcad/genecad_v1:latest
   docker run --rm --gpus all -v $(pwd):/workspace -w /workspace \
-    ghcr.io/plantcad/genecad_v1:latest bash predict.sh -i genome.fa -s MySpecies
+    ghcr.io/plantcad/genecad_v1:latest bash /build/predict.sh -i genome.fa -s MySpecies
   ```
 
 ### `flash-attn` build fails
@@ -251,7 +251,7 @@ cd ~/sky_workdir   # ← the repo and predict.sh are here
 docker run --rm --gpus all \
   -v $(pwd):/workspace -w /workspace \
   ghcr.io/plantcad/genecad_v1:latest \
-  bash predict.sh
+  bash /build/predict.sh
 ```
 
 ### Custom input FASTA is "not found" during `sky exec`

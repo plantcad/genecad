@@ -73,8 +73,10 @@ The installer selects native dependencies for the host architecture.
 | Requirement  | Minimum             | Recommended   | Notes                                                                  |
 |--------------|---------------------|---------------|------------------------------------------------------------------------|
 | OS           | Linux x86-64 or ARM64 | —           | See [GH200 setup](docs/tacc_vista.md) for ARM64 requirements             |
-| GPU          | NVIDIA Ampere/Ada/Hopper, ≥ 16 GB VRAM | A100 / H100 | e.g. RTX 3090/4090, RTX A6000 or RTX 6000 Ada. Older architectures (Turing, e.g. Quadro RTX 6000, T4; Volta, e.g. V100) are not supported (untested; the models run in bfloat16). FlashAttention 2 is used when installed; otherwise GeneCAD falls back to PyTorch SDPA attention (slower, results differ only by bfloat16 rounding; force it with `GENECAD_ATTENTION=sdpa`) |
+| GPU          | NVIDIA Ampere/Ada/Hopper, ≥ 16 GB VRAM | A100 / H100 | e.g. RTX 3090/4090, RTX A6000 or RTX 6000 Ada. Older architectures (Turing, e.g. Quadro RTX 6000, T4; Volta, e.g. V100) are not supported (untested; the models run in bfloat16). FlashAttention 2 is installed automatically and must be importable, because the PlantCAD2 backbone code imports it. The GeneCAD head uses it on Ampere or newer GPUs and otherwise PyTorch SDPA attention (slower, results differ only by bfloat16 rounding; force it with `GENECAD_ATTENTION=sdpa`) |
 | CUDA         | 12.4                | 12.8          | Must match PyTorch 2.7.1 build                                         |
+| CUDA toolkit | 12.x (`nvcc`)       | 12.8          | Needed once at install to compile mamba-ssm/causal-conv1d; CUDA 13 is not supported. Not needed for containers |
+| glibc        | 2.32                | —             | e.g. Ubuntu ≥ 22.04, RHEL/Rocky ≥ 9. Older systems (RHEL/Rocky 8): use the container image |
 | Python       | 3.12                | 3.12          | Managed automatically by `uv`                                          |
 | Disk         | ~20 GB free         | —             | Model weights cached in `~/.cache/huggingface`                         |
 | Hugging Face | Internet access     | Account login | Login only needed for rate limits, gated repos, or private checkpoints |
@@ -117,8 +119,10 @@ subsequent installations reuse cached wheels. See [GH200 setup](docs/tacc_vista.
 
 > [!IMPORTANT]
 > Run installation and inference on an allocated GPU node when using an HPC.
-> ARM64 source builds require a CUDA toolkit (`nvcc`). CPU build nodes can use
-> `--skip-gpu-check`, followed by validation on a GPU node.
+> Native installs compile CUDA extensions and need a CUDA 12.x toolkit (`nvcc`,
+> e.g. `module load cuda/12.8`) and glibc ≥ 2.32; the installer checks both.
+> If either is unavailable, use the container image, which needs only an NVIDIA
+> driver. ARM64 CPU build nodes can use `--skip-gpu-check`, followed by validation on a GPU node.
 
 ```bash
 # Download the GeneCAD repository
@@ -806,7 +810,7 @@ docker build --progress=plain --no-cache -t genecad:dev .
 
 # Test the build — runs the full pipeline on the Arabidopsis example
 docker run --rm --gpus all -v $(pwd):/workspace -w /workspace genecad:dev \
-  bash predict.sh
+  bash /build/predict.sh
 ```
 
 Official images are built and published automatically by
@@ -839,7 +843,7 @@ huggingface-cli download plantcad/genecad-dev \
 docker run --rm --gpus all \
   -v $(pwd):/workspace -w /workspace \
   ghcr.io/plantcad/genecad_v1:latest \
-  bash predict.sh \
+  bash /build/predict.sh \
     -i data/plant/fasta/evaluation/Juglans_regia_chr1.fa.gz \
     -o results \
     -s Jregia \
